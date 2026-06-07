@@ -1,6 +1,6 @@
 # Waifu-Animation
 
-`Waifu-Animation` is a standalone TypeScript animation runtime for humanoid and VRM avatar projects. It is the reusable animation foundation for `/Warehouse/Waifu`, but the core is deliberately browser-agnostic and renderer-agnostic.
+`Waifu-Animation` is a standalone TypeScript animation runtime for humanoid and VRM avatar projects. It is the reusable animation foundation for `/Warehouse/Waifu`. The core pose pipeline is browser-agnostic and renderer-agnostic, with a small optional Three.js adapter for the current Waifu browser renderer.
 
 The architecture follows the Ozz Animation runtime model where it is useful for a TypeScript/VRM runtime:
 
@@ -45,6 +45,7 @@ npm test
 - `ik`: two-bone IK and target clamping foundations.
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
+- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for `waifu-animation-json` clips, track policies, and runtime clip lanes.
 - `debug`: pose metrics, invalid transform diagnostics, runtime snapshots.
 
 ## Pipeline
@@ -60,4 +61,4 @@ The canonical frame pipeline is:
 7. Apply procedural look-at/aim and IK corrections through explicit hooks.
 8. Emit skeletal pose plus facial/viseme expression weights to the consumer.
 
-Waifu remains responsible for VRM model loading, browser rendering, websocket state, audio playback, and visual capture. `Waifu-Animation` owns reusable math and deterministic animation decisions.
+Waifu remains responsible for VRM model loading, browser rendering, websocket state, audio playback, and visual capture. `Waifu-Animation` owns reusable math, manifests, validation, retargeting, Three clip binding, runtime clip lane setup, and deterministic animation decisions.

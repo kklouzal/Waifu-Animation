@@ -11,3 +11,4 @@ export * from "./ik.js";
 export * from "./face.js";
 export * from "./debug.js";
 export * from "./validation.js";
+export * from "./three.js";

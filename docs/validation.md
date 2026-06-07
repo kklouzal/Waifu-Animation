@@ -19,6 +19,7 @@ Current coverage includes:
 - weighted pose blending with masks;
 - runtime layer evaluation;
 - declarative track-name masks;
+- Three adapter clip binding and runtime lane construction;
 - look-at target distribution;
 - two-bone IK solve sanity;
 - viseme stack limiting;
@@ -62,6 +63,6 @@ The active Waifu manifest expands to 564 entries: 9 curated paid clips plus 555 
 
 ## Known Limits
 
-- The package has IK and look-at foundations, but Waifu still applies most procedural pose corrections through Three/VRM code in `src/client/main.ts`.
+- The package has IK and look-at foundations plus the Three animation adapter, but Waifu still applies most procedural pose corrections through Three/VRM code in `src/client/main.ts`.
 - The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, visemes, and idle transitions. They do not yet validate full locomotion, sitting, stretching, foot planting, root motion, prop attachments, or multi-avatar retargeting.
-- The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend. The package provides an Ozz-style local-pose runtime, but Waifu has not yet moved final browser pose application fully onto that buffer pipeline.
+- The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend through the package adapter. The package provides an Ozz-style local-pose runtime, but Waifu has not yet moved final browser pose application fully onto that buffer pipeline.

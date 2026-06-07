@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AnimationMixer, Object3D } from "three";
 import {
   AnimationRuntime,
   type AnimationClip,
@@ -7,6 +8,8 @@ import {
   blendPoses,
   clamp01,
   createJointMask,
+  createThreeAnimationClip,
+  createThreeRuntimeClipsForEntry,
   createSkeleton,
   distributeLookAt,
   filterTracksByNamePolicy,
@@ -96,5 +99,25 @@ assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
 
 const metric = poseRotationMetric(skeleton.restPose, evaluated.localPose);
 assert.ok(metric.maxRotationDelta > 0);
+
+const headBone = new Object3D();
+headBone.name = "normalizedHead";
+const threeClip = createThreeAnimationClip(nodClip, {
+  resolveBone: (humanBone) => (humanBone === "head" ? headBone : null)
+});
+assert.equal(threeClip.name, "nod");
+assert.equal(threeClip.tracks.length, 1);
+assert.equal(threeClip.tracks[0]!.name, "normalizedHead.quaternion");
+
+const root = new Object3D();
+const mixer = new AnimationMixer(root);
+const runtimeClips = createThreeRuntimeClipsForEntry(
+  { id: "nod", label: "Nod", url: "/nod.json", format: "waifu-animation-json", loop: true },
+  mixer,
+  threeClip
+);
+assert.equal(runtimeClips.length, 2);
+assert.equal(runtimeClips[0]!.lane, "base");
+assert.equal(runtimeClips[1]!.instance, 1);
 
 console.log("waifu-animation tests passed");

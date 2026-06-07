@@ -1,6 +1,6 @@
 # Architecture
 
-`Waifu-Animation` is the reusable animation core for humanoid avatars. The package stays renderer-agnostic: it does not load VRM files, own a Three.js scene, connect to websocket state, or play audio. Consumers provide skeletons, clips, masks, targets, and facial inputs; the package returns deterministic pose, facial, debug, and validation data.
+`Waifu-Animation` is the reusable animation core for humanoid avatars. The package keeps the core pose pipeline renderer-agnostic: it does not load VRM files, own a Three.js scene, connect to websocket state, or play audio. Consumers provide skeletons, clips, masks, targets, and facial inputs; the package returns deterministic pose, facial, debug, and validation data. A dedicated `three` module bridges that core data into the current Waifu Three.js renderer without putting conversion logic back in the app.
 
 ## Module Boundaries
 
@@ -16,6 +16,7 @@
 - `ik`: two-bone IK target solve foundation.
 - `face`: viseme stack limiting, viseme smoothing, expression mixing, and blink scheduling.
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
+- `three`: JSON-to-Three clip binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.
 
 ## Ozz-Inspired Frame Model
 
@@ -44,9 +45,11 @@ Ozz's C++ implementation and SIMD memory layout are not copied. This package kee
 Waifu consumes this package for reusable concerns:
 
 - deterministic math and seeded randomness;
+- manifest include loading and clip asset inspection;
+- converting `waifu-animation-json` clips to Three tracks;
 - retargeting quaternion tracks from source rest pose to active VRM rest pose;
+- constructing base, overlay, and debug runtime clip lanes for Three `AnimationMixer`;
 - zeroing and limiting viseme stacks;
-- declarative root/body/finger track policies;
-- manifest/clip asset inspection in the runtime gate.
+- declarative root/body/finger track policies.
 
-The next larger migration should move the Three `AnimationMixer` binding into a package adapter while keeping the current browser/runtime surface in Waifu.
+Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime. The current baseline already keeps the Three adapter and animation plumbing in `Waifu-Animation`.
