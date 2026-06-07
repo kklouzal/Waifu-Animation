@@ -1,0 +1,100 @@
+import assert from "node:assert/strict";
+import {
+  AnimationRuntime,
+  type AnimationClip,
+  BlinkScheduler,
+  VisemeMixer,
+  blendPoses,
+  clamp01,
+  createJointMask,
+  createSkeleton,
+  distributeLookAt,
+  filterTracksByNamePolicy,
+  inspectClipAsset,
+  localToModelPose,
+  poseRotationMetric,
+  retargetQuaternionSample,
+  sampleClipToPose,
+  sanitizeQuaternionTrackValues,
+  solveTwoBoneIk,
+  validateAnimationInputs
+} from "../src/index.js";
+
+const skeleton = createSkeleton([
+  { name: "hips", humanoid: "hips", rest: { translation: [0, 1, 0] } },
+  { name: "spine", parentName: "hips", humanoid: "spine" },
+  { name: "head", parentName: "spine", humanoid: "head" },
+  { name: "leftUpperArm", parentName: "spine", humanoid: "leftUpperArm" }
+]);
+
+const nodClip: AnimationClip = {
+  id: "nod",
+  duration: 1,
+  loop: true,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      times: [0, 0.5, 1],
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, 0.15, 0, 0, 0.9887, 0, 0, 0, 1])
+    }
+  ]
+};
+
+assert.equal(clamp01(2), 1);
+assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
+assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.json", format: "waifu-animation-json" }, nodClip).accepted, true);
+
+const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
+assert.ok(sampled[2]!.rotation[0] > 0.1);
+
+const models = localToModelPose(skeleton, sampled);
+assert.equal(models.length, skeleton.joints.length);
+assert.equal(models[0]![13], 1);
+
+const mask = createJointMask(skeleton, 0, { head: 1 });
+const blended = blendPoses(skeleton, [
+  { pose: skeleton.restPose, weight: 1 },
+  { pose: sampled, weight: 1, mask }
+]);
+assert.ok(blended[2]!.rotation[0] > 0.05);
+assert.equal(blended[1]!.rotation[3], 1);
+
+assert.deepEqual(
+  filterTracksByNamePolicy(
+    [{ name: "hips.position" }, { name: "head.quaternion" }, { name: "leftThumbProximal.quaternion" }],
+    { exclude: [/hips\.position$/, /thumb/i] }
+  ).map((track) => track.name),
+  ["head.quaternion"]
+);
+
+const runtime = new AnimationRuntime(skeleton);
+runtime.setLayer("base", nodClip, { weight: 1, targetWeight: 1, loop: true });
+runtime.update(0.5);
+const evaluated = runtime.evaluate();
+assert.ok(evaluated.activeLayers.length === 1);
+assert.ok(evaluated.localPose[2]!.rotation[0] > 0.1);
+
+const retargeted = retargetQuaternionSample([0, 0, 0, 1], [0, 0, 0, 1], [0, 0.2, 0, 0.98]);
+assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
+
+const look = distributeLookAt([0.4, 0.2, 2]);
+assert.ok(look.head.yaw > 0);
+assert.ok(look.eyes.pitch > 0);
+
+const ik = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0.5, -1.5, 0], pole: [0, 0, 1] });
+assert.ok(ik.targetReach > 0.9);
+assert.ok(Number.isFinite(ik.joint[0]));
+
+const visemes = new VisemeMixer({ maxTotal: 0.4 });
+visemes.setTarget({ aa: 0.4, ou: 0.4 });
+const mixed = visemes.update(1 / 30);
+assert.ok(mixed.aa + mixed.ou <= 0.4001);
+
+const blink = new BlinkScheduler("test", 0);
+assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
+
+const metric = poseRotationMetric(skeleton.restPose, evaluated.localPose);
+assert.ok(metric.maxRotationDelta > 0);
+
+console.log("waifu-animation tests passed");
