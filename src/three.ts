@@ -1,5 +1,6 @@
 import {
   AnimationClip as ThreeAnimationClip,
+  Euler,
   LoopOnce,
   Quaternion,
   QuaternionKeyframeTrack,
@@ -49,6 +50,33 @@ export type ThreeRuntimeClip<TEntry extends AnimationManifestEntry = AnimationMa
   targetWeight: number;
   lastTriggeredAt: number;
   lane: ThreeRuntimeLane;
+};
+
+export type ThreePresenceBoneTarget = {
+  bone: string;
+  rotation: Vec3;
+  influence: number;
+  speed?: number;
+};
+
+export type ThreePresenceApplyOptions = {
+  resolveBone: ThreeBoneResolver;
+  deltaSeconds: number;
+  targets: readonly ThreePresenceBoneTarget[];
+  enabled?: boolean;
+};
+
+export type ThreePresenceAppliedTarget = {
+  bone: string;
+  applied: boolean;
+  influence: number;
+  skippedReason?: string;
+};
+
+export type ThreePresenceApplyResult = {
+  applied: boolean;
+  targets: ThreePresenceAppliedTarget[];
+  issues: string[];
 };
 
 export type ThreeFootPlantLegBinding = {
@@ -106,6 +134,7 @@ const tmpTargetWorld = new Quaternion();
 const tmpParentWorld = new Quaternion();
 const tmpLocal = new Quaternion();
 const tmpIdentity = new Quaternion();
+const tmpEuler = new Euler(0, 0, 0, "XYZ");
 const tmpWorldDirection = new Vector3();
 const tmpLocalDirection = new Vector3();
 
@@ -224,6 +253,30 @@ export function configureThreeRuntimeAction(action: AnimationAction): AnimationA
   action.setEffectiveTimeScale(1);
   action.setEffectiveWeight(0);
   return action;
+}
+
+export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): ThreePresenceApplyResult {
+  const issues: string[] = [];
+  const targets: ThreePresenceAppliedTarget[] = [];
+  if (options.enabled === false) return { applied: false, targets, issues };
+  for (const target of options.targets) {
+    const influence = clamp01(target.influence);
+    const appliedTarget: ThreePresenceAppliedTarget = { bone: target.bone, applied: false, influence };
+    targets.push(appliedTarget);
+    if (influence <= 0) {
+      appliedTarget.skippedReason = "zero-influence";
+      continue;
+    }
+    const bone = options.resolveBone(target.bone);
+    if (!bone) {
+      appliedTarget.skippedReason = "missing-bone";
+      issues.push(`${target.bone}: missing bone`);
+      continue;
+    }
+    appliedTarget.applied = applyLocalEulerTarget(bone, target.rotation, influence, options.deltaSeconds, target.speed ?? 8);
+    if (!appliedTarget.applied) appliedTarget.skippedReason = "invalid-or-negligible-target";
+  }
+  return { applied: targets.some((target) => target.applied), targets, issues };
 }
 
 export function clearThreeFootPlantOffsets(options: ThreeFootPlantClearOptions): ThreeFootPlantClearResult {
@@ -421,5 +474,18 @@ function applyAnkleGroundAlignment(bone: Object3D, groundNormal: Vec3, localUp: 
   }
   bone.quaternion.copy(tmpLocal);
   bone.updateMatrixWorld(true);
+  return true;
+}
+
+function applyLocalEulerTarget(bone: Object3D, euler: Vec3, influence: number, deltaSeconds: number, speed: number): boolean {
+  if (influence <= 0 || !euler.every(Number.isFinite)) return false;
+  tmpTargetWorld.setFromEuler(tmpEuler.set(euler[0], euler[1], euler[2], "XYZ")).normalize();
+  if (!Number.isFinite(tmpTargetWorld.x) || !Number.isFinite(tmpTargetWorld.y) || !Number.isFinite(tmpTargetWorld.z) || !Number.isFinite(tmpTargetWorld.w)) {
+    return false;
+  }
+  const alpha = clamp01(influence * (deltaSeconds === undefined ? 1 : dampAlpha(speed, deltaSeconds)));
+  if (alpha <= 0) return false;
+  tmpCurrentWorld.copy(bone.quaternion);
+  bone.quaternion.slerpQuaternions(tmpCurrentWorld, tmpTargetWorld, alpha).normalize();
   return true;
 }

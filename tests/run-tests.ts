@@ -9,10 +9,12 @@ import {
   WAIFU_ANIMATION_BINARY_FORMAT,
   VisemeMixer,
   applyThreeFootPlantResult,
+  applyThreePresenceTargets,
   clearThreeFootPlantOffsets,
   blendPoses,
   clamp01,
   createJointMask,
+  DEFAULT_BLEND_THRESHOLD,
   createThreeAnimationClip,
   createThreeRuntimeClipsForEntry,
   decodeAnimationBinary,
@@ -103,6 +105,11 @@ const blended = blendPoses(skeleton, [
 assert.ok(blended[2]!.rotation[0] > 0.05);
 assert.equal(blended[1]!.rotation[3], 1);
 
+
+const tinyWeightBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }]);
+assert.ok(tinyWeightBlend[2]!.rotation[0] > 0);
+assert.ok(tinyWeightBlend[2]!.rotation[0] < sampled[2]!.rotation[0]);
+
 assert.deepEqual(
   filterTracksByNamePolicy(
     [{ name: "hips.position" }, { name: "head.quaternion" }, { name: "leftThumbProximal.quaternion" }],
@@ -117,6 +124,25 @@ runtime.update(0.5);
 const evaluated = runtime.evaluate();
 assert.ok(evaluated.activeLayers.length === 1);
 assert.ok(evaluated.localPose[2]!.rotation[0] > 0.1);
+
+
+const presenceBone = new Object3D();
+presenceBone.name = "head";
+const presenceApply = applyThreePresenceTargets({
+  resolveBone: (bone) => (bone === "head" ? presenceBone : null),
+  deltaSeconds: 1 / 30,
+  targets: [{ bone: "head", rotation: [0.1, 0.2, 0], influence: 1, speed: 12 }]
+});
+assert.equal(presenceApply.applied, true);
+assert.ok(Math.abs(presenceBone.quaternion.w) < 0.99999);
+assert.equal(
+  applyThreePresenceTargets({
+    resolveBone: () => null,
+    deltaSeconds: 1 / 30,
+    targets: [{ bone: "missing", rotation: [0, 0, 0], influence: 1 }]
+  }).issues.length,
+  1
+);
 
 const retargeted = retargetQuaternionSample([0, 0, 0, 1], [0, 0, 0, 1], [0, 0.2, 0, 0.98]);
 assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);

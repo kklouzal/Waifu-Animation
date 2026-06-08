@@ -100,3 +100,61 @@ The generated Mocap Online library now records explicit root-motion policy metad
 - The package now exposes an Ozz-inspired foot-plant planning job, reusable two-bone IK correction quaternions, and an optional Three.js application hook. Waifu feeds studio-floor debug contacts into the job for representative locomotion clips and can enable rendered pelvis/leg corrections with `?footPlant=apply` or `WAIFU_ANIMATION_APPLY_FOOT_PLANT=1` in the visual animation gate.
 - The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, foot-plant telemetry for those locomotion debug clips, visemes, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, actual rendered foot planting, preserved root-motion application, prop attachments, or multi-avatar retargeting.
 - The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend through the package adapter. The package provides an Ozz-style local-pose runtime, but Waifu has not yet moved final browser pose application fully onto that buffer pipeline.
+
+
+## 2026-06-08 Final Hardening Pass
+
+Changes validated in this pass:
+
+- Added Ozz-style thresholded override pose blending and runtime threshold configuration.
+- Added reusable Three `applyThreePresenceTargets` procedural target application and moved Waifu's procedural bone slerp through that package API.
+- Rebuilt package `dist/` and Waifu production client bundle.
+
+Commands run:
+
+```bash
+# /Warehouse/Waifu-Animation
+npm run check
+npm test
+npm run build
+
+# /Warehouse/Waifu
+npm run check
+npm run test:animation
+npm run build
+PORT=18100 npm run start
+WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+  WAIFU_RENDER_SCREENSHOT=cache/waifu-animation-final-hardening/render-check-current.png \
+  npm run render:check
+WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+  WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-final-hardening/actions-current \
+  npm run visual:actions
+WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+  WAIFU_ANIMATION_RUNTIME_OUT_DIR=cache/waifu-animation-final-hardening/animations-current \
+  WAIFU_ANIMATION_APPLY_FOOT_PLANT=1 \
+  npm run visual:animations
+WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+  WAIFU_VISEME_OUT_DIR=cache/waifu-animation-final-hardening/visemes-current \
+  npm run visual:visemes
+```
+
+Artifacts:
+
+- Render screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/render-check-current.png`
+- Action contact sheet: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/actions-current/contact.png`
+- Action video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/actions-current/page@17b0a07f739b0792e76caeae4ca55cf9.webm`
+- Animation/foot-plant video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/animations-current/page@16fd40741149087b1cccc1f070e86d7f.webm`
+- Animation/foot-plant final screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/animations-current/foot-plant-apply-final.png`
+- Viseme video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/visemes-current/page@360eea484cd5223c37d2f88b89c35951.webm`
+- Viseme final screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/visemes-current/final.png`
+
+Results:
+
+- Package check/test/build passed.
+- Waifu check/test/build passed.
+- Render gate passed with real avatar, animation-ready runtime, WebGL, post-processing, MSAA, and no bad logs.
+- Action visual gate passed: 9 captures, video recorded, bounded pose deltas (`0.0084`–`0.0307` after idle baseline), no motion issues, no bad logs.
+- Animation runtime gate passed: 564 manifest clips, 555 unique assets, no asset/runtime issues, foot-plant application enabled for representative locomotion clips, max correction about `0.1816` below the `0.22` clamp, applied leg/ankle correction count `12` for each locomotion representative.
+- Viseme gate passed: 90 samples, video recorded, no bad logs, mouth max `0.321`, target max `0.34`, all five viseme channels active.
+
+Note: an initial visual run accidentally targeted the already-running port `8080` server from an older deployment and failed to observe new foot-plant telemetry. The final evidence above targets the fresh `PORT=18100` server serving the rebuilt client bundle.

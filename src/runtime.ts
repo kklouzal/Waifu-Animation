@@ -1,6 +1,6 @@
 import { type Mat4 } from "./math.js";
 import { type AnimationClip, sampleClipToPose } from "./clip.js";
-import { type JointMask, type Pose, additiveDeltaPose, applyAdditivePose, blendPoses, clonePose, normalizePose } from "./pose.js";
+import { DEFAULT_BLEND_THRESHOLD, type JointMask, type Pose, additiveDeltaPose, applyAdditivePose, blendPoses, clonePose, normalizePose } from "./pose.js";
 import { type Skeleton, createRestPose, localToModelPose } from "./skeleton.js";
 
 export type LayerBlendMode = "override" | "additive";
@@ -23,6 +23,11 @@ export type AnimationLayerOptions = Partial<Omit<AnimationLayer, "id" | "clip" |
   time?: number;
 };
 
+export type AnimationRuntimeOptions = {
+  /** Ozz-style rest-pose fallback threshold for override blending. */
+  blendThreshold?: number;
+};
+
 export type RuntimeEvaluation = {
   localPose: Pose;
   modelPose: Mat4[];
@@ -32,11 +37,13 @@ export type RuntimeEvaluation = {
 export class AnimationRuntime {
   readonly skeleton: Skeleton;
   readonly restPose: Pose;
+  blendThreshold: number;
   private readonly layers = new Map<string, AnimationLayer>();
 
-  constructor(skeleton: Skeleton) {
+  constructor(skeleton: Skeleton, options: AnimationRuntimeOptions = {}) {
     this.skeleton = skeleton;
     this.restPose = createRestPose(skeleton);
+    this.blendThreshold = options.blendThreshold ?? DEFAULT_BLEND_THRESHOLD;
   }
 
   setLayer(id: string, clip: AnimationClip, options: AnimationLayerOptions = {}): AnimationLayer {
@@ -95,7 +102,7 @@ export class AnimationRuntime {
       else overrideLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
     }
 
-    let localPose = overrideLayers.length > 0 ? blendPoses(this.skeleton, overrideLayers) : clonePose(this.restPose);
+    let localPose = overrideLayers.length > 0 ? blendPoses(this.skeleton, overrideLayers, { threshold: this.blendThreshold }) : clonePose(this.restPose);
     for (const additive of additiveLayers) {
       const deltaPose = additiveDeltaPose(this.restPose, additive.pose);
       localPose = applyAdditivePose(localPose, deltaPose, additive.weight, additive.mask);

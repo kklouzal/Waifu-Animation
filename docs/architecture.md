@@ -19,6 +19,13 @@
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
 - `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.
 
+
+### 2026-06-08 hardening update
+
+- Override blending now exposes an Ozz-style `DEFAULT_BLEND_THRESHOLD` (`0.1`) and `BlendPoseOptions.threshold`.  Per-joint accumulated override weight below the threshold blends back toward the skeleton rest pose, matching Ozz's bind/rest fallback intent and preventing tiny-weight layers from fully owning a joint during fades or partial masks.
+- `AnimationRuntime` accepts `AnimationRuntimeOptions.blendThreshold` and routes all override evaluation through that thresholded blend path before additive layers and local-to-model conversion.
+- The optional Three adapter now owns `applyThreePresenceTargets`, the reusable bridge that applies package-planned procedural presence bone targets to Three/VRM bones with finite-target checks, clamped influence, damped quaternion slerp, and missing-bone telemetry.  Waifu no longer carries its own procedural bone-target quaternion application helper.
+
 ## Ozz-Inspired Frame Model
 
 The canonical model mirrors Ozz Animation's runtime flow:
