@@ -8,6 +8,8 @@ import {
   PresencePlanner,
   WAIFU_ANIMATION_BINARY_FORMAT,
   VisemeMixer,
+  applyThreeFootPlantResult,
+  clearThreeFootPlantOffsets,
   blendPoses,
   clamp01,
   createJointMask,
@@ -196,6 +198,51 @@ const clampedFootPlant = solveFootPlant(
 );
 assert.equal(clampedFootPlant.legs[0]!.clamped, true);
 assert.ok(clampedFootPlant.legs[0]!.correctionDistance <= 0.1001);
+
+const pelvisBone = new Object3D();
+pelvisBone.name = "hips";
+const leftHipBone = new Object3D();
+leftHipBone.name = "leftUpperLeg";
+const leftKneeBone = new Object3D();
+leftKneeBone.name = "leftLowerLeg";
+const leftAnkleBone = new Object3D();
+leftAnkleBone.name = "leftFoot";
+pelvisBone.add(leftHipBone);
+leftHipBone.add(leftKneeBone);
+leftKneeBone.add(leftAnkleBone);
+pelvisBone.updateMatrixWorld(true);
+const footPlantApply = applyThreeFootPlantResult(footPlant, {
+  resolveBone: (bone) =>
+    ({
+      hips: pelvisBone,
+      leftUpperLeg: leftHipBone,
+      leftLowerLeg: leftKneeBone,
+      leftFoot: leftAnkleBone
+    })[bone] ?? null,
+  pelvis: "hips",
+  legs: [{ id: "left", hip: "leftUpperLeg", knee: "leftLowerLeg", ankle: "leftFoot" }],
+  applyPelvis: true,
+  applyLegIk: true
+});
+assert.equal(footPlantApply.applied, true);
+assert.equal(footPlantApply.pelvisApplied, true);
+assert.ok(pelvisBone.position.y < 0);
+assert.ok(Math.abs(leftHipBone.quaternion.w) < 0.99999 || Math.abs(leftKneeBone.quaternion.w) < 0.99999);
+const firstPelvisY = pelvisBone.position.y;
+applyThreeFootPlantResult(footPlant, {
+  resolveBone: (bone) => ({ hips: pelvisBone })[bone] ?? null,
+  pelvis: "hips",
+  legs: [],
+  applyPelvis: true,
+  applyLegIk: false
+});
+assert.ok(Math.abs(pelvisBone.position.y - firstPelvisY) < 1e-6);
+const clearedFootPlant = clearThreeFootPlantOffsets({
+  resolveBone: (bone) => ({ hips: pelvisBone })[bone] ?? null,
+  pelvis: "hips"
+});
+assert.equal(clearedFootPlant.cleared, true);
+assert.ok(Math.abs(pelvisBone.position.y) < 1e-6);
 
 const visemes = new VisemeMixer({ maxTotal: 0.4 });
 visemes.setTarget({ aa: 0.4, ou: 0.4 });
