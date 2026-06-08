@@ -24,6 +24,7 @@ import {
   retargetQuaternionSample,
   sampleClipToPose,
   sanitizeQuaternionTrackValues,
+  solveFootPlant,
   solveTwoBoneIk,
   toFloat32Array,
   validateAnimationInputs
@@ -152,6 +153,40 @@ assert.ok(presenceFrameA.boneTargets.every((target) => target.rotation.every(Num
 const ik = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0.5, -1.5, 0], pole: [0, 0, 1] });
 assert.ok(ik.targetReach > 0.9);
 assert.ok(Number.isFinite(ik.joint[0]));
+
+const footPlant = solveFootPlant(
+  [
+    {
+      id: "left",
+      hip: [-0.1, 1, 0],
+      knee: [-0.1, 0.55, 0.02],
+      ankle: [-0.1, 0.18, 0],
+      ground: { point: [-0.1, 0, 0], normal: [0, 1, 0], rayStart: [-0.1, 0.68, 0] }
+    },
+    {
+      id: "right",
+      hip: [0.1, 1, 0],
+      knee: [0.1, 0.6, 0.02],
+      ankle: [0.1, 0.08, 0],
+      ground: { point: [0.1, 0, 0], normal: [0, 1, 0], rayStart: [0.1, 0.58, 0] }
+    }
+  ],
+  { footHeight: 0.08 }
+);
+assert.equal(footPlant.plantedCount, 2);
+assert.ok(footPlant.pelvisOffset[1] < 0);
+assert.ok(footPlant.legs.every((leg) => leg.ik && Number.isFinite(leg.ik.joint[1])));
+
+const missingGroundPlant = solveFootPlant([{ id: "left", hip: [0, 1, 0], knee: [0, 0.5, 0], ankle: [0, 0.1, 0] }]);
+assert.equal(missingGroundPlant.plantedCount, 0);
+assert.equal(missingGroundPlant.legs[0]!.skippedReason, "missing-ground-contact");
+
+const clampedFootPlant = solveFootPlant(
+  [{ id: "left", hip: [0, 1, 0], knee: [0, 0.5, 0], ankle: [0, 0.4, 0], ground: { point: [0, -1, 0], normal: [0, 1, 0] } }],
+  { footHeight: 0.08, maxAnkleCorrection: 0.1 }
+);
+assert.equal(clampedFootPlant.legs[0]!.clamped, true);
+assert.ok(clampedFootPlant.legs[0]!.correctionDistance <= 0.1001);
 
 const visemes = new VisemeMixer({ maxTotal: 0.4 });
 visemes.setTarget({ aa: 0.4, ou: 0.4 });

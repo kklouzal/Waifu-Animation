@@ -23,6 +23,7 @@ Current coverage includes:
 - look-at target distribution;
 - deterministic presence planning for cues, gaze targets, and bounded procedural bone targets;
 - two-bone IK solve sanity;
+- foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, and finite leg IK output;
 - viseme stack limiting;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger sanity;
 - pose rotation metrics.
@@ -83,5 +84,6 @@ The generated Mocap Online library now records explicit root-motion policy metad
 ## Known Limits
 
 - The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. Waifu still applies package-produced procedural targets through Three/VRM bone writes in `src/client/main.ts`; final browser pose application has not fully moved onto package-owned local-pose buffers.
+- The package now exposes an Ozz-inspired foot-plant planning job, but Waifu does not yet feed it real ground contacts or apply the returned leg corrections in the browser runtime.
 - The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, visemes, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, foot planting, preserved root-motion application, prop attachments, or multi-avatar retargeting.
 - The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend through the package adapter. The package provides an Ozz-style local-pose runtime, but Waifu has not yet moved final browser pose application fully onto that buffer pipeline.

@@ -14,7 +14,7 @@
 - `manifest`: manifest include loading, duplicate/id validation, clip asset inspection, usable/rejected manifest helpers.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.
-- `ik`: two-bone IK target solve foundation.
+- `ik`: two-bone IK target solve foundation plus an Ozz-inspired foot-plant planning job with ankle target correction, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
 - `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.
@@ -29,7 +29,7 @@ The canonical model mirrors Ozz Animation's runtime flow:
 4. Apply additive layers only as deltas from a reference pose.
 5. Normalize quaternions and validate finite transforms.
 6. Convert local transforms to model-space matrices.
-7. Let procedural jobs, look-at, and IK consume explicit target inputs and write bounded corrections.
+7. Let procedural jobs, look-at, foot planting, and IK consume explicit target inputs and write bounded corrections.
 8. Emit skeletal pose data and expression/viseme weights to the consumer.
 
 Ozz's C++ implementation and SIMD memory layout are not copied. Runtime animation keyframes are shipped as versioned binary payloads and decoded into typed arrays before sampling. JSON remains metadata-only for manifests, curation, includes, behavior hints, and validation policy.
@@ -53,6 +53,7 @@ Waifu consumes this package for reusable concerns:
 - zeroing and limiting viseme stacks;
 - smoothing mouth/viseme targets and composing blink, speech, mood, emotion, and thinking expression weights through `FacialExpressionMixer`;
 - deterministic presence scheduling, gaze target planning, and bounded procedural bone targets through `PresencePlanner`;
+- foot-plant planning data for future app-side ground-contact and leg IK application;
 - declarative root/body/finger track policies.
 
 Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime. The current baseline already keeps the Three adapter and animation plumbing in `Waifu-Animation`.
