@@ -89,6 +89,14 @@ export function scaleVec3(value: Vec3, scalar: number): Vec3 {
   return [value[0] * scalar, value[1] * scalar, value[2] * scalar];
 }
 
+export function dotVec3(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+export function crossVec3(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
 export function lengthVec3(value: Vec3): number {
   return Math.hypot(value[0], value[1], value[2]);
 }
@@ -177,6 +185,26 @@ export function quatFromAxisAngle(axis: Vec3, radians: number): Quat {
   const half = radians * 0.5;
   const s = Math.sin(half);
   return normalizeQuat([normalized[0] * s, normalized[1] * s, normalized[2] * s, Math.cos(half)]);
+}
+
+export function quatFromUnitVectors(from: Vec3, to: Vec3, fallbackAxis: Vec3 = [0, 1, 0]): Quat {
+  const start = normalizeVec3(from, [0, 0, 1]);
+  const end = normalizeVec3(to, [0, 0, 1]);
+  const dot = clamp(dotVec3(start, end), -1, 1);
+  if (dot < -0.999999) {
+    const axis = normalizeVec3(crossVec3(fallbackAxis, start), normalizeVec3(crossVec3([1, 0, 0], start), [0, 0, 1]));
+    return quatFromAxisAngle(axis, Math.PI);
+  }
+  const cross = crossVec3(start, end);
+  return normalizeQuat([cross[0], cross[1], cross[2], 1 + dot]);
+}
+
+export function rotateVec3ByQuat(rotation: Quat, value: Vec3): Vec3 {
+  const q = normalizeQuat(rotation);
+  const u: Vec3 = [q[0], q[1], q[2]];
+  const uv = crossVec3(u, value);
+  const uuv = crossVec3(u, uv);
+  return addVec3(value, addVec3(scaleVec3(uv, 2 * q[3]), scaleVec3(uuv, 2)));
 }
 
 export function identityTransform(): Transform {

@@ -1,4 +1,18 @@
-import { type Vec3, addVec3, clamp, clamp01, lengthVec3, lerpVec3, normalizeVec3, scaleVec3, subVec3 } from "./math.js";
+import {
+  type Quat,
+  type Vec3,
+  addVec3,
+  clamp,
+  clamp01,
+  dotVec3,
+  lengthVec3,
+  lerpVec3,
+  normalizeVec3,
+  quatFromUnitVectors,
+  rotateVec3ByQuat,
+  scaleVec3,
+  subVec3
+} from "./math.js";
 
 export type TwoBoneIkInput = {
   root: Vec3;
@@ -15,6 +29,13 @@ export type TwoBoneIkResult = {
   end: Vec3;
   targetReach: number;
   clamped: boolean;
+};
+
+export type TwoBoneIkCorrectionResult = TwoBoneIkResult & {
+  rootCorrection: Quat;
+  jointCorrection: Quat;
+  correctedUpperDirection: Vec3;
+  correctedLowerDirection: Vec3;
 };
 
 export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
@@ -37,6 +58,27 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
     end: newEnd,
     targetReach: targetDistance <= 1e-5 ? 0 : clampedDistance / targetDistance,
     clamped: Math.abs(clampedDistance - targetDistance) > 1e-4
+  };
+}
+
+export function solveTwoBoneIkCorrections(input: TwoBoneIkInput): TwoBoneIkCorrectionResult {
+  const solved = solveTwoBoneIk(input);
+  const originalUpper = normalizeVec3(subVec3(input.joint, input.root), [0, -1, 0]);
+  const correctedUpper = normalizeVec3(subVec3(solved.joint, solved.root), originalUpper);
+  const pole = input.pole ?? [0, 0, 1];
+  const rootCorrection = quatFromUnitVectors(originalUpper, correctedUpper, pole);
+
+  const originalLower = normalizeVec3(subVec3(input.end, input.joint), [0, -1, 0]);
+  const rootCorrectedLower = normalizeVec3(rotateVec3ByQuat(rootCorrection, originalLower), originalLower);
+  const correctedLower = normalizeVec3(subVec3(solved.end, solved.joint), rootCorrectedLower);
+  const jointCorrection = quatFromUnitVectors(rootCorrectedLower, correctedLower, pole);
+
+  return {
+    ...solved,
+    rootCorrection,
+    jointCorrection,
+    correctedUpperDirection: correctedUpper,
+    correctedLowerDirection: correctedLower
   };
 }
 
@@ -81,7 +123,7 @@ export type FootPlantLegResult = {
   targetReach: number;
   skippedReason?: string;
   groundPoint?: Vec3;
-  ik?: TwoBoneIkResult;
+  ik?: TwoBoneIkCorrectionResult;
 };
 
 export type FootPlantResult = {
@@ -176,7 +218,7 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     const end = addVec3(leg.ankle, pelvisOffset);
     const target = lerpVec3(end, result.targetAnkle, influence);
     const maxStretch = leg.maxStretch ?? options.maxStretch;
-    const ik = solveTwoBoneIk({
+    const ik = solveTwoBoneIkCorrections({
       root,
       joint,
       end,
@@ -197,8 +239,4 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     legs,
     issues
   };
-}
-
-function dotVec3(a: Vec3, b: Vec3): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }

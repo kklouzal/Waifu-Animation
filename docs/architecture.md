@@ -4,7 +4,7 @@
 
 ## Module Boundaries
 
-- `math`: vectors, quaternions, transforms, matrices, deterministic random helpers, damping, and interpolation.
+- `math`: vectors, quaternions, transforms, matrices, deterministic random helpers, damping, interpolation, and quaternion vector-alignment helpers.
 - `skeleton`: parent-index skeletons, humanoid mappings, rest poses, and local-to-model conversion.
 - `clip`: decoded binary clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
 - `binary`: versioned `.waifuanim.bin` encoding and decoding for animation keyframe payloads.
@@ -14,7 +14,7 @@
 - `manifest`: manifest include loading, duplicate/id validation, clip asset inspection, usable/rejected manifest helpers.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.
-- `ik`: two-bone IK target solve foundation plus an Ozz-inspired foot-plant planning job with ankle target correction, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
+- `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
 - `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.

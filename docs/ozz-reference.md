@@ -16,7 +16,8 @@ Reference checkout used during initial design:
 - Additive layers are separate from ordinary override blending and are applied as deltas.
 - Local-to-model conversion happens after local pose composition and before world-space constraints.
 - IK and aim/look-at are procedural jobs with explicit input/output boundaries, not scattered bone writes.
-- Foot IK follows the Ozz `samples/foot_ik` ordering at the planning layer: derive ankle targets from ground point/normal, compute pelvis compensation from the lowest foot correction, then solve per-leg IK with explicit clamping and skipped-contact reporting. The TypeScript job returns a plan for consumers instead of directly mutating renderer bones.
+- Two-bone IK exposes correction quaternions for the first two chain joints, matching Ozz's separation between solving the chain and letting the caller apply corrections to the active pose.
+- Foot IK follows the Ozz `samples/foot_ik` ordering at the planning layer: derive ankle targets from ground point/normal, compute pelvis compensation from the lowest foot correction, then solve per-leg IK with explicit clamping and skipped-contact reporting. The TypeScript job returns a plan and correction quaternions for consumers instead of directly mutating renderer bones.
 
 Intentional differences:
 

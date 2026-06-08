@@ -23,6 +23,7 @@ Current coverage includes:
 - look-at target distribution;
 - deterministic presence planning for cues, gaze targets, and bounded procedural bone targets;
 - two-bone IK solve sanity;
+- normalized two-bone IK correction quaternions;
 - foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, and finite leg IK output;
 - viseme stack limiting;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger sanity;

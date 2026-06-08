@@ -21,11 +21,13 @@ import {
   inspectClipAsset,
   localToModelPose,
   poseRotationMetric,
+  rotateVec3ByQuat,
   retargetQuaternionSample,
   sampleClipToPose,
   sanitizeQuaternionTrackValues,
   solveFootPlant,
   solveTwoBoneIk,
+  solveTwoBoneIkCorrections,
   toFloat32Array,
   validateAnimationInputs
 } from "../src/index.js";
@@ -154,6 +156,12 @@ const ik = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0],
 assert.ok(ik.targetReach > 0.9);
 assert.ok(Number.isFinite(ik.joint[0]));
 
+const ikCorrections = solveTwoBoneIkCorrections({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0.5, -1.5, 0], pole: [0, 0, 1] });
+const correctedUpper = rotateVec3ByQuat(ikCorrections.rootCorrection, [0, -1, 0]);
+assert.ok(Math.hypot(correctedUpper[0] - ikCorrections.correctedUpperDirection[0], correctedUpper[1] - ikCorrections.correctedUpperDirection[1], correctedUpper[2] - ikCorrections.correctedUpperDirection[2]) < 1e-5);
+assert.ok(Math.abs(Math.hypot(...ikCorrections.rootCorrection) - 1) < 1e-5);
+assert.ok(Math.abs(Math.hypot(...ikCorrections.jointCorrection) - 1) < 1e-5);
+
 const footPlant = solveFootPlant(
   [
     {
@@ -176,6 +184,7 @@ const footPlant = solveFootPlant(
 assert.equal(footPlant.plantedCount, 2);
 assert.ok(footPlant.pelvisOffset[1] < 0);
 assert.ok(footPlant.legs.every((leg) => leg.ik && Number.isFinite(leg.ik.joint[1])));
+assert.ok(footPlant.legs.every((leg) => leg.ik && Math.abs(Math.hypot(...leg.ik.rootCorrection) - 1) < 1e-5));
 
 const missingGroundPlant = solveFootPlant([{ id: "left", hip: [0, 1, 0], knee: [0, 0.5, 0], ankle: [0, 0.1, 0] }]);
 assert.equal(missingGroundPlant.plantedCount, 0);
