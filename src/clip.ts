@@ -8,9 +8,9 @@ export type AnimationTrack = {
   joint?: string;
   humanBone?: HumanoidBoneName | string;
   property: TrackProperty;
-  times: number[];
-  values: number[];
-  sourceRestQuaternion?: number[];
+  times: Float32Array;
+  values: Float32Array;
+  sourceRestQuaternion?: Float32Array;
 };
 
 export type AnimationClip = {
@@ -20,13 +20,6 @@ export type AnimationClip = {
   loop?: boolean;
   tracks: AnimationTrack[];
   metadata?: Record<string, unknown>;
-};
-
-export type WaifuAnimationJson = {
-  format: "waifu-animation-json";
-  version?: number;
-  clip: AnimationClip;
-  source?: Record<string, unknown>;
 };
 
 export type ClipValidationIssue = {
@@ -87,16 +80,20 @@ export function resolveTrackJointIndex(skeleton: Skeleton, track: AnimationTrack
   return -1;
 }
 
-export function sanitizeQuaternionTrackValues(values: readonly number[]): number[] {
+export function toFloat32Array(values: ArrayLike<number>): Float32Array {
+  return values instanceof Float32Array ? values : Float32Array.from(values);
+}
+
+export function sanitizeQuaternionTrackValues(values: ArrayLike<number>): Float32Array {
   if (values.length % 4 !== 0) throw new Error("quaternion track values must be a multiple of 4");
-  const output: number[] = [];
+  const output = new Float32Array(values.length);
   let previous: Quat = [0, 0, 0, 1];
   for (let i = 0; i < values.length; i += 4) {
     let current = normalizeQuat([values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1]);
     if (i > 0 && previous[0] * current[0] + previous[1] * current[1] + previous[2] * current[2] + previous[3] * current[3] < 0) {
       current = [-current[0], -current[1], -current[2], -current[3]];
     }
-    output.push(...current);
+    output.set(current, i);
     previous = current;
   }
   return output;
@@ -133,8 +130,14 @@ export function sampleTrack(track: AnimationTrack, timeSeconds: number): number[
   if (timeSeconds <= track.times[0]!) return readTrackValue(track, 0, stride);
   const last = track.times.length - 1;
   if (timeSeconds >= track.times[last]!) return readTrackValue(track, last, stride);
-  let upper = 1;
-  while (upper < track.times.length && track.times[upper]! < timeSeconds) upper += 1;
+  let low = 1;
+  let high = track.times.length - 1;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (track.times[mid]! < timeSeconds) low = mid + 1;
+    else high = mid;
+  }
+  const upper = low;
   const lower = upper - 1;
   const start = track.times[lower]!;
   const end = track.times[upper]!;
@@ -151,4 +154,3 @@ function readTrackValue(track: AnimationTrack, keyIndex: number, stride: 3 | 4):
   const values = fallback.map((value, index) => track.values[offset + index] ?? value);
   return stride === 4 ? normalizeQuat(values as Quat) : values;
 }
-

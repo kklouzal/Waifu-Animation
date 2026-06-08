@@ -6,7 +6,8 @@
 
 - `math`: vectors, quaternions, transforms, matrices, deterministic random helpers, damping, and interpolation.
 - `skeleton`: parent-index skeletons, humanoid mappings, rest poses, and local-to-model conversion.
-- `clip`: JSON clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
+- `clip`: decoded binary clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
+- `binary`: versioned `.waifuanim.bin` encoding and decoding for animation keyframe payloads.
 - `pose`: pose cloning, normalized blending, additive deltas, joint masks, and pose validation.
 - `runtime`: weighted layer stack, priorities, crossfade weights, additive layers, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
@@ -16,7 +17,7 @@
 - `ik`: two-bone IK target solve foundation.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
-- `three`: JSON-to-Three clip binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.
+- `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.
 
 ## Ozz-Inspired Frame Model
 
@@ -31,7 +32,7 @@ The canonical model mirrors Ozz Animation's runtime flow:
 7. Let procedural jobs, look-at, and IK consume explicit target inputs and write bounded corrections.
 8. Emit skeletal pose data and expression/viseme weights to the consumer.
 
-Ozz's C++ implementation and SIMD memory layout are not copied. This package keeps JSON-friendly track arrays and TypeScript transforms because Waifu currently ships converted animation clips to a browser renderer.
+Ozz's C++ implementation and SIMD memory layout are not copied. Runtime animation keyframes are shipped as versioned binary payloads and decoded into typed arrays before sampling. JSON remains metadata-only for manifests, curation, includes, behavior hints, and validation policy.
 
 ## Waifu Integration Contract
 
@@ -46,7 +47,7 @@ Waifu consumes this package for reusable concerns:
 
 - deterministic math and seeded randomness;
 - manifest include loading and clip asset inspection;
-- converting `waifu-animation-json` clips to Three tracks;
+- decoding `.waifuanim.bin` payloads and converting decoded clips to Three tracks;
 - retargeting quaternion tracks from source rest pose to active VRM rest pose;
 - constructing base, overlay, and debug runtime clip lanes for Three `AnimationMixer`;
 - zeroing and limiting viseme stacks;

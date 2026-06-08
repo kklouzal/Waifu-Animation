@@ -6,12 +6,15 @@ import {
   BlinkScheduler,
   FacialExpressionMixer,
   PresencePlanner,
+  WAIFU_ANIMATION_BINARY_FORMAT,
   VisemeMixer,
   blendPoses,
   clamp01,
   createJointMask,
   createThreeAnimationClip,
   createThreeRuntimeClipsForEntry,
+  decodeAnimationBinary,
+  encodeAnimationBinary,
   createSkeleton,
   distributeLookAt,
   filterTracksByNamePolicy,
@@ -22,6 +25,7 @@ import {
   sampleClipToPose,
   sanitizeQuaternionTrackValues,
   solveTwoBoneIk,
+  toFloat32Array,
   validateAnimationInputs
 } from "../src/index.js";
 
@@ -40,7 +44,7 @@ const nodClip: AnimationClip = {
     {
       humanBone: "head",
       property: "quaternion",
-      times: [0, 0.5, 1],
+      times: toFloat32Array([0, 0.5, 1]),
       values: sanitizeQuaternionTrackValues([0, 0, 0, 1, 0.15, 0, 0, 0.9887, 0, 0, 0, 1])
     }
   ]
@@ -48,14 +52,20 @@ const nodClip: AnimationClip = {
 
 assert.equal(clamp01(2), 1);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
-assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.json", format: "waifu-animation-json" }, nodClip).accepted, true);
+assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
+
+const decodedNodClip = decodeAnimationBinary(encodeAnimationBinary(nodClip), "nod");
+assert.equal(decodedNodClip.id, "nod");
+assert.equal(decodedNodClip.tracks.length, 1);
+assert.deepEqual(Array.from(decodedNodClip.tracks[0]!.times), [0, 0.5, 1]);
+assert.ok(decodedNodClip.tracks[0]!.values instanceof Float32Array);
 
 const rootMotionRotationOnlyClip: AnimationClip = {
   ...nodClip,
   id: "root-motion-walk"
 };
 assert.equal(
-  inspectClipAsset({ id: "root-motion-walk", label: "Root Motion Walk", url: "/root-motion-walk.json", format: "waifu-animation-json" }, rootMotionRotationOnlyClip)
+  inspectClipAsset({ id: "root-motion-walk", label: "Root Motion Walk", url: "/root-motion-walk.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, rootMotionRotationOnlyClip)
     .accepted,
   false
 );
@@ -64,8 +74,8 @@ assert.equal(
     {
       id: "root-motion-walk",
       label: "Root Motion Walk",
-      url: "/root-motion-walk.json",
-      format: "waifu-animation-json",
+      url: "/root-motion-walk.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
       source: { rootMotion: { policy: "stripped-to-in-place" } }
     },
     rootMotionRotationOnlyClip
@@ -191,7 +201,7 @@ assert.equal(threeClip.tracks[0]!.name, "normalizedHead.quaternion");
 const root = new Object3D();
 const mixer = new AnimationMixer(root);
 const runtimeClips = createThreeRuntimeClipsForEntry(
-  { id: "nod", label: "Nod", url: "/nod.json", format: "waifu-animation-json", loop: true },
+  { id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, loop: true },
   mixer,
   threeClip
 );

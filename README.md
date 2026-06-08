@@ -38,14 +38,15 @@ npm test
 
 - `math`: deterministic random helpers, transform math, quaternion interpolation, matrix composition.
 - `skeleton`: Ozz-style skeleton representation, humanoid mapping, local-to-model conversion.
-- `clip`: `waifu-animation-json` clip types, sampling, validation, quaternion continuity.
+- `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
 - `pose`: rest pose creation, blending, additive layers, masks, pose validation.
 - `runtime`: deterministic layer stack, crossfades, priorities, final local/model pose evaluation.
 - `procedural`: look-at distribution, seeded attention/idle scheduling helpers.
 - `ik`: two-bone IK and target clamping foundations.
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
-- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for `waifu-animation-json` clips, track policies, and runtime clip lanes.
+- `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
+- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded animation clips, track policies, and runtime clip lanes.
 - `debug`: pose metrics, invalid transform diagnostics, runtime snapshots.
 
 ## Pipeline

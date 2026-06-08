@@ -1,4 +1,5 @@
 import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
+import { WAIFU_ANIMATION_BINARY_FORMAT } from "./binary.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
 
@@ -6,7 +7,7 @@ export type AnimationManifestEntry = {
   id: string;
   label: string;
   url: string;
-  format: "waifu-animation-json" | string;
+  format: typeof WAIFU_ANIMATION_BINARY_FORMAT | string;
   playback?: {
     start?: number;
     end?: number;
@@ -58,7 +59,7 @@ export function validateManifest(manifest: AnimationManifest): string[] {
   for (const entry of manifest.clips) {
     if (!entry.id) issues.push("manifest entry is missing id");
     if (!entry.url) issues.push(`${entry.id || "<unknown>"} is missing url`);
-    if (entry.format !== "waifu-animation-json") issues.push(`${entry.id} has unsupported format ${entry.format}`);
+    if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) issues.push(`${entry.id} has unsupported format ${entry.format}`);
     if (ids.has(entry.id)) issues.push(`duplicate clip id ${entry.id}`);
     ids.add(entry.id);
     if (entry.validation?.status === "accepted" && entry.validation.reason) {

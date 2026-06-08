@@ -8,7 +8,7 @@ import {
   type KeyframeTrack,
   type Object3D
 } from "three";
-import { type AnimationClip, type AnimationTrack, type WaifuAnimationJson, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
+import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { clamp } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
@@ -48,8 +48,7 @@ export type ThreeRuntimeClip<TEntry extends AnimationManifestEntry = AnimationMa
   lane: ThreeRuntimeLane;
 };
 
-export function createThreeAnimationClip(input: WaifuAnimationJson | AnimationClip, options: ThreeAnimationClipOptions): ThreeAnimationClip {
-  const clip = unwrapAnimationClip(input);
+export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnimationClipOptions): ThreeAnimationClip {
   const playback = resolvePlaybackWindow(clip, options.playback, options.minimumDuration ?? 0.1);
   let runtimeDuration = playback.end - playback.start;
   const tracks = clip.tracks.flatMap((track) => {
@@ -164,10 +163,6 @@ export function configureThreeRuntimeAction(action: AnimationAction): AnimationA
   action.setEffectiveTimeScale(1);
   action.setEffectiveWeight(0);
   return action;
-}
-
-function unwrapAnimationClip(input: WaifuAnimationJson | AnimationClip): AnimationClip {
-  return "format" in input ? input.clip : input;
 }
 
 function resolvePlaybackWindow(clip: AnimationClip, playback: AnimationManifestEntry["playback"] | undefined, minimumDuration: number): { start: number; end: number } {
