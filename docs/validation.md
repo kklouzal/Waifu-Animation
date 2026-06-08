@@ -23,7 +23,7 @@ Current coverage includes:
 - look-at target distribution;
 - two-bone IK solve sanity;
 - viseme stack limiting;
-- blink scheduler sanity;
+- configurable viseme smoothing, facial expression composition, and blink scheduler trigger sanity;
 - pose rotation metrics.
 
 ## Waifu Integration Gates
@@ -56,6 +56,12 @@ Pass-4 results:
 - `visual:actions`: passed with 9 captures, recorded WebM, zero motion issues, and zero bad logs.
 - `visual:visemes`: passed with recorded WebM, zero bad logs, mouth max `0.227`, target max `0.244`, and all five viseme channels active.
 - Manual artifact review checked real-avatar render, action contact sheet, viseme contact sheet, and final viseme screenshot. No fallback avatar, pose explosion, or stuck-open mouth was observed in those reviewed artifacts.
+
+Targeted facial-runtime validation after moving facial/blink composition into `Waifu-Animation`:
+
+- Artifact directory: `/Warehouse/Waifu/cache/waifu-animation-foundation/2026-06-08/facial-runtime/visemes`
+- Command: `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISEME_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/facial-runtime/visemes npm run visual:visemes`
+- Result: passed with recorded WebM, zero bad logs, mouth max `0.285`, target max `0.340`, eight mouth/target changes, and all five viseme channels active.
 
 ## Active Manifest Status
 

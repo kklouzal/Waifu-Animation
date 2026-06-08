@@ -4,6 +4,7 @@ import {
   AnimationRuntime,
   type AnimationClip,
   BlinkScheduler,
+  FacialExpressionMixer,
   VisemeMixer,
   blendPoses,
   clamp01,
@@ -96,6 +97,31 @@ assert.ok(mixed.aa + mixed.ou <= 0.4001);
 
 const blink = new BlinkScheduler("test", 0);
 assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
+blink.trigger(32, 100);
+assert.equal(blink.update(48, 1 / 60, 0.5), 1);
+
+const facial = new FacialExpressionMixer({
+  visemes: {
+    maxTotal: 0.42,
+    attack: { aa: 30, ih: 34, ou: 28, ee: 34, oh: 28 },
+    release: { aa: 20, ih: 24, ou: 18, ee: 24, oh: 18 }
+  }
+});
+facial.setTarget({ targetMouth: 0.3, targetVisemes: { aa: 0.3, ee: 0.2 } });
+const faceState = facial.update(1 / 30, {
+  talking: true,
+  blink: 1,
+  mood: "warm",
+  emotion: "happy",
+  state: "speaking",
+  energy: 0.6,
+  rapport: 0.5,
+  cueSmile: 0.2
+});
+assert.ok(faceState.mouthLevel > 0);
+assert.ok(faceState.visemes.aa + faceState.visemes.ee <= 0.4201);
+assert.equal(faceState.expressions.blink, 1);
+assert.ok(faceState.expressions.happy > 0.1);
 
 const metric = poseRotationMetric(skeleton.restPose, evaluated.localPose);
 assert.ok(metric.maxRotationDelta > 0);

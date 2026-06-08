@@ -14,7 +14,7 @@
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, and breathing weights.
 - `ik`: two-bone IK target solve foundation.
-- `face`: viseme stack limiting, viseme smoothing, expression mixing, and blink scheduling.
+- `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
 - `three`: JSON-to-Three clip binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.
 
@@ -50,6 +50,7 @@ Waifu consumes this package for reusable concerns:
 - retargeting quaternion tracks from source rest pose to active VRM rest pose;
 - constructing base, overlay, and debug runtime clip lanes for Three `AnimationMixer`;
 - zeroing and limiting viseme stacks;
+- smoothing mouth/viseme targets and composing blink, speech, mood, emotion, and thinking expression weights through `FacialExpressionMixer`;
 - declarative root/body/finger track policies.
 
 Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime. The current baseline already keeps the Three adapter and animation plumbing in `Waifu-Animation`.
