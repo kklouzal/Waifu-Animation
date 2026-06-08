@@ -72,10 +72,16 @@ Targeted presence-planner validation after moving deterministic cue/gaze/body ta
 
 ## Active Manifest Status
 
-The active Waifu manifest expands to 564 entries: 9 curated paid clips plus 555 generated Mocap Online entries. The current manifest has zero entries marked `rejected` or `quarantined`, and the pass-4 asset inspection reported zero clip asset issues.
+The active Waifu manifest expands to 564 entries: 9 curated paid clips plus 555 generated Mocap Online entries. The current manifest has zero entries marked `rejected` or `quarantined`, and the latest asset inspection reported zero clip asset issues.
+
+The generated Mocap Online library now records explicit root-motion policy metadata:
+
+- 223 generated `root-motion-*` entries are marked `source.rootMotion.policy: "stripped-to-in-place"`.
+- Those clips currently omit hips/pelvis translation tracks; they are validated as in-place debug/runtime candidates, not as preserved root-motion clips.
+- `visual:animations` now samples representative paid idle/conversation clips plus walk, jog, and stand-to-walk root-motion candidates.
 
 ## Known Limits
 
 - The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. Waifu still applies package-produced procedural targets through Three/VRM bone writes in `src/client/main.ts`; final browser pose application has not fully moved onto package-owned local-pose buffers.
-- The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, visemes, and idle transitions. They do not yet validate full locomotion, sitting, stretching, foot planting, root motion, prop attachments, or multi-avatar retargeting.
+- The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, visemes, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, foot planting, preserved root-motion application, prop attachments, or multi-avatar retargeting.
 - The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend through the package adapter. The package provides an Ozz-style local-pose runtime, but Waifu has not yet moved final browser pose application fully onto that buffer pipeline.

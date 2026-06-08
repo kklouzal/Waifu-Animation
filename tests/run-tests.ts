@@ -50,6 +50,29 @@ assert.equal(clamp01(2), 1);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.json", format: "waifu-animation-json" }, nodClip).accepted, true);
 
+const rootMotionRotationOnlyClip: AnimationClip = {
+  ...nodClip,
+  id: "root-motion-walk"
+};
+assert.equal(
+  inspectClipAsset({ id: "root-motion-walk", label: "Root Motion Walk", url: "/root-motion-walk.json", format: "waifu-animation-json" }, rootMotionRotationOnlyClip)
+    .accepted,
+  false
+);
+assert.equal(
+  inspectClipAsset(
+    {
+      id: "root-motion-walk",
+      label: "Root Motion Walk",
+      url: "/root-motion-walk.json",
+      format: "waifu-animation-json",
+      source: { rootMotion: { policy: "stripped-to-in-place" } }
+    },
+    rootMotionRotationOnlyClip
+  ).accepted,
+  true
+);
+
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
 assert.ok(sampled[2]!.rotation[0] > 0.1);
 

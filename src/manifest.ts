@@ -1,4 +1,4 @@
-import { type AnimationClip, type ClipValidationIssue, validateClip } from "./clip.js";
+import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
 
@@ -42,6 +42,8 @@ export type ClipAssetInspection = {
   duration: number;
   issues: ClipValidationIssue[];
 };
+
+export type RootMotionPolicy = "none" | "preserved" | "stripped-to-in-place";
 
 export type AssetLoader = (url: string) => Promise<unknown>;
 
@@ -89,6 +91,15 @@ export async function loadManifest(url: string, loader: AssetLoader, options: Ma
 
 export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationClip): ClipAssetInspection {
   const issues = validateClip(clip);
+  const rootMotionPolicy = readRootMotionPolicy(entry, clip);
+  const hasTranslationTracks = clip.tracks.some((track) => normalizedTrackProperty(track.property) === "translation");
+  if (isRootMotionNamed(entry, clip)) {
+    if (!rootMotionPolicy) {
+      issues.push({ message: "root-motion clip must declare source.rootMotion.policy" });
+    } else if (rootMotionPolicy === "preserved" && !hasTranslationTracks) {
+      issues.push({ message: "root-motion policy is preserved but clip has no translation tracks" });
+    }
+  }
   if (entry.playback) {
     const start = entry.playback.start ?? 0;
     const end = entry.playback.end ?? clip.duration;
@@ -109,6 +120,30 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   };
 }
 
+function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): boolean {
+  return /\broot[-_ ]?motion\b/i.test(`${entry.id} ${entry.label} ${entry.url} ${clip.id} ${clip.name ?? ""}`);
+}
+
+function readRootMotionPolicy(entry: AnimationManifestEntry, clip: AnimationClip): RootMotionPolicy | null {
+  const entrySource = entry.source ?? {};
+  const clipMetadata = clip.metadata ?? {};
+  const sourceRootMotion = entrySource.rootMotion;
+  if (typeof sourceRootMotion === "string" && isRootMotionPolicy(sourceRootMotion)) return sourceRootMotion;
+  if (typeof sourceRootMotion === "object" && sourceRootMotion && "policy" in sourceRootMotion) {
+    const policy = (sourceRootMotion as { policy?: unknown }).policy;
+    if (isRootMotionPolicy(policy)) return policy;
+  }
+  const sourcePolicy = entrySource.rootMotionPolicy;
+  if (isRootMotionPolicy(sourcePolicy)) return sourcePolicy;
+  const clipPolicy = clipMetadata.rootMotionPolicy;
+  if (isRootMotionPolicy(clipPolicy)) return clipPolicy;
+  return null;
+}
+
+function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {
+  return value === "none" || value === "preserved" || value === "stripped-to-in-place";
+}
+
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
   return manifest.clips.filter((entry) => entry.validation?.status !== "rejected" && entry.validation?.status !== "quarantined");
 }
@@ -118,4 +153,3 @@ export function rejectedAnimationReport(manifest: AnimationManifest): Array<{ id
     .filter((entry) => entry.validation?.status === "rejected" || entry.validation?.status === "quarantined")
     .map((entry) => ({ id: entry.id, label: entry.label, reason: entry.validation?.reason ?? "not accepted" }));
 }
-
