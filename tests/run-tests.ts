@@ -5,6 +5,7 @@ import {
   type AnimationClip,
   BlinkScheduler,
   FacialExpressionMixer,
+  PresencePlanner,
   VisemeMixer,
   blendPoses,
   clamp01,
@@ -85,6 +86,35 @@ assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
 const look = distributeLookAt([0.4, 0.2, 2]);
 assert.ok(look.head.yaw > 0);
 assert.ok(look.eyes.pitch > 0);
+
+const presenceA = new PresencePlanner("presence-test", 0);
+const presenceB = new PresencePlanner("presence-test", 0);
+presenceA.onBehaviorChange({ state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 }, { attentiveness: 0.8 }, 100);
+presenceB.onBehaviorChange({ state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 }, { attentiveness: 0.8 }, 100);
+const presenceFrameA = presenceA.update({
+  nowMs: 260,
+  elapsedSeconds: 1.25,
+  deltaSeconds: 1 / 30,
+  behavior: { state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 },
+  affect: { arousal: 0.45, curiosity: 0.6, attentiveness: 0.8 },
+  targetMouth: 0.1,
+  clipBaseInfluence: 0.8,
+  clipOverlayInfluence: 0.1
+});
+const presenceFrameB = presenceB.update({
+  nowMs: 260,
+  elapsedSeconds: 1.25,
+  deltaSeconds: 1 / 30,
+  behavior: { state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 },
+  affect: { arousal: 0.45, curiosity: 0.6, attentiveness: 0.8 },
+  targetMouth: 0.1,
+  clipBaseInfluence: 0.8,
+  clipOverlayInfluence: 0.1
+});
+assert.deepEqual(presenceFrameA.lookAtTarget, presenceFrameB.lookAtTarget);
+assert.ok(presenceFrameA.cueAmounts.glance > 0);
+assert.ok(presenceFrameA.boneTargets.some((target) => target.bone === "head" && target.influence > 0));
+assert.ok(presenceFrameA.boneTargets.every((target) => target.rotation.every(Number.isFinite)));
 
 const ik = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0.5, -1.5, 0], pole: [0, 0, 1] });
 assert.ok(ik.targetReach > 0.9);

@@ -12,7 +12,7 @@
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
 - `manifest`: manifest include loading, duplicate/id validation, clip asset inspection, usable/rejected manifest helpers.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
-- `procedural`: look-at distribution, seeded attention scheduling, and breathing weights.
+- `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.
 - `ik`: two-bone IK target solve foundation.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
@@ -51,6 +51,7 @@ Waifu consumes this package for reusable concerns:
 - constructing base, overlay, and debug runtime clip lanes for Three `AnimationMixer`;
 - zeroing and limiting viseme stacks;
 - smoothing mouth/viseme targets and composing blink, speech, mood, emotion, and thinking expression weights through `FacialExpressionMixer`;
+- deterministic presence scheduling, gaze target planning, and bounded procedural bone targets through `PresencePlanner`;
 - declarative root/body/finger track policies.
 
 Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime. The current baseline already keeps the Three adapter and animation plumbing in `Waifu-Animation`.

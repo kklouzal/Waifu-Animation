@@ -21,6 +21,7 @@ Current coverage includes:
 - declarative track-name masks;
 - Three adapter clip binding and runtime lane construction;
 - look-at target distribution;
+- deterministic presence planning for cues, gaze targets, and bounded procedural bone targets;
 - two-bone IK solve sanity;
 - viseme stack limiting;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger sanity;
@@ -63,12 +64,18 @@ Targeted facial-runtime validation after moving facial/blink composition into `W
 - Command: `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISEME_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/facial-runtime/visemes npm run visual:visemes`
 - Result: passed with recorded WebM, zero bad logs, mouth max `0.285`, target max `0.340`, eight mouth/target changes, and all five viseme channels active.
 
+Targeted presence-planner validation after moving deterministic cue/gaze/body target planning into `Waifu-Animation`:
+
+- Artifact directory: `/Warehouse/Waifu/cache/waifu-animation-foundation/2026-06-08/presence-planner/actions`
+- Command: `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/presence-planner/actions npm run visual:actions`
+- Result: passed with nine captures, recorded WebM, zero bad logs, zero motion issues, and bounded pose deltas from `0.0097` to `0.0352` across idle, speaking, thinking, emphasize, wave, listening, and shrug states.
+
 ## Active Manifest Status
 
 The active Waifu manifest expands to 564 entries: 9 curated paid clips plus 555 generated Mocap Online entries. The current manifest has zero entries marked `rejected` or `quarantined`, and the pass-4 asset inspection reported zero clip asset issues.
 
 ## Known Limits
 
-- The package has IK and look-at foundations plus the Three animation adapter, but Waifu still applies most procedural pose corrections through Three/VRM code in `src/client/main.ts`.
+- The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. Waifu still applies package-produced procedural targets through Three/VRM bone writes in `src/client/main.ts`; final browser pose application has not fully moved onto package-owned local-pose buffers.
 - The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, visemes, and idle transitions. They do not yet validate full locomotion, sitting, stretching, foot planting, root motion, prop attachments, or multi-avatar retargeting.
 - The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend through the package adapter. The package provides an Ozz-style local-pose runtime, but Waifu has not yet moved final browser pose application fully onto that buffer pipeline.
