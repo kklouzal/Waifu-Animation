@@ -244,15 +244,36 @@ export function transformDelta(rest: Transform, sample: Transform): Transform {
 }
 
 export function applyTransformDelta(base: Transform, delta: Transform, weight: number): Transform {
-  const amount = clamp01(weight);
-  const weightedRotation = slerpQuat(IDENTITY_QUAT, delta.rotation, amount);
+  const amount = Number.isFinite(weight) ? weight : 0;
+  if (Math.abs(amount) <= EPSILON) return cloneTransform(base);
+
+  // Ozz additive blending treats positive weights as adding a delta and
+  // negative weights as subtracting it. Rotation is interpolated from identity
+  // toward the delta with quaternion sign fixed for the shortest path, then the
+  // resulting delta is post-multiplied onto the base local rotation.
+  const signedDeltaRotation = delta.rotation[3] < 0 ? negateQuat(delta.rotation) : cloneQuat(delta.rotation);
+  const absAmount = Math.abs(amount);
+  const weightedRotation = normalizeQuat([
+    signedDeltaRotation[0] * absAmount,
+    signedDeltaRotation[1] * absAmount,
+    signedDeltaRotation[2] * absAmount,
+    1 + (signedDeltaRotation[3] - 1) * absAmount
+  ]);
+  const appliedRotation = amount >= 0 ? weightedRotation : conjugateQuat(weightedRotation);
+
+  const scaleChannel = (baseValue: number, deltaValue: number): number => {
+    const factor = 1 + (deltaValue - 1) * absAmount;
+    if (amount >= 0) return baseValue * factor;
+    return baseValue / Math.max(EPSILON, factor);
+  };
+
   return {
     translation: addVec3(base.translation, scaleVec3(delta.translation, amount)),
-    rotation: multiplyQuat(base.rotation, weightedRotation),
+    rotation: multiplyQuat(base.rotation, appliedRotation),
     scale: [
-      base.scale[0] * (1 + (delta.scale[0] - 1) * amount),
-      base.scale[1] * (1 + (delta.scale[1] - 1) * amount),
-      base.scale[2] * (1 + (delta.scale[2] - 1) * amount)
+      scaleChannel(base.scale[0], delta.scale[0]),
+      scaleChannel(base.scale[1], delta.scale[1]),
+      scaleChannel(base.scale[2], delta.scale[2])
     ]
   };
 }

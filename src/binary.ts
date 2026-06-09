@@ -147,6 +147,9 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     if (nameByteOffset + nameByteLength > stringBytes) throw new Error(`animation track ${index} name bounds are invalid`);
     if (timeOffset + keyCount > floatData.length) throw new Error(`animation track ${index} time bounds are invalid`);
     if (valueOffset + keyCount * stride > floatData.length) throw new Error(`animation track ${index} value bounds are invalid`);
+    if (sourceRestOffset !== NO_OFFSET && sourceRestOffset + 4 > floatData.length) {
+      throw new Error(`animation track ${index} source-rest bounds are invalid`);
+    }
 
     const name = textDecoder.decode(bytes.subarray(stringByteOffset + nameByteOffset, stringByteOffset + nameByteOffset + nameByteLength));
     const trackBase = {

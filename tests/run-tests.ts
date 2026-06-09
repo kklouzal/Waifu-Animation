@@ -22,6 +22,7 @@ import {
   createSkeleton,
   distributeLookAt,
   filterTracksByNamePolicy,
+  inspectAnimationAsset,
   inspectClipAsset,
   localToModelPose,
   poseRotationMetric,
@@ -89,6 +90,14 @@ assert.equal(
   ).accepted,
   true
 );
+assert.equal(
+  inspectAnimationAsset(
+    { id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, loop: true, states: ["idle"], source: { category: "idle", posture: "standing" } },
+    nodClip,
+    skeleton
+  ).status,
+  "accepted"
+);
 
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
 assert.ok(sampled[2]!.rotation[0] > 0.1);
@@ -109,6 +118,28 @@ assert.equal(blended[1]!.rotation[3], 1);
 const tinyWeightBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }]);
 assert.ok(tinyWeightBlend[2]!.rotation[0] > 0);
 assert.ok(tinyWeightBlend[2]!.rotation[0] < sampled[2]!.rotation[0]);
+
+const weightedPoseA = sampleClipToPose(
+  skeleton,
+  {
+    id: "weighted-a",
+    duration: 1,
+    tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: sanitizeQuaternionTrackValues([0.2, 0, 0, 0.98]) }]
+  },
+  0
+);
+const weightedPoseB = sampleClipToPose(
+  skeleton,
+  {
+    id: "weighted-b",
+    duration: 1,
+    tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: sanitizeQuaternionTrackValues([0, 0.2, 0, 0.98]) }]
+  },
+  0
+);
+const weightedBlend = blendPoses(skeleton, [{ pose: weightedPoseA, weight: 2 }, { pose: weightedPoseB, weight: 1 }], { threshold: 0.01 });
+assert.ok(weightedBlend[2]!.rotation[0] > weightedBlend[2]!.rotation[1], "higher layer weights should influence normalized blend more");
+assert.ok(Math.abs(Math.hypot(...weightedBlend[2]!.rotation) - 1) < 1e-5);
 
 assert.deepEqual(
   filterTracksByNamePolicy(

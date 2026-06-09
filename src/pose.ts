@@ -1,10 +1,12 @@
 import {
+  type Quat,
   type Transform,
   applyTransformDelta,
   clamp01,
   cloneTransform,
+  dotQuat,
   isFiniteTransform,
-  lerpTransform,
+  normalizeQuat,
   normalizeTransform,
   transformDelta
 } from "./math.js";
@@ -16,12 +18,14 @@ export type JointMask = Float32Array;
 export type BlendPoseOptions = {
   /**
    * Ozz-style bind/rest pose fallback threshold. When accumulated override
-   * weight for a joint is below this value, the blended result is mixed back
-   * toward rest pose instead of allowing a tiny-weight layer to fully own the
-   * joint. Set to 0 to disable threshold fallback.
+   * weight for a joint is below this value, missing weight is supplied by the
+   * rest pose before normalization. This prevents weak layers from fully owning
+   * a joint and matches Ozz's bind-pose fallback semantics.
    */
   threshold?: number;
 };
+
+export type PoseLayer = { pose: readonly Transform[]; weight: number; mask?: JointMask };
 
 export const DEFAULT_BLEND_THRESHOLD = 0.1;
 
@@ -63,43 +67,72 @@ export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: 
   return mask;
 }
 
-export function blendPoses(
-  skeleton: Skeleton,
-  layers: Array<{ pose: readonly Transform[]; weight: number; mask?: JointMask }>,
-  options: BlendPoseOptions = {}
-): Pose {
+export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: BlendPoseOptions = {}): Pose {
   const restPose = skeleton.restPose;
+  const jointCount = skeleton.joints.length;
   const output = createRestPose(skeleton);
-  const totalWeights = new Float32Array(skeleton.joints.length);
+  const totalWeights = new Float32Array(jointCount);
+  const rotationSums: Quat[] = Array.from({ length: jointCount }, () => [0, 0, 0, 0] as Quat);
+  const translationSums = Array.from({ length: jointCount }, () => [0, 0, 0] as [number, number, number]);
+  const scaleSums = Array.from({ length: jointCount }, () => [0, 0, 0] as [number, number, number]);
+  let hasAnyLayer = false;
 
   for (const layer of layers) {
     const layerWeight = Number.isFinite(layer.weight) ? Math.max(0, layer.weight) : 0;
     if (layerWeight <= 0) continue;
-    for (let joint = 0; joint < skeleton.joints.length; joint += 1) {
-      const maskWeight = clamp01(layer.mask?.[joint] ?? 1);
-      const maskedWeight = layerWeight * maskWeight;
-      if (maskedWeight <= 0) continue;
-      const previous = totalWeights[joint]!;
-      const nextTotal = previous + maskedWeight;
-      const blend = maskedWeight / nextTotal;
-      output[joint] = lerpTransform(output[joint]!, layer.pose[joint]!, blend);
-      totalWeights[joint] = nextTotal;
+    hasAnyLayer = true;
+    for (let joint = 0; joint < jointCount; joint += 1) {
+      const poseTransform = layer.pose[joint];
+      if (!poseTransform) continue;
+      const maskWeight = Math.max(0, Number.isFinite(layer.mask?.[joint]) ? layer.mask![joint]! : 1);
+      const weight = layerWeight * maskWeight;
+      if (weight <= 0) continue;
+      accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, poseTransform, weight);
+      totalWeights[joint] = (totalWeights[joint] ?? 0) + weight;
     }
   }
 
   const threshold = Math.max(0, options.threshold ?? DEFAULT_BLEND_THRESHOLD);
-  if (threshold > 0) {
-    for (let joint = 0; joint < skeleton.joints.length; joint += 1) {
-      const accumulated = totalWeights[joint]!;
-      if (accumulated <= 0) {
-        output[joint] = cloneTransform(restPose[joint]);
-      } else if (accumulated < threshold) {
-        output[joint] = lerpTransform(restPose[joint]!, output[joint]!, accumulated / threshold);
+  for (let joint = 0; joint < jointCount; joint += 1) {
+    const accumulated = totalWeights[joint]!;
+    if (threshold > 0 && (!hasAnyLayer || accumulated < threshold)) {
+      const restWeight = !hasAnyLayer ? 1 : threshold - accumulated;
+      if (restWeight > 0) {
+        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, restPose[joint]!, restWeight);
+        totalWeights[joint] = (totalWeights[joint] ?? 0) + restWeight;
       }
     }
+
+    const total = totalWeights[joint]!;
+    if (total <= 0) {
+      output[joint] = cloneTransform(restPose[joint]);
+      continue;
+    }
+    const invTotal = 1 / total;
+    output[joint] = normalizeTransform({
+      translation: [translationSums[joint]![0] * invTotal, translationSums[joint]![1] * invTotal, translationSums[joint]![2] * invTotal],
+      rotation: normalizeQuat(rotationSums[joint]!, restPose[joint]!.rotation),
+      scale: [scaleSums[joint]![0] * invTotal, scaleSums[joint]![1] * invTotal, scaleSums[joint]![2] * invTotal]
+    });
   }
 
-  return normalizePose(output);
+  return output;
+}
+
+function accumulateTransform(rotationSum: Quat, translationSum: [number, number, number], scaleSum: [number, number, number], transform: Transform, weight: number): void {
+  const hasExistingRotation = Math.abs(rotationSum[0]) + Math.abs(rotationSum[1]) + Math.abs(rotationSum[2]) + Math.abs(rotationSum[3]) > 0;
+  const reference = hasExistingRotation ? normalizeQuat(rotationSum, transform.rotation) : transform.rotation;
+  const rotation = dotQuat(reference, transform.rotation) < 0 ? ([-transform.rotation[0], -transform.rotation[1], -transform.rotation[2], -transform.rotation[3]] as Quat) : transform.rotation;
+  translationSum[0] += transform.translation[0] * weight;
+  translationSum[1] += transform.translation[1] * weight;
+  translationSum[2] += transform.translation[2] * weight;
+  rotationSum[0] += rotation[0] * weight;
+  rotationSum[1] += rotation[1] * weight;
+  rotationSum[2] += rotation[2] * weight;
+  rotationSum[3] += rotation[3] * weight;
+  scaleSum[0] += transform.scale[0] * weight;
+  scaleSum[1] += transform.scale[1] * weight;
+  scaleSum[2] += transform.scale[2] * weight;
 }
 
 export function additiveDeltaPose(restPose: readonly Transform[], samplePose: readonly Transform[]): Pose {
@@ -109,6 +142,7 @@ export function additiveDeltaPose(restPose: readonly Transform[], samplePose: re
 
 export function applyAdditivePose(base: readonly Transform[], deltaPose: readonly Transform[], weight: number, mask?: JointMask): Pose {
   if (base.length !== deltaPose.length) throw new Error("additive pose length mismatch");
-  return base.map((transform, index) => applyTransformDelta(transform, deltaPose[index]!, weight * (mask?.[index] ?? 1)));
+  const layerWeight = Number.isFinite(weight) ? weight : 0;
+  return base.map((transform, index) => applyTransformDelta(transform, deltaPose[index]!, layerWeight * Math.max(0, mask?.[index] ?? 1)));
 }
 
