@@ -178,6 +178,28 @@ assert.equal(
 const retargeted = retargetQuaternionSample([0, 0, 0, 1], [0, 0, 0, 1], [0, 0.2, 0, 0.98]);
 assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
 
+const authoredRotationBone = new Object3D();
+authoredRotationBone.name = "head";
+authoredRotationBone.quaternion.set(0.3, 0, 0, 0.953939).normalize();
+const authoredRotationClip = createThreeAnimationClip(
+  {
+    id: "authored-local-rotation",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "head",
+        property: "quaternion",
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([0, 0, 0, 1, 0, 0.2, 0, 0.98])
+      }
+    ]
+  },
+  { resolveBone: (bone) => (bone === "head" ? authoredRotationBone : null) }
+);
+const authoredTrackValues = Array.from(authoredRotationClip.tracks[0]!.values as ArrayLike<number>);
+assert.deepEqual(authoredTrackValues.slice(0, 4), [0, 0, 0, 1], "authored target-local rotations must not be pre-multiplied by target rest");
+assert.ok(authoredTrackValues[5]! > 0.19, "authored target-local rotations should preserve sampled components");
+
 const look = distributeLookAt([0.4, 0.2, 2]);
 assert.ok(look.head.yaw > 0);
 assert.ok(look.eyes.pitch > 0);

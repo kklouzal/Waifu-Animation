@@ -443,8 +443,10 @@ export class PresencePlanner {
     const nod = Math.max(gestureAmount(behavior, "nod") * 0.65, cueAmounts.nod, motion.speechPulse > 0 ? 0.1 + motion.speechPulse * 0.12 : 0);
     const nodMotion = Math.sin(elapsedSeconds * 7.2) * (0.055 + cueAmounts.nod * 0.075) * nod;
     const attentionLean = listen * (0.014 + affect.attentiveness * 0.018) + (motion.speechPulse > 0 ? 0.01 + motion.speechPulse * 0.018 : 0);
+    const baseInfluence = clamp01(input.clipBaseInfluence ?? 0);
     const overlayInfluence = clamp01(input.clipOverlayInfluence ?? 0);
-    const bodyDucking = 1 - overlayInfluence * 0.55;
+    const baseDucking = (1 - baseInfluence) * (1 - baseInfluence);
+    const bodyDucking = Math.min(1 - overlayInfluence * 0.55, baseDucking);
     const headDucking = 1 - overlayInfluence * 0.25;
     const bodyTarget = (0.08 + listen * 0.05 + motion.speechPulse * 0.04) * bodyDucking;
     const headTarget = (0.18 + affect.attentiveness * 0.08 + motion.speechPulse * 0.08) * headDucking;
@@ -455,7 +457,7 @@ export class PresencePlanner {
     const shrug = clamp01(Math.max(cueAmounts.shrug, gestureAmount(behavior, "shrug") * 0.24));
     const shoulderLift = shrug * (0.14 + Math.sin(elapsedSeconds * 5.6 + this.aliveSeed) * 0.012);
     const armOverlayDucking = 1 - overlayInfluence * 0.98;
-    const armTarget = ((input.clipBaseInfluence ?? 0) > 0.02 ? 0.86 : 0.55) * armOverlayDucking;
+    const armTarget = 0.55 * baseDucking * armOverlayDucking;
     const rightLead = clamp01(conversationalGesture * (0.72 + Math.sin(elapsedSeconds * 3.8 + this.aliveSeed) * 0.08));
     const leftLead = clamp01(conversationalGesture * (0.44 + Math.sin(elapsedSeconds * 3.2 + this.aliveSeed + 1.2) * 0.06));
     const rightGesture = clamp01(Math.max(rightLead, shrug * 0.52));

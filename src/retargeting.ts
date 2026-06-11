@@ -19,13 +19,13 @@ export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sou
 export function retargetQuaternionTrackValues(values: readonly number[], sourceRest: ArrayLike<number> | undefined, targetRest: ArrayLike<number>): RetargetedQuaternionTrack {
   if (values.length % 4 !== 0) throw new Error("quaternion values must be a multiple of 4");
   const output: number[] = [];
-  const srcRest = normalizeQuat(cloneQuat(sourceRest, [0, 0, 0, 1]));
+  const srcRest = sourceRest ? normalizeQuat(cloneQuat(sourceRest, [0, 0, 0, 1])) : null;
   const dstRest = normalizeQuat(cloneQuat(targetRest, [0, 0, 0, 1]));
   let invalidSamples = 0;
   let previous: Quat = [0, 0, 0, 1];
   for (let i = 0; i < values.length; i += 4) {
     const sample = normalizeQuat([values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1]);
-    let retargeted = retargetQuaternionSample(srcRest, dstRest, sample);
+    let retargeted = srcRest ? retargetQuaternionSample(srcRest, dstRest, sample) : sample;
     if (!retargeted.every(Number.isFinite)) {
       invalidSamples += 1;
       retargeted = previous;
