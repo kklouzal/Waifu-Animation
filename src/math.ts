@@ -77,6 +77,13 @@ export function cloneVec3(value: ArrayLike<number> | undefined, fallback: Vec3 =
   return [value?.[0] ?? fallback[0], value?.[1] ?? fallback[1], value?.[2] ?? fallback[2]];
 }
 
+function cloneFiniteVec3(value: ArrayLike<number> | undefined, fallback: Vec3): Vec3 {
+  const x = value?.[0] ?? fallback[0];
+  const y = value?.[1] ?? fallback[1];
+  const z = value?.[2] ?? fallback[2];
+  return [isFiniteNumber(x) ? x : fallback[0], isFiniteNumber(y) ? y : fallback[1], isFiniteNumber(z) ? z : fallback[2]];
+}
+
 export function addVec3(a: Vec3, b: Vec3): Vec3 {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 }
@@ -228,17 +235,17 @@ export function identityTransform(): Transform {
 
 export function cloneTransform(value: Partial<Transform> | undefined): Transform {
   return {
-    translation: cloneVec3(value?.translation, ZERO_VEC3),
+    translation: cloneFiniteVec3(value?.translation, ZERO_VEC3),
     rotation: normalizeQuat(cloneQuat(value?.rotation, IDENTITY_QUAT)),
-    scale: cloneVec3(value?.scale, ONE_VEC3)
+    scale: cloneFiniteVec3(value?.scale, ONE_VEC3)
   };
 }
 
 export function normalizeTransform(value: Transform): Transform {
   return {
-    translation: cloneVec3(value.translation),
+    translation: cloneFiniteVec3(value.translation, ZERO_VEC3),
     rotation: normalizeQuat(value.rotation),
-    scale: cloneVec3(value.scale, ONE_VEC3)
+    scale: cloneFiniteVec3(value.scale, ONE_VEC3)
   };
 }
 

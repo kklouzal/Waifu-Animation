@@ -20,12 +20,14 @@ import {
   decodeAnimationBinary,
   encodeAnimationBinary,
   createSkeleton,
+  cloneTransform,
   distributeLookAt,
   filterTracksByNamePolicy,
   inspectAnimationAsset,
   inspectClipAsset,
   localToModelPose,
   normalizeQuat,
+  normalizeTransform,
   normalizeVec3,
   poseRotationMetric,
   rotateVec3ByQuat,
@@ -70,6 +72,25 @@ assert.ok(Math.abs(finiteQuatFallback[2] - Math.SQRT1_2) < 1e-12);
 assert.ok(Math.abs(finiteQuatFallback[3] - Math.SQRT1_2) < 1e-12);
 assert.deepEqual(normalizeQuat([Infinity, 0, 0, 1], [0, 0, 0, 2]), [0, 0, 0, 1]);
 assert.deepEqual(normalizeQuat([0, 0, 0, 0], [Number.NaN, 0, 0, 0]), [0, 0, 0, 1]);
+const repairedTransform = normalizeTransform({
+  translation: [Number.NaN, 2, Infinity],
+  rotation: [0, 0, 0, 0],
+  scale: [1.5, Number.NEGATIVE_INFINITY, Number.NaN]
+});
+assert.deepEqual(repairedTransform.translation, [0, 2, 0]);
+assert.deepEqual(repairedTransform.rotation, [0, 0, 0, 1]);
+assert.deepEqual(repairedTransform.scale, [1.5, 1, 1]);
+const clonedTransform = cloneTransform({
+  translation: [-3, Number.NaN, 4],
+  rotation: [0, Number.POSITIVE_INFINITY, 0, 1],
+  scale: [Number.NaN, 2, Number.NEGATIVE_INFINITY]
+});
+assert.deepEqual(clonedTransform.translation, [-3, 0, 4]);
+assert.deepEqual(clonedTransform.rotation, [0, 0, 0, 1]);
+assert.deepEqual(clonedTransform.scale, [1, 2, 1]);
+const repairedRestSkeleton = createSkeleton([{ name: "root", rest: { translation: [Number.NaN, 5, Infinity], scale: [Number.NaN, 3, -Infinity] } }]);
+assert.deepEqual(repairedRestSkeleton.restPose[0]!.translation, [0, 5, 0]);
+assert.deepEqual(repairedRestSkeleton.restPose[0]!.scale, [1, 3, 1]);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
