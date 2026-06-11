@@ -9,7 +9,7 @@
 - `clip`: decoded binary clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
 - `binary`: versioned `.waifuanim.bin` encoding and decoding for animation keyframe payloads.
 - `pose`: pose cloning, normalized blending, additive deltas, joint masks, and pose validation.
-- `runtime`: weighted layer stack, priorities, first-class override crossfade orchestration, additive layers, and final local/model pose evaluation.
+- `runtime`: weighted layer stack, priorities, first-class override crossfade orchestration, additive layers, optional evaluation diagnostics, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
 - `manifest`: manifest include loading, duplicate/id validation, clip asset inspection, usable/rejected manifest helpers.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
@@ -39,6 +39,8 @@ The canonical model mirrors Ozz Animation's runtime flow:
 6. Convert local transforms to model-space matrices.
 7. Let procedural jobs, look-at, foot planting, and IK consume explicit target inputs and write bounded corrections.
 8. Emit skeletal pose data and expression/viseme weights to the consumer.
+
+Runtime evaluation diagnostics are opt-in through `AnimationRuntime.evaluate({ diagnostics: true })`. When enabled, active sampled layer poses and the composed local pose are validated with layer/clip context before the final pose is normalized and converted to model space, so consumers can log repaired or invalid source data without paying that cost on every frame by default.
 
 Ozz's C++ implementation and SIMD memory layout are not copied. Runtime animation keyframes are shipped as versioned binary payloads and decoded into typed arrays before sampling. JSON remains metadata-only for manifests, curation, includes, behavior hints, and validation policy.
 

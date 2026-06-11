@@ -17,7 +17,7 @@ Current coverage includes:
 - local clip sampling;
 - local-to-model pose conversion;
 - weighted pose blending with masks;
-- runtime layer evaluation and override crossfade orchestration;
+- runtime layer evaluation, opt-in evaluation diagnostics, and override crossfade orchestration;
 - declarative track-name masks;
 - Three adapter clip binding and runtime lane construction;
 - look-at target distribution;
@@ -28,6 +28,10 @@ Current coverage includes:
 - viseme stack limiting;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger sanity;
 - pose rotation metrics.
+
+## Runtime Evaluation Diagnostics
+
+`AnimationRuntime.evaluate()` keeps the realtime path lean by default and returns only the evaluated local/model poses plus active layer metadata. Consumers that need Ozz-style validation around a frame can call `evaluate({ diagnostics: true })` to receive sampled-layer and final local-pose diagnostics with layer id, clip id, joint/index, and validation messages while still getting a normalized finite output pose.
 
 ## Waifu Integration Gates
 

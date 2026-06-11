@@ -1,6 +1,17 @@
 import { type Mat4 } from "./math.js";
-import { type AnimationClip, sampleClipToPose } from "./clip.js";
-import { DEFAULT_BLEND_THRESHOLD, type JointMask, type Pose, additiveDeltaPose, applyAdditivePose, blendPoses, clonePose, normalizePose } from "./pose.js";
+import { type AnimationClip, type ClipValidationIssue, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
+import {
+  DEFAULT_BLEND_THRESHOLD,
+  type JointMask,
+  type Pose,
+  type PoseValidationIssue,
+  additiveDeltaPose,
+  applyAdditivePose,
+  blendPoses,
+  clonePose,
+  normalizePose,
+  validatePose
+} from "./pose.js";
 import { type Skeleton, createRestPose, localToModelPose } from "./skeleton.js";
 
 export type LayerBlendMode = "override" | "additive";
@@ -39,10 +50,23 @@ export type AnimationRuntimeOptions = {
   blendThreshold?: number;
 };
 
+export type RuntimeEvaluateOptions = {
+  /** Collect pose validation diagnostics for sampled layers and the composed local pose. */
+  diagnostics?: boolean;
+};
+
+export type RuntimeEvaluationDiagnostic = PoseValidationIssue & {
+  stage: "sample" | "final";
+  layerId?: string;
+  clipId?: string;
+  track?: number;
+};
+
 export type RuntimeEvaluation = {
   localPose: Pose;
   modelPose: Mat4[];
   activeLayers: Array<Pick<AnimationLayer, "id" | "time" | "weight" | "targetWeight" | "priority" | "blendMode">>;
+  diagnostics?: RuntimeEvaluationDiagnostic[];
 };
 
 export class AnimationRuntime {
@@ -137,7 +161,8 @@ export class AnimationRuntime {
     }
   }
 
-  evaluate(): RuntimeEvaluation {
+  evaluate(options: RuntimeEvaluateOptions = {}): RuntimeEvaluation {
+    const diagnostics = options.diagnostics ? [] as RuntimeEvaluationDiagnostic[] : undefined;
     const active = Array.from(this.layers.values())
       .filter((layer) => layer.weight > 0.0001)
       .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
@@ -146,6 +171,14 @@ export class AnimationRuntime {
     const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
     for (const layer of active) {
       const sampled = sampleClipToPose(this.skeleton, layer.clip, layer.time, { loop: layer.loop, restPose: this.restPose });
+      if (diagnostics) {
+        pushClipDiagnostics(diagnostics, validateClip(layer.clip, this.skeleton), layer, this.skeleton);
+        pushPoseDiagnostics(diagnostics, validatePose(this.skeleton, sampled), {
+          stage: "sample",
+          layerId: layer.id,
+          clipId: layer.clip.id
+        });
+      }
       if (layer.blendMode === "additive") additiveLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
       else overrideLayers.push({ priority: layer.priority, pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
     }
@@ -165,8 +198,9 @@ export class AnimationRuntime {
       const deltaPose = additiveDeltaPose(this.restPose, additive.pose);
       localPose = applyAdditivePose(localPose, deltaPose, additive.weight, additive.mask);
     }
+    if (diagnostics) pushPoseDiagnostics(diagnostics, validatePose(this.skeleton, localPose), { stage: "final" });
     localPose = normalizePose(localPose);
-    return {
+    const evaluation: RuntimeEvaluation = {
       localPose,
       modelPose: localToModelPose(this.skeleton, localPose),
       activeLayers: active.map((layer) => ({
@@ -178,9 +212,37 @@ export class AnimationRuntime {
         blendMode: layer.blendMode
       }))
     };
+    if (diagnostics) evaluation.diagnostics = diagnostics;
+    return evaluation;
   }
 }
 
 function finiteNonNegative(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+function pushPoseDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: PoseValidationIssue[],
+  context: Pick<RuntimeEvaluationDiagnostic, "stage" | "layerId" | "clipId">
+): void {
+  for (const issue of issues) {
+    diagnostics.push({ ...issue, ...context });
+  }
+}
+
+function pushClipDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues: ClipValidationIssue[], layer: AnimationLayer, skeleton: Skeleton): void {
+  for (const issue of issues) {
+    const track = issue.track !== undefined ? layer.clip.tracks[issue.track] : undefined;
+    const index = track ? resolveTrackJointIndex(skeleton, track) : -1;
+    diagnostics.push({
+      stage: "sample",
+      layerId: layer.id,
+      clipId: layer.clip.id,
+      ...(issue.track !== undefined ? { track: issue.track } : {}),
+      joint: issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>",
+      index,
+      message: issue.message
+    });
+  }
 }

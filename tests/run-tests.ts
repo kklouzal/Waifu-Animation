@@ -280,6 +280,44 @@ runtime.update(0.5);
 const evaluated = runtime.evaluate();
 assert.ok(evaluated.activeLayers.length === 1);
 assert.ok(evaluated.localPose[2]!.rotation[0] > 0.1);
+assert.equal(evaluated.diagnostics, undefined);
+
+const invalidRuntime = new AnimationRuntime(skeleton);
+const invalidTranslationScaleClip: AnimationClip = {
+  id: "invalid-translation-scale",
+  duration: 1,
+  tracks: [
+    { humanBone: "spine", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([Number.NaN, 0, 0]) },
+    { humanBone: "head", property: "scale", times: toFloat32Array([0]), values: toFloat32Array([1, Number.POSITIVE_INFINITY, 1]) }
+  ]
+};
+invalidRuntime.setLayer("invalid-source", invalidTranslationScaleClip, { weight: 1, targetWeight: 1, blendMode: "additive" });
+assert.equal(invalidRuntime.evaluate().diagnostics, undefined, "runtime diagnostics should stay opt-in");
+const invalidEvaluation = invalidRuntime.evaluate({ diagnostics: true });
+assert.ok(invalidEvaluation.diagnostics!.some((issue) => issue.stage === "sample" && issue.layerId === "invalid-source" && issue.clipId === "invalid-translation-scale"));
+assert.ok(invalidEvaluation.diagnostics!.some((issue) => issue.stage === "final" && issue.joint === "spine"));
+for (const transform of invalidEvaluation.localPose) {
+  assert.ok(transform.translation.every(Number.isFinite));
+  assert.ok(transform.rotation.every(Number.isFinite));
+  assert.ok(Math.abs(Math.hypot(...transform.rotation) - 1) < 1e-5);
+  assert.ok(transform.scale.every(Number.isFinite));
+}
+for (const matrix of invalidEvaluation.modelPose) {
+  assert.ok(Array.from(matrix).every(Number.isFinite));
+}
+
+const invalidRotationRuntime = new AnimationRuntime(skeleton);
+const invalidRotationClip: AnimationClip = {
+  id: "invalid-rotation",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, Number.NaN, 0, 1]) }]
+};
+invalidRotationRuntime.setLayer("invalid-rotation-source", invalidRotationClip, { weight: 1, targetWeight: 1 });
+const invalidRotationEvaluation = invalidRotationRuntime.evaluate({ diagnostics: true });
+assert.ok(
+  invalidRotationEvaluation.diagnostics!.some((issue) => issue.stage === "sample" && issue.layerId === "invalid-rotation-source" && issue.clipId === "invalid-rotation"),
+  "runtime diagnostics should report invalid active rotation source tracks"
+);
 
 
 const presenceBone = new Object3D();
