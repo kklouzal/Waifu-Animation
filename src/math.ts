@@ -101,9 +101,16 @@ export function lengthVec3(value: Vec3): number {
   return Math.hypot(value[0], value[1], value[2]);
 }
 
+function cloneFiniteNormalFallbackVec3(fallback: Vec3): Vec3 {
+  if (!fallback.every(isFiniteNumber)) return [0, 0, 1];
+  const length = lengthVec3(fallback);
+  return Number.isFinite(length) && length > EPSILON ? [fallback[0] / length, fallback[1] / length, fallback[2] / length] : [0, 0, 1];
+}
+
 export function normalizeVec3(value: Vec3, fallback: Vec3 = [0, 0, 1]): Vec3 {
+  if (!value.every(isFiniteNumber)) return cloneFiniteNormalFallbackVec3(fallback);
   const length = lengthVec3(value);
-  return length > EPSILON ? [value[0] / length, value[1] / length, value[2] / length] : cloneVec3(fallback);
+  return Number.isFinite(length) && length > EPSILON ? [value[0] / length, value[1] / length, value[2] / length] : cloneFiniteNormalFallbackVec3(fallback);
 }
 
 export function lerpVec3(a: Vec3, b: Vec3, t: number): Vec3 {
@@ -119,9 +126,17 @@ export function cloneQuat(value: ArrayLike<number> | undefined, fallback: Quat =
   return [value?.[0] ?? fallback[0], value?.[1] ?? fallback[1], value?.[2] ?? fallback[2], value?.[3] ?? fallback[3]];
 }
 
+function normalizeFiniteFallbackQuat(fallback: Quat): Quat {
+  if (!fallback.every(isFiniteNumber)) return cloneQuat(IDENTITY_QUAT);
+  const length = Math.hypot(fallback[0], fallback[1], fallback[2], fallback[3]);
+  if (!Number.isFinite(length) || length <= EPSILON) return cloneQuat(IDENTITY_QUAT);
+  return [fallback[0] / length, fallback[1] / length, fallback[2] / length, fallback[3] / length];
+}
+
 export function normalizeQuat(value: Quat, fallback: Quat = IDENTITY_QUAT): Quat {
+  if (!value.every(isFiniteNumber)) return normalizeFiniteFallbackQuat(fallback);
   const length = Math.hypot(value[0], value[1], value[2], value[3]);
-  if (length <= EPSILON) return cloneQuat(fallback);
+  if (!Number.isFinite(length) || length <= EPSILON) return normalizeFiniteFallbackQuat(fallback);
   return [value[0] / length, value[1] / length, value[2] / length, value[3] / length];
 }
 

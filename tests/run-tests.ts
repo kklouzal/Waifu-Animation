@@ -25,6 +25,8 @@ import {
   inspectAnimationAsset,
   inspectClipAsset,
   localToModelPose,
+  normalizeQuat,
+  normalizeVec3,
   poseRotationMetric,
   rotateVec3ByQuat,
   retargetQuaternionSample,
@@ -59,6 +61,15 @@ const nodClip: AnimationClip = {
 };
 
 assert.equal(clamp01(2), 1);
+assert.deepEqual(normalizeVec3([Number.NaN, 0, 0], [1, 0, 0]), [1, 0, 0]);
+assert.deepEqual(normalizeVec3([Number.NaN, 0, 0], [2, 0, 0]), [1, 0, 0]);
+assert.deepEqual(normalizeVec3([Infinity, 0, 0], [0, 1, 0]), [0, 1, 0]);
+assert.deepEqual(normalizeVec3([0, 0, 0], [Number.NaN, 0, 0]), [0, 0, 1]);
+const finiteQuatFallback = normalizeQuat([Number.NaN, 0, 0, 1], [0, 0, 0.5, 0.5]);
+assert.ok(Math.abs(finiteQuatFallback[2] - Math.SQRT1_2) < 1e-12);
+assert.ok(Math.abs(finiteQuatFallback[3] - Math.SQRT1_2) < 1e-12);
+assert.deepEqual(normalizeQuat([Infinity, 0, 0, 1], [0, 0, 0, 2]), [0, 0, 0, 1]);
+assert.deepEqual(normalizeQuat([0, 0, 0, 0], [Number.NaN, 0, 0, 0]), [0, 0, 0, 1]);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
