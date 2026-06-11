@@ -141,6 +141,51 @@ const weightedBlend = blendPoses(skeleton, [{ pose: weightedPoseA, weight: 2 }, 
 assert.ok(weightedBlend[2]!.rotation[0] > weightedBlend[2]!.rotation[1], "higher layer weights should influence normalized blend more");
 assert.ok(Math.abs(Math.hypot(...weightedBlend[2]!.rotation) - 1) < 1e-5);
 
+const lowerPriorityTranslateClip: AnimationClip = {
+  id: "lower-priority-translate",
+  duration: 1,
+  tracks: [
+    { humanBone: "spine", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([4, 0, 0]) },
+    { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([10, 0, 0]) }
+  ]
+};
+const highPriorityHeadClip: AnimationClip = {
+  id: "high-priority-head",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([20, 0, 0]) }]
+};
+const samePriorityTranslateClip: AnimationClip = {
+  id: "same-priority-translate",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([2, 0, 0]) }]
+};
+const runtimeSamePriority = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+runtimeSamePriority.setLayer("weighted-a", lowerPriorityTranslateClip, { weight: 3, targetWeight: 3, priority: 2 });
+runtimeSamePriority.setLayer("weighted-b", samePriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 2 });
+const samePriorityRuntimePose = runtimeSamePriority.evaluate().localPose;
+const samePriorityExpectedPose = blendPoses(
+  skeleton,
+  [
+    { pose: sampleClipToPose(skeleton, lowerPriorityTranslateClip, 0), weight: 3 },
+    { pose: sampleClipToPose(skeleton, samePriorityTranslateClip, 0), weight: 1 }
+  ],
+  { threshold: 0.01 }
+);
+assert.equal(samePriorityRuntimePose[2]!.translation[0], samePriorityExpectedPose[2]!.translation[0], "same-priority override layers should keep weighted blending");
+
+const runtimeMaskedPriority = new AnimationRuntime(skeleton);
+runtimeMaskedPriority.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0 });
+runtimeMaskedPriority.setLayer("head", highPriorityHeadClip, { weight: 1, targetWeight: 1, priority: 10, mask });
+const maskedPriorityPose = runtimeMaskedPriority.evaluate().localPose;
+assert.ok(Math.abs(maskedPriorityPose[1]!.translation[0] - 4) < 1e-6, "higher-priority masked layers should leave unowned joints on the lower-priority pose");
+assert.ok(Math.abs(maskedPriorityPose[2]!.translation[0] - 20) < 1e-6, "higher-priority masked layers should own masked joints");
+
+const runtimeWeakPriority = new AnimationRuntime(skeleton, { blendThreshold: 0.1 });
+runtimeWeakPriority.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0, mask });
+runtimeWeakPriority.setLayer("weak-head", highPriorityHeadClip, { weight: 0.05, targetWeight: 0.05, priority: 10, mask });
+const weakPriorityPose = runtimeWeakPriority.evaluate().localPose;
+assert.ok(Math.abs(weakPriorityPose[2]!.translation[0] - 15) < 1e-6, "weak higher-priority layers should blend over the lower-priority fallback until threshold is reached");
+
 assert.deepEqual(
   filterTracksByNamePolicy(
     [{ name: "hips.position" }, { name: "head.quaternion" }, { name: "leftThumbProximal.quaternion" }],

@@ -23,6 +23,8 @@ export type BlendPoseOptions = {
    * a joint and matches Ozz's bind-pose fallback semantics.
    */
   threshold?: number;
+  /** Pose used to supply missing per-joint weight below the threshold. */
+  fallbackPose?: readonly Transform[];
 };
 
 export type PoseLayer = { pose: readonly Transform[]; weight: number; mask?: JointMask };
@@ -68,7 +70,7 @@ export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: 
 }
 
 export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: BlendPoseOptions = {}): Pose {
-  const restPose = skeleton.restPose;
+  const fallbackPose = options.fallbackPose ?? skeleton.restPose;
   const jointCount = skeleton.joints.length;
   const output = createRestPose(skeleton);
   const totalWeights = new Float32Array(jointCount);
@@ -98,20 +100,20 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     if (threshold > 0 && (!hasAnyLayer || accumulated < threshold)) {
       const restWeight = !hasAnyLayer ? 1 : threshold - accumulated;
       if (restWeight > 0) {
-        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, restPose[joint]!, restWeight);
+        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, fallbackPose[joint]!, restWeight);
         totalWeights[joint] = (totalWeights[joint] ?? 0) + restWeight;
       }
     }
 
     const total = totalWeights[joint]!;
     if (total <= 0) {
-      output[joint] = cloneTransform(restPose[joint]);
+      output[joint] = cloneTransform(fallbackPose[joint]);
       continue;
     }
     const invTotal = 1 / total;
     output[joint] = normalizeTransform({
       translation: [translationSums[joint]![0] * invTotal, translationSums[joint]![1] * invTotal, translationSums[joint]![2] * invTotal],
-      rotation: normalizeQuat(rotationSums[joint]!, restPose[joint]!.rotation),
+      rotation: normalizeQuat(rotationSums[joint]!, fallbackPose[joint]!.rotation),
       scale: [scaleSums[joint]![0] * invTotal, scaleSums[joint]![1] * invTotal, scaleSums[joint]![2] * invTotal]
     });
   }
@@ -145,4 +147,3 @@ export function applyAdditivePose(base: readonly Transform[], deltaPose: readonl
   const layerWeight = Number.isFinite(weight) ? weight : 0;
   return base.map((transform, index) => applyTransformDelta(transform, deltaPose[index]!, layerWeight * Math.max(0, mask?.[index] ?? 1)));
 }
-

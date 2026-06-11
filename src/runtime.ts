@@ -94,15 +94,25 @@ export class AnimationRuntime {
       .filter((layer) => layer.weight > 0.0001)
       .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
 
-    const overrideLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
+    const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];
     const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
     for (const layer of active) {
       const sampled = sampleClipToPose(this.skeleton, layer.clip, layer.time, { loop: layer.loop, restPose: this.restPose });
       if (layer.blendMode === "additive") additiveLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
-      else overrideLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
+      else overrideLayers.push({ priority: layer.priority, pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
     }
 
-    let localPose = overrideLayers.length > 0 ? blendPoses(this.skeleton, overrideLayers, { threshold: this.blendThreshold }) : clonePose(this.restPose);
+    let localPose = clonePose(this.restPose);
+    for (let index = 0; index < overrideLayers.length; ) {
+      const priority = overrideLayers[index]!.priority;
+      const group: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
+      while (index < overrideLayers.length && overrideLayers[index]!.priority === priority) {
+        const layer = overrideLayers[index]!;
+        group.push({ pose: layer.pose, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
+        index += 1;
+      }
+      localPose = blendPoses(this.skeleton, group, { threshold: this.blendThreshold, fallbackPose: localPose });
+    }
     for (const additive of additiveLayers) {
       const deltaPose = additiveDeltaPose(this.restPose, additive.pose);
       localPose = applyAdditivePose(localPose, deltaPose, additive.weight, additive.mask);
@@ -122,4 +132,3 @@ export class AnimationRuntime {
     };
   }
 }
-

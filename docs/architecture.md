@@ -23,7 +23,7 @@
 ### 2026-06-08 hardening update
 
 - Override blending now exposes an Ozz-style `DEFAULT_BLEND_THRESHOLD` (`0.1`) and `BlendPoseOptions.threshold`.  Per-joint accumulated override weight below the threshold blends back toward the skeleton rest pose, matching Ozz's bind/rest fallback intent and preventing tiny-weight layers from fully owning a joint during fades or partial masks.
-- `AnimationRuntime` accepts `AnimationRuntimeOptions.blendThreshold` and routes all override evaluation through that thresholded blend path before additive layers and local-to-model conversion.
+- `AnimationRuntime` accepts `AnimationRuntimeOptions.blendThreshold` and routes override evaluation through priority groups before additive layers and local-to-model conversion. Layers at the same priority use weighted blending; higher-priority groups blend over lower-priority results only for joints they own by weight and mask.
 - The optional Three adapter now owns `applyThreePresenceTargets`, the reusable bridge that applies package-planned procedural presence bone targets to Three/VRM bones with finite-target checks, clamped influence, damped quaternion slerp, and missing-bone telemetry.  Waifu no longer carries its own procedural bone-target quaternion application helper.
 
 ## Ozz-Inspired Frame Model
