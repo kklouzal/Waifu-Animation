@@ -23,6 +23,17 @@ export type AnimationLayerOptions = Partial<Omit<AnimationLayer, "id" | "clip" |
   time?: number;
 };
 
+export type CrossfadeOptions = AnimationLayerOptions & {
+  /** Reset the target layer's time and current weight before fading in. Defaults to true for new layers and false when replacing the same id. */
+  resetTime?: boolean;
+  /** Optional source override layer ids to fade out. Defaults to all same-priority override layers except the target. */
+  fromIds?: readonly string[];
+  /** Override layer ids to keep active even when they match the crossfade scope. */
+  excludeIds?: readonly string[];
+  /** Disable automatic fade-out of matching source override layers. */
+  fadeOutExisting?: boolean;
+};
+
 export type AnimationRuntimeOptions = {
   /** Ozz-style rest-pose fallback threshold for override blending. */
   blendThreshold?: number;
@@ -61,6 +72,43 @@ export class AnimationRuntime {
       ...(options.mask ? { mask: options.mask } : {})
     };
     this.layers.set(id, layer);
+    return layer;
+  }
+
+  crossfade(id: string, clip: AnimationClip, options: CrossfadeOptions = {}): AnimationLayer {
+    const existing = this.layers.get(id);
+    const resetTime = options.resetTime ?? !existing;
+    const targetWeight = finiteNonNegative(options.targetWeight ?? options.weight ?? 1, 1);
+    const fadeSpeed = finiteNonNegative(options.fadeSpeed, 8);
+    const priority = options.priority ?? existing?.priority ?? 0;
+    const layer: AnimationLayer = {
+      id,
+      clip,
+      time: resetTime ? (options.time ?? 0) : (options.time ?? existing?.time ?? 0),
+      weight: resetTime ? finiteNonNegative(options.weight, 0) : finiteNonNegative(existing?.weight ?? options.weight, 0),
+      targetWeight,
+      fadeSpeed,
+      speed: options.speed ?? existing?.speed ?? 1,
+      priority,
+      loop: options.loop ?? clip.loop ?? existing?.loop ?? false,
+      blendMode: options.blendMode ?? "override",
+      ...(options.mask ? { mask: options.mask } : existing?.mask ? { mask: existing.mask } : {})
+    };
+    this.layers.set(id, layer);
+
+    if (options.fadeOutExisting !== false) {
+      const fromIds = options.fromIds ? new Set(options.fromIds) : undefined;
+      const excludeIds = new Set([id, ...(options.excludeIds ?? [])]);
+      for (const source of this.layers.values()) {
+        if (excludeIds.has(source.id)) continue;
+        if (source.blendMode !== "override") continue;
+        if (source.priority !== priority) continue;
+        if (fromIds && !fromIds.has(source.id)) continue;
+        source.targetWeight = 0;
+        source.fadeSpeed = fadeSpeed;
+      }
+    }
+
     return layer;
   }
 
@@ -131,4 +179,8 @@ export class AnimationRuntime {
       }))
     };
   }
+}
+
+function finiteNonNegative(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }

@@ -218,6 +218,54 @@ runtimeWeakPriority.setLayer("weak-head", highPriorityHeadClip, { weight: 0.05, 
 const weakPriorityPose = runtimeWeakPriority.evaluate().localPose;
 assert.ok(Math.abs(weakPriorityPose[2]!.translation[0] - 15) < 1e-6, "weak higher-priority layers should blend over the lower-priority fallback until threshold is reached");
 
+const crossfadeOldClip: AnimationClip = {
+  id: "crossfade-old",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([2, 0, 0]) }]
+};
+const crossfadeNewClip: AnimationClip = {
+  id: "crossfade-new",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([10, 0, 0]) }]
+};
+const runtimeCrossfade = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+runtimeCrossfade.setLayer("old", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 4 });
+runtimeCrossfade.crossfade("new", crossfadeNewClip, { priority: 4, fadeSpeed: 1 });
+runtimeCrossfade.update(Math.log(2));
+const midCrossfade = runtimeCrossfade.evaluate();
+assert.ok(midCrossfade.activeLayers.some((layer) => layer.id === "old" && Math.abs(layer.weight - 0.5) < 1e-6));
+assert.ok(midCrossfade.activeLayers.some((layer) => layer.id === "new" && Math.abs(layer.weight - 0.5) < 1e-6));
+assert.ok(Math.abs(midCrossfade.localPose[2]!.translation[0] - 6) < 1e-6, "in-progress crossfade should normalize same-priority override weights");
+runtimeCrossfade.update(20);
+const finishedCrossfade = runtimeCrossfade.evaluate();
+assert.equal(finishedCrossfade.activeLayers.some((layer) => layer.id === "old"), false, "crossfade should remove fully faded source layers");
+assert.ok(Math.abs(finishedCrossfade.localPose[2]!.translation[0] - 10) < 1e-4, "crossfade target should dominate after fade completion");
+
+const additiveNudgeClip: AnimationClip = {
+  id: "additive-nudge",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([1, 0, 0]) }]
+};
+const runtimeCrossfadeAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+runtimeCrossfadeAdditive.setLayer("old", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 2 });
+runtimeCrossfadeAdditive.setLayer("additive", additiveNudgeClip, { weight: 1, targetWeight: 1, priority: 2, blendMode: "additive" });
+runtimeCrossfadeAdditive.crossfade("new", crossfadeNewClip, { priority: 2, fadeSpeed: 8 });
+runtimeCrossfadeAdditive.update(20);
+const additiveCrossfadePose = runtimeCrossfadeAdditive.evaluate();
+const additiveLayer = additiveCrossfadePose.activeLayers.find((layer) => layer.id === "additive");
+assert.equal(additiveLayer?.blendMode, "additive", "override crossfade should not fade additive layers implicitly");
+assert.ok(Math.abs(additiveLayer!.targetWeight - 1) < 1e-6);
+assert.ok(Math.abs(additiveCrossfadePose.localPose[2]!.translation[0] - 11) < 1e-4);
+
+const runtimeCrossfadeMasked = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+runtimeCrossfadeMasked.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0 });
+runtimeCrossfadeMasked.setLayer("old", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 5 });
+runtimeCrossfadeMasked.crossfade("head", highPriorityHeadClip, { priority: 5, mask, fadeSpeed: 8 });
+runtimeCrossfadeMasked.update(20);
+const maskedCrossfadePose = runtimeCrossfadeMasked.evaluate().localPose;
+assert.ok(Math.abs(maskedCrossfadePose[1]!.translation[0] - 4) < 1e-6, "masked crossfade should keep unowned joints on lower-priority fallback pose");
+assert.ok(Math.abs(maskedCrossfadePose[2]!.translation[0] - 20) < 1e-4, "masked crossfade target should own masked joints after fade completion");
+
 assert.deepEqual(
   filterTracksByNamePolicy(
     [{ name: "hips.position" }, { name: "head.quaternion" }, { name: "leftThumbProximal.quaternion" }],

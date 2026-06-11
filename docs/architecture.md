@@ -9,7 +9,7 @@
 - `clip`: decoded binary clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
 - `binary`: versioned `.waifuanim.bin` encoding and decoding for animation keyframe payloads.
 - `pose`: pose cloning, normalized blending, additive deltas, joint masks, and pose validation.
-- `runtime`: weighted layer stack, priorities, crossfade weights, additive layers, and final local/model pose evaluation.
+- `runtime`: weighted layer stack, priorities, first-class override crossfade orchestration, additive layers, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
 - `manifest`: manifest include loading, duplicate/id validation, clip asset inspection, usable/rejected manifest helpers.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
@@ -24,6 +24,7 @@
 
 - Override blending now exposes an Ozz-style `DEFAULT_BLEND_THRESHOLD` (`0.1`) and `BlendPoseOptions.threshold`.  Per-joint accumulated override weight below the threshold blends back toward the skeleton rest pose, matching Ozz's bind/rest fallback intent and preventing tiny-weight layers from fully owning a joint during fades or partial masks.
 - `AnimationRuntime` accepts `AnimationRuntimeOptions.blendThreshold` and routes override evaluation through priority groups before additive layers and local-to-model conversion. Layers at the same priority use weighted blending; higher-priority groups blend over lower-priority results only for joints they own by weight and mask.
+- `AnimationRuntime.crossfade` creates or replaces an override target layer, fades matching same-priority override sources toward zero, leaves additive layers active, and relies on the existing priority/mask threshold evaluation for final pose composition.
 - The optional Three adapter now owns `applyThreePresenceTargets`, the reusable bridge that applies package-planned procedural presence bone targets to Three/VRM bones with finite-target checks, clamped influence, damped quaternion slerp, and missing-bone telemetry.  Waifu no longer carries its own procedural bone-target quaternion application helper.
 
 ## Ozz-Inspired Frame Model
