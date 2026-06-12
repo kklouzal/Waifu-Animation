@@ -13,7 +13,7 @@ export function isHumanoidBoneName(value: string): value is HumanoidBoneName {
 }
 
 export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sourceSample: Quat): Quat {
-  return normalizeQuat(multiplyQuat(multiplyQuat(targetRest, invertQuat(sourceRest)), sourceSample));
+  return normalizeQuat(multiplyQuat(multiplyQuat(sourceSample, invertQuat(sourceRest)), targetRest));
 }
 
 export function retargetQuaternionTrackValues(values: readonly number[], sourceRest: ArrayLike<number> | undefined, targetRest: ArrayLike<number>): RetargetedQuaternionTrack {

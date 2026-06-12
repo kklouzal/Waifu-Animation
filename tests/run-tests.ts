@@ -38,7 +38,10 @@ import {
   normalizeTransform,
   normalizeVec3,
   poseRotationMetric,
+  quatFromAxisAngle,
   rotateVec3ByQuat,
+  multiplyQuat,
+  invertQuat,
   retargetQuaternionSample,
   sampleClipToPose,
   sanitizeQuaternionTrackValues,
@@ -400,6 +403,19 @@ assert.equal(
 
 const retargeted = retargetQuaternionSample([0, 0, 0, 1], [0, 0, 0, 1], [0, 0.2, 0, 0.98]);
 assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
+
+const sourceRestX = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+const localSourceDeltaY = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
+const sourceSampleWithLocalDelta = multiplyQuat(sourceRestX, localSourceDeltaY);
+const expectedNormalizedDelta = multiplyQuat(sourceSampleWithLocalDelta, invertQuat(sourceRestX));
+const retargetedToNormalizedRest = retargetQuaternionSample(sourceRestX, [0, 0, 0, 1], sourceSampleWithLocalDelta);
+assert.ok(
+  Math.abs(retargetedToNormalizedRest[0] - expectedNormalizedDelta[0]) < 1e-5 &&
+    Math.abs(retargetedToNormalizedRest[1] - expectedNormalizedDelta[1]) < 1e-5 &&
+    Math.abs(retargetedToNormalizedRest[2] - expectedNormalizedDelta[2]) < 1e-5 &&
+    Math.abs(retargetedToNormalizedRest[3] - expectedNormalizedDelta[3]) < 1e-5,
+  "retargeting should apply source rest correction before target rest so non-commuting local deltas keep their parent-space direction"
+);
 
 const authoredRotationBone = new Object3D();
 authoredRotationBone.name = "head";
