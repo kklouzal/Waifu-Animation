@@ -167,6 +167,46 @@ assert.equal(
   "declared channels with distinct normalized properties should remain valid"
 );
 
+const duplicateTrackTimeClip: AnimationClip = {
+  id: "duplicate-track-time",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 0]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+};
+assert.equal(validateAnimationInputs(skeleton, duplicateTrackTimeClip).accepted, false);
+assert.ok(
+  validateAnimationInputs(skeleton, duplicateTrackTimeClip).clipIssues.some((issue) => issue.message === "track times must be sorted"),
+  "equal track times should be rejected"
+);
+
+const negativeTrackTimeClip: AnimationClip = {
+  id: "negative-track-time",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([-0.1, 0.5]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+};
+assert.equal(validateAnimationInputs(skeleton, negativeTrackTimeClip).accepted, false);
+assert.ok(
+  validateAnimationInputs(skeleton, negativeTrackTimeClip).clipIssues.some((issue) => issue.message === "track time must be within clip duration"),
+  "negative track times should be rejected"
+);
+
+const overDurationTrackTimeClip: AnimationClip = {
+  id: "over-duration-track-time",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1.1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+};
+assert.equal(validateAnimationInputs(skeleton, overDurationTrackTimeClip).accepted, false);
+assert.ok(
+  validateAnimationInputs(skeleton, overDurationTrackTimeClip).clipIssues.some((issue) => issue.message === "track time must be within clip duration"),
+  "track times beyond clip duration should be rejected"
+);
+
+const endpointTrackTimeClip: AnimationClip = {
+  id: "endpoint-track-time",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+};
+assert.equal(validateAnimationInputs(skeleton, endpointTrackTimeClip).accepted, true, "endpoint track times should remain accepted");
+
 const decodedNodClip = decodeAnimationBinary(encodeAnimationBinary(nodClip), "nod");
 assert.equal(decodedNodClip.id, "nod");
 assert.equal(decodedNodClip.tracks.length, 1);

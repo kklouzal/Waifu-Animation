@@ -69,8 +69,12 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     }
     for (let i = 0; i < track.times.length; i += 1) {
       const time = track.times[i]!;
-      if (!Number.isFinite(time)) issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track time is not finite" });
-      if (i > 0 && time < track.times[i - 1]!) {
+      if (!Number.isFinite(time)) {
+        issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track time is not finite" });
+      } else if (time < 0 || time > clip.duration) {
+        issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track time must be within clip duration" });
+      }
+      if (i > 0 && time <= track.times[i - 1]!) {
         issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track times must be sorted" });
       }
     }
