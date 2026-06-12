@@ -142,6 +142,58 @@ assert.equal(
   "accepted"
 );
 
+const loopEndpointWarning = "loop endpoints differ; crossfade or seam blending is required";
+const oppositeQuaternionEndpointClip: AnimationClip = {
+  id: "opposite-quaternion-endpoints",
+  duration: 1,
+  loop: true,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      times: toFloat32Array([0, 1]),
+      values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, -1])
+    }
+  ]
+};
+assert.equal(
+  inspectAnimationAsset(
+    {
+      id: "opposite-quaternion-endpoints",
+      label: "Opposite Quaternion Endpoints",
+      url: "/opposite-quaternion-endpoints.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      loop: true
+    },
+    oppositeQuaternionEndpointClip,
+    skeleton
+  ).issues.some((issue) => issue.message === loopEndpointWarning),
+  false,
+  "looping rotation endpoints should compare quaternion-equivalent signs"
+);
+
+const mismatchedTranslationEndpointClip: AnimationClip = {
+  id: "mismatched-translation-endpoints",
+  duration: 1,
+  loop: true,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0.25, 0, 0]) }]
+};
+assert.equal(
+  inspectAnimationAsset(
+    {
+      id: "mismatched-translation-endpoints",
+      label: "Mismatched Translation Endpoints",
+      url: "/mismatched-translation-endpoints.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      loop: true
+    },
+    mismatchedTranslationEndpointClip,
+    skeleton
+  ).issues.some((issue) => issue.message === loopEndpointWarning),
+  true,
+  "translation loop endpoint validation should keep raw component behavior"
+);
+
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
 assert.ok(sampled[2]!.rotation[0] > 0.1);
 
@@ -481,6 +533,15 @@ const correctedUpper = rotateVec3ByQuat(ikCorrections.rootCorrection, [0, -1, 0]
 assert.ok(Math.hypot(correctedUpper[0] - ikCorrections.correctedUpperDirection[0], correctedUpper[1] - ikCorrections.correctedUpperDirection[1], correctedUpper[2] - ikCorrections.correctedUpperDirection[2]) < 1e-5);
 assert.ok(Math.abs(Math.hypot(...ikCorrections.rootCorrection) - 1) < 1e-5);
 assert.ok(Math.abs(Math.hypot(...ikCorrections.jointCorrection) - 1) < 1e-5);
+
+const nonOrthogonalPoleIk = solveTwoBoneIk({
+  root: [0, 0, 0],
+  joint: [0, -1, 0],
+  end: [0, -2, 0],
+  target: [0, -1.5, 0],
+  pole: [0, -1, 1]
+});
+assert.ok(Math.abs(Math.hypot(...nonOrthogonalPoleIk.joint) - 1) < 1e-5, "IK bend pole must not change the upper bone length");
 
 const footPlant = solveFootPlant(
   [

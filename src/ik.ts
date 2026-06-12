@@ -46,7 +46,7 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const targetDistance = lengthVec3(rootToTarget);
   const clampedDistance = clamp(targetDistance, Math.abs(upperLength - lowerLength) + 1e-5, maxReach);
   const direction = normalizeVec3(rootToTarget, normalizeVec3(subVec3(input.end, input.root), [0, -1, 0]));
-  const pole = normalizeVec3(input.pole ?? subVec3(input.joint, input.root), [0, 0, 1]);
+  const pole = bendPlanePole(input.pole ?? subVec3(input.joint, input.root), direction);
   const cosAngle = clamp((upperLength * upperLength + clampedDistance * clampedDistance - lowerLength * lowerLength) / (2 * upperLength * clampedDistance), -1, 1);
   const along = Math.cos(Math.acos(cosAngle)) * upperLength;
   const height = Math.sqrt(Math.max(0, upperLength * upperLength - along * along));
@@ -59,6 +59,19 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
     targetReach: targetDistance <= 1e-5 ? 0 : clampedDistance / targetDistance,
     clamped: Math.abs(clampedDistance - targetDistance) > 1e-4
   };
+}
+
+function bendPlanePole(pole: Vec3, direction: Vec3): Vec3 {
+  const normalizedDirection = normalizeVec3(direction, [0, -1, 0]);
+  const normalizedPole = normalizeVec3(pole, [0, 0, 1]);
+  const projected = subVec3(normalizedPole, scaleVec3(normalizedDirection, dotVec3(normalizedPole, normalizedDirection)));
+  return normalizeVec3(projected, fallbackPerpendicular(normalizedDirection));
+}
+
+function fallbackPerpendicular(direction: Vec3): Vec3 {
+  const axis: Vec3 = Math.abs(direction[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const projected = subVec3(axis, scaleVec3(direction, dotVec3(axis, direction)));
+  return normalizeVec3(projected, [0, 0, 1]);
 }
 
 export function solveTwoBoneIkCorrections(input: TwoBoneIkInput): TwoBoneIkCorrectionResult {

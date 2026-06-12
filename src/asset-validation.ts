@@ -1,6 +1,7 @@
 import { decodeAnimationBinary } from "./binary.js";
 import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
 import { type AnimationManifest, type AnimationManifestEntry, inspectClipAsset } from "./manifest.js";
+import { type Quat, dotQuat, normalizeQuat } from "./math.js";
 import { type HumanoidBoneName, type Skeleton, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
 export type AnimationAssetValidationIssue = {
@@ -132,12 +133,28 @@ function hasLoopCompatibleEndpoints(clip: AnimationClip): boolean {
     const stride = property === "rotation" ? 4 : 3;
     const first = 0;
     const last = (track.times.length - 1) * stride;
-    let delta = 0;
-    for (let i = 0; i < stride; i += 1) delta += Math.abs((track.values[first + i] ?? 0) - (track.values[last + i] ?? 0));
     const tolerance = property === "rotation" ? 0.24 : 0.18;
+    const delta = property === "rotation" ? rotationEndpointDelta(track.values, first, last) : vectorEndpointDelta(track.values, first, last, stride);
     if (delta > tolerance) return false;
   }
   return true;
+}
+
+function vectorEndpointDelta(values: ArrayLike<number>, first: number, last: number, stride: number): number {
+  let delta = 0;
+  for (let i = 0; i < stride; i += 1) delta += Math.abs((values[first + i] ?? 0) - (values[last + i] ?? 0));
+  return delta;
+}
+
+function rotationEndpointDelta(values: ArrayLike<number>, first: number, last: number): number {
+  const firstQuat = normalizeQuat(readQuat(values, first));
+  const lastQuat = normalizeQuat(readQuat(values, last));
+  const sameHemisphereDot = Math.abs(dotQuat(firstQuat, lastQuat));
+  return Math.sqrt(Math.max(0, 2 - 2 * Math.min(1, sameHemisphereDot)));
+}
+
+function readQuat(values: ArrayLike<number>, offset: number): Quat {
+  return [values[offset] ?? 0, values[offset + 1] ?? 0, values[offset + 2] ?? 0, values[offset + 3] ?? 1];
 }
 
 function jointCoverage(clip: AnimationClip, skeleton?: Skeleton): string[] {
