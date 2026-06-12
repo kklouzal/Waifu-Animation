@@ -49,6 +49,7 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     if (skeleton && jointName && jointIndex < 0) {
       issues.push({ track: index, joint: String(jointName), property: track.property, message: "track does not map to skeleton" });
     }
+    validateSourceRestQuaternion(issues, track, index, String(jointName ?? ""), property);
     const channel = resolvedTrackChannel(skeleton, track, jointIndex, property);
     if (channel) {
       const existing = resolvedChannels.get(channel.key);
@@ -83,6 +84,30 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     }
   }
   return issues;
+}
+
+function validateSourceRestQuaternion(
+  issues: ClipValidationIssue[],
+  track: AnimationTrack,
+  index: number,
+  joint: string,
+  property: ReturnType<typeof normalizedTrackProperty>
+): void {
+  const sourceRest = track.sourceRestQuaternion;
+  if (!sourceRest) return;
+  if (property !== "rotation") {
+    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion is only valid on rotation tracks" });
+  }
+  if (sourceRest.length !== 4) {
+    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion must contain exactly 4 values" });
+    return;
+  }
+  for (let component = 0; component < sourceRest.length; component += 1) {
+    if (!Number.isFinite(sourceRest[component])) {
+      issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion values must be finite" });
+      return;
+    }
+  }
 }
 
 function resolvedTrackChannel(

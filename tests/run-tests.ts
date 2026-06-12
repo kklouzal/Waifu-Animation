@@ -167,6 +167,98 @@ assert.equal(
   "declared channels with distinct normalized properties should remain valid"
 );
 
+const validSourceRestQuaternionClip: AnimationClip = {
+  id: "valid-source-rest-quaternion",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1])
+    }
+  ]
+};
+assert.equal(validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted, true, "valid source rest metadata on quaternion tracks should remain accepted");
+
+const invalidSourceRestQuaternionShapeClip: AnimationClip = {
+  id: "invalid-source-rest-quaternion-shape",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 1]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1])
+    },
+    {
+      humanBone: "spine",
+      property: "rotation",
+      sourceRestQuaternion: toFloat32Array([0, Number.NaN, 0, 1]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1])
+    }
+  ]
+};
+const invalidSourceRestQuaternionShapeReport = validateAnimationInputs(skeleton, invalidSourceRestQuaternionShapeClip);
+assert.equal(invalidSourceRestQuaternionShapeReport.accepted, false);
+assert.ok(
+  invalidSourceRestQuaternionShapeReport.clipIssues.some(
+    (issue) =>
+      issue.track === 0 &&
+      issue.joint === "head" &&
+      issue.property === "quaternion" &&
+      issue.message === "sourceRestQuaternion must contain exactly 4 values"
+  ),
+  "validateAnimationInputs should reject source rest quaternions with the wrong component count"
+);
+assert.ok(
+  invalidSourceRestQuaternionShapeReport.clipIssues.some(
+    (issue) =>
+      issue.track === 1 &&
+      issue.joint === "spine" &&
+      issue.property === "rotation" &&
+      issue.message === "sourceRestQuaternion values must be finite"
+  ),
+  "validateAnimationInputs should reject non-finite source rest quaternion components"
+);
+
+const invalidSourceRestQuaternionPropertyClip: AnimationClip = {
+  id: "invalid-source-rest-quaternion-property",
+  duration: 1,
+  tracks: [
+    {
+      joint: "head",
+      property: "translation",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0])
+    }
+  ]
+};
+const invalidSourceRestQuaternionPropertyInspection = inspectClipAsset(
+  {
+    id: "invalid-source-rest-quaternion-property",
+    label: "Invalid Source Rest Quaternion Property",
+    url: "/invalid-source-rest-quaternion-property.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  },
+  invalidSourceRestQuaternionPropertyClip
+);
+assert.equal(invalidSourceRestQuaternionPropertyInspection.accepted, false);
+assert.ok(
+  invalidSourceRestQuaternionPropertyInspection.issues.some(
+    (issue) =>
+      issue.track === 0 &&
+      issue.joint === "head" &&
+      issue.property === "translation" &&
+      issue.message === "sourceRestQuaternion is only valid on rotation tracks"
+  ),
+  "inspectClipAsset should reject source rest quaternion metadata on non-rotation tracks"
+);
+
 const duplicateTrackTimeClip: AnimationClip = {
   id: "duplicate-track-time",
   duration: 1,
