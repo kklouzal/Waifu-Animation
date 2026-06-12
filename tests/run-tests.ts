@@ -719,7 +719,25 @@ const threeClip = createThreeAnimationClip(nodClip, {
 });
 assert.equal(threeClip.name, "nod");
 assert.equal(threeClip.tracks.length, 1);
-assert.equal(threeClip.tracks[0]!.name, "normalizedHead.quaternion");
+assert.equal(threeClip.tracks[0]!.name, `${headBone.uuid}.quaternion`);
+
+const duplicateRoot = new Object3D();
+const duplicateWrongBone = new Object3D();
+duplicateWrongBone.name = "duplicateHead";
+const duplicateTargetBone = new Object3D();
+duplicateTargetBone.name = "duplicateHead";
+duplicateRoot.add(duplicateWrongBone);
+duplicateRoot.add(duplicateTargetBone);
+const duplicateBoundClip = createThreeAnimationClip(nodClip, {
+  resolveBone: (humanBone) => (humanBone === "head" ? duplicateTargetBone : null)
+});
+const duplicateMixer = new AnimationMixer(duplicateRoot);
+const duplicateAction = duplicateMixer.clipAction(duplicateBoundClip);
+duplicateAction.setLoop(LoopOnce, 1);
+duplicateAction.play();
+duplicateMixer.setTime(0.5);
+assert.ok(Math.abs(duplicateWrongBone.quaternion.x) < 1e-6, "uuid binding should not animate the first same-named node");
+assert.ok(Math.abs(duplicateTargetBone.quaternion.x) > 0.1, "uuid binding should animate the resolved target bone");
 
 const root = new Object3D();
 const mixer = new AnimationMixer(root);

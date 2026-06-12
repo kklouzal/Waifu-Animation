@@ -266,11 +266,11 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
       if (invalidSamples > 0) {
         options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, invalidSamples);
       }
-      return [new QuaternionKeyframeTrack(`${bone.name}.quaternion`, Float32Array.from(sampleWindow.times), Float32Array.from(values))];
+      return [new QuaternionKeyframeTrack(`${bone.uuid}.quaternion`, Float32Array.from(sampleWindow.times), Float32Array.from(values))];
     }
 
     const targetProperty = property === "translation" ? "position" : "scale";
-    return [new VectorKeyframeTrack(`${bone.name}.${targetProperty}`, Float32Array.from(sampleWindow.times), Float32Array.from(sampleWindow.values))];
+    return [new VectorKeyframeTrack(`${bone.uuid}.${targetProperty}`, Float32Array.from(sampleWindow.times), Float32Array.from(sampleWindow.values))];
   });
 
   if (tracks.length === 0) {
