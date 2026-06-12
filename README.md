@@ -46,7 +46,7 @@ npm test
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
 - `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
-- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded animation clips, track policies, and runtime clip lanes.
+- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded animation clips, track policies, runtime clip lanes, sanitized clip snapshots, and base/overlay/debug influence diagnostics.
 - `debug`: pose metrics, invalid transform diagnostics, runtime snapshots.
 
 ## Pipeline

@@ -17,8 +17,11 @@ import {
   DEFAULT_BLEND_THRESHOLD,
   createThreeAnimationClip,
   createThreeRuntimeClipsForEntry,
+  calculateThreeRuntimeInfluence,
   decodeAnimationBinary,
   encodeAnimationBinary,
+  readActiveThreeRuntimeClipSnapshots,
+  readThreeRuntimeClipSnapshot,
   createSkeleton,
   cloneTransform,
   distributeLookAt,
@@ -594,6 +597,67 @@ assert.equal(runtimeClips.length, 2);
 assert.equal(runtimeClips[0]!.lane, "base");
 assert.equal(runtimeClips[1]!.instance, 1);
 
+const diagnosticBase = makeRuntimeClipDiagnosticStub({
+  id: "bad-base",
+  label: "Bad Base",
+  lane: "base",
+  weight: Number.POSITIVE_INFINITY,
+  targetWeight: Number.NaN,
+  time: Number.NaN,
+  duration: Number.NEGATIVE_INFINITY,
+  scheduled: true,
+  running: true,
+  instance: Number.NaN,
+  states: ["idle"]
+});
+const diagnosticOverlay = makeRuntimeClipDiagnosticStub({
+  id: "overlay",
+  label: "Overlay",
+  lane: "overlay",
+  weight: 0.4,
+  targetWeight: 2,
+  time: 0.25,
+  duration: 1.2,
+  scheduled: false,
+  running: false,
+  gestures: ["wave"],
+  source: { library: "test" }
+});
+const diagnosticDebug = makeRuntimeClipDiagnosticStub({
+  id: "debug",
+  label: "Debug",
+  lane: "debug",
+  weight: 0.65,
+  targetWeight: 1,
+  time: Number.POSITIVE_INFINITY,
+  duration: 2,
+  scheduled: false,
+  running: true
+});
+const diagnosticSnapshot = readThreeRuntimeClipSnapshot(diagnosticBase, { loop: "seamed-once" });
+assert.equal(diagnosticSnapshot.weight, 0);
+assert.equal(diagnosticSnapshot.targetWeight, 0);
+assert.equal(diagnosticSnapshot.time, 0);
+assert.equal(diagnosticSnapshot.duration, 0);
+assert.equal(diagnosticSnapshot.instance, 0);
+assert.equal(diagnosticSnapshot.loop, "seamed-once");
+assert.deepEqual(diagnosticSnapshot.states, ["idle"]);
+diagnosticSnapshot.states.push("mutated");
+assert.deepEqual(diagnosticBase.states, ["idle"], "snapshot metadata arrays should be detached from manifest metadata");
+
+const activeSnapshots = readActiveThreeRuntimeClipSnapshots([diagnosticBase, diagnosticOverlay, diagnosticDebug], { debugLoop: "loop" });
+assert.deepEqual(activeSnapshots.map((clip) => [clip.sourceId, clip.lane, clip.loop]), [
+  ["bad-base", "base", "seamed-once"],
+  ["overlay", "overlay", "once"],
+  ["debug", "debug", "loop"]
+]);
+assert.equal(activeSnapshots[1]!.targetWeight, 1);
+assert.equal(activeSnapshots[1]!.source?.library, "test");
+assert.equal(activeSnapshots[2]!.time, 0);
+
+assert.deepEqual(calculateThreeRuntimeInfluence([diagnosticBase, diagnosticOverlay], { debugWeight: 0.8 }), { base: 0, overlay: 0.8, debug: 0.8 });
+assert.deepEqual(calculateThreeRuntimeInfluence([diagnosticOverlay, diagnosticDebug], { includeDebugAsOverlay: false }), { base: 0, overlay: 0.4, debug: 0.65 });
+
 console.log("waifu-animation tests passed");
 
 function assertFiniteEvaluation(evaluation: ReturnType<AnimationRuntime["evaluate"]>): void {
@@ -605,4 +669,44 @@ function assertFiniteEvaluation(evaluation: ReturnType<AnimationRuntime["evaluat
   for (const matrix of evaluation.modelPose) {
     assert.ok(Array.from(matrix).every(Number.isFinite));
   }
+}
+
+function makeRuntimeClipDiagnosticStub(options: {
+  id: string;
+  label: string;
+  lane: "base" | "overlay" | "debug";
+  weight: number;
+  targetWeight: number;
+  time: number;
+  duration: number;
+  scheduled: boolean;
+  running: boolean;
+  instance?: number;
+  states?: string[];
+  emotions?: string[];
+  gestures?: string[];
+  source?: Record<string, unknown>;
+}) {
+  return {
+    id: options.id,
+    label: options.label,
+    url: `/${options.id}.waifuanim.bin`,
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    sourceId: options.id,
+    instance: options.instance ?? 0,
+    action: {
+      time: options.time,
+      getEffectiveWeight: () => options.weight,
+      isRunning: () => options.running,
+      isScheduled: () => options.scheduled
+    },
+    duration: options.duration,
+    targetWeight: options.targetWeight,
+    lastTriggeredAt: 0,
+    lane: options.lane,
+    ...(options.states ? { states: options.states } : {}),
+    ...(options.emotions ? { emotions: options.emotions } : {}),
+    ...(options.gestures ? { gestures: options.gestures } : {}),
+    ...(options.source ? { source: options.source } : {})
+  } as const;
 }

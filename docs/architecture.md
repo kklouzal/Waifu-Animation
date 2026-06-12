@@ -17,7 +17,7 @@
 - `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: pose metrics, invalid pose reports, and deterministic input checks.
-- `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, and base/overlay/debug runtime clip construction for Three `AnimationMixer`.
+- `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, base/overlay/debug runtime clip construction for Three `AnimationMixer`, and sanitized app-facing runtime clip snapshots/influence diagnostics.
 
 
 ### 2026-06-08 hardening update
@@ -60,6 +60,7 @@ Waifu consumes this package for reusable concerns:
 - decoding `.waifuanim.bin` payloads and converting decoded clips to Three tracks;
 - retargeting quaternion tracks from source rest pose to active VRM rest pose;
 - constructing base, overlay, and debug runtime clip lanes for Three `AnimationMixer`;
+- reading sanitized Three runtime clip snapshots and base/overlay/debug influence diagnostics for app debug panels and procedural inputs;
 - zeroing and limiting viseme stacks;
 - smoothing mouth/viseme targets and composing blink, speech, mood, emotion, and thinking expression weights through `FacialExpressionMixer`;
 - deterministic presence scheduling, gaze target planning, and bounded procedural bone targets through `PresencePlanner`;

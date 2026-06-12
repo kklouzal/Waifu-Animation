@@ -52,6 +52,45 @@ export type ThreeRuntimeClip<TEntry extends AnimationManifestEntry = AnimationMa
   lane: ThreeRuntimeLane;
 };
 
+export type ThreeRuntimeClipSnapshot<TEntry extends AnimationManifestEntry = AnimationManifestEntry> = {
+  id: TEntry["id"];
+  sourceId: string;
+  instance: number;
+  lane: ThreeRuntimeLane;
+  states: string[];
+  emotions: string[];
+  gestures: string[];
+  weight: number;
+  targetWeight: number;
+  time: number;
+  duration: number;
+  running: boolean;
+  scheduled: boolean;
+  loop?: string;
+  source?: TEntry["source"];
+};
+
+export type ThreeRuntimeClipSnapshotOptions = {
+  loop?: string;
+};
+
+export type ActiveThreeRuntimeClipSnapshotOptions<TEntry extends AnimationManifestEntry = AnimationManifestEntry> = {
+  minimumWeight?: number;
+  debugLoop?: string;
+  loopForClip?: (clip: ThreeRuntimeClip<TEntry>) => string | undefined;
+};
+
+export type ThreeRuntimeInfluence = {
+  base: number;
+  overlay: number;
+  debug: number;
+};
+
+export type ThreeRuntimeInfluenceOptions = {
+  debugWeight?: number;
+  includeDebugAsOverlay?: boolean;
+};
+
 export type ThreePresenceBoneTarget = {
   bone: string;
   rotation: Vec3;
@@ -253,6 +292,74 @@ export function configureThreeRuntimeAction(action: AnimationAction): AnimationA
   action.setEffectiveTimeScale(1);
   action.setEffectiveWeight(0);
   return action;
+}
+
+export function readThreeRuntimeClipSnapshot<TEntry extends AnimationManifestEntry>(
+  clip: ThreeRuntimeClip<TEntry>,
+  options: ThreeRuntimeClipSnapshotOptions = {}
+): ThreeRuntimeClipSnapshot<TEntry> {
+  const snapshot: ThreeRuntimeClipSnapshot<TEntry> = {
+    id: clip.id,
+    sourceId: clip.sourceId,
+    instance: sanitizeThreeRuntimeCount(clip.instance),
+    lane: clip.lane,
+    states: [...(clip.states ?? [])],
+    emotions: [...(clip.emotions ?? [])],
+    gestures: [...(clip.gestures ?? [])],
+    weight: sanitizeThreeRuntimeWeight(readThreeActionWeight(clip.action)),
+    targetWeight: sanitizeThreeRuntimeWeight(clip.targetWeight),
+    time: sanitizeThreeRuntimeTime(clip.action.time),
+    duration: sanitizeThreeRuntimeTime(clip.duration),
+    running: clip.action.isRunning(),
+    scheduled: clip.action.isScheduled()
+  };
+  if (options.loop !== undefined) snapshot.loop = options.loop;
+  if (clip.source !== undefined) snapshot.source = clip.source;
+  return snapshot;
+}
+
+export function readActiveThreeRuntimeClipSnapshots<TEntry extends AnimationManifestEntry>(
+  clips: readonly ThreeRuntimeClip<TEntry>[],
+  options: ActiveThreeRuntimeClipSnapshotOptions<TEntry> = {}
+): ThreeRuntimeClipSnapshot<TEntry>[] {
+  const minimumWeight = sanitizeThreeRuntimeWeight(options.minimumWeight ?? 0.001);
+  return clips.flatMap((clip) => {
+    const loop = options.loopForClip?.(clip) ?? (clip.lane === "base" ? "seamed-once" : clip.lane === "debug" ? options.debugLoop : "once");
+    const snapshot = readThreeRuntimeClipSnapshot(clip, loop === undefined ? {} : { loop });
+    return snapshot.scheduled || snapshot.weight > minimumWeight ? [snapshot] : [];
+  });
+}
+
+export function calculateThreeRuntimeInfluence(
+  clips: readonly ThreeRuntimeClip[],
+  options: ThreeRuntimeInfluenceOptions = {}
+): ThreeRuntimeInfluence {
+  const influence: ThreeRuntimeInfluence = { base: 0, overlay: 0, debug: 0 };
+  for (const clip of clips) {
+    const weight = sanitizeThreeRuntimeWeight(readThreeActionWeight(clip.action));
+    if (clip.lane === "base") influence.base = Math.max(influence.base, weight);
+    else if (clip.lane === "overlay") influence.overlay = Math.max(influence.overlay, weight);
+    else if (clip.lane === "debug") influence.debug = Math.max(influence.debug, weight);
+  }
+  influence.debug = Math.max(influence.debug, sanitizeThreeRuntimeWeight(options.debugWeight ?? 0));
+  if (options.includeDebugAsOverlay !== false) influence.overlay = Math.max(influence.overlay, influence.debug);
+  return influence;
+}
+
+function readThreeActionWeight(action: AnimationAction): number {
+  return action.getEffectiveWeight();
+}
+
+function sanitizeThreeRuntimeTime(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function sanitizeThreeRuntimeWeight(value: number): number {
+  return clamp01(Number.isFinite(value) ? value : 0);
+}
+
+function sanitizeThreeRuntimeCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
 export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): ThreePresenceApplyResult {
