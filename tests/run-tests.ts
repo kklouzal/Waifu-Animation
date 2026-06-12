@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AnimationMixer, Object3D } from "three";
+import { AnimationMixer, LoopOnce, Object3D, Vector3 } from "three";
 import {
   AnimationRuntime,
   type AnimationClip,
@@ -459,15 +459,68 @@ assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
 const sourceRestX = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const localSourceDeltaY = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
 const sourceSampleWithLocalDelta = multiplyQuat(sourceRestX, localSourceDeltaY);
-const expectedNormalizedDelta = multiplyQuat(sourceSampleWithLocalDelta, invertQuat(sourceRestX));
+const expectedNormalizedDelta = multiplyQuat(invertQuat(sourceRestX), sourceSampleWithLocalDelta);
 const retargetedToNormalizedRest = retargetQuaternionSample(sourceRestX, [0, 0, 0, 1], sourceSampleWithLocalDelta);
 assert.ok(
   Math.abs(retargetedToNormalizedRest[0] - expectedNormalizedDelta[0]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[1] - expectedNormalizedDelta[1]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[2] - expectedNormalizedDelta[2]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[3] - expectedNormalizedDelta[3]) < 1e-5,
-  "retargeting should apply source rest correction before target rest so non-commuting local deltas keep their parent-space direction"
+  "retargeting should extract source-local deltas before applying target rest so non-commuting limb rotations keep their local axis"
 );
+
+const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+const mirroredLimbSourceRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
+const mirroredLimbTargetRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+const mirroredLimbTargetRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
+const mirroredLimbDelta = quatFromAxisAngle([0, 0, 1], Math.PI / 3);
+const mirroredLimbBones = createMirroredLimbBones();
+const mirroredLimbClip = createThreeAnimationClip(
+  {
+    id: "mirrored-limb-local-axis",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "leftUpperArm",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(mirroredLimbSourceRestLeft),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestLeft, ...multiplyQuat(mirroredLimbSourceRestLeft, mirroredLimbDelta)])
+      },
+      {
+        humanBone: "rightUpperArm",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(mirroredLimbSourceRestRight),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestRight, ...multiplyQuat(mirroredLimbSourceRestRight, mirroredLimbDelta)])
+      }
+    ]
+  },
+  {
+    resolveBone: (bone) => {
+      if (bone === "leftUpperArm") return mirroredLimbBones.leftUpperArm;
+      if (bone === "rightUpperArm") return mirroredLimbBones.rightUpperArm;
+      return null;
+    }
+  }
+);
+const mirroredLimbMixer = new AnimationMixer(mirroredLimbBones.root);
+const mirroredLimbAction = mirroredLimbMixer.clipAction(mirroredLimbClip);
+mirroredLimbAction.setLoop(LoopOnce, 1);
+mirroredLimbAction.clampWhenFinished = true;
+mirroredLimbAction.play();
+mirroredLimbMixer.setTime(1);
+mirroredLimbBones.root.updateMatrixWorld(true);
+const mirroredLimbActual = {
+  left: readChildDirection(mirroredLimbBones.leftUpperArm, mirroredLimbBones.leftLowerArm),
+  right: readChildDirection(mirroredLimbBones.rightUpperArm, mirroredLimbBones.rightLowerArm)
+};
+const mirroredLimbExpected = {
+  left: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestLeft, mirroredLimbDelta), [0, 1, 0]),
+  right: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestRight, mirroredLimbDelta), [0, 1, 0])
+};
+assert.ok(vectorNearlyEqual(mirroredLimbActual.left, mirroredLimbExpected.left, 1e-5), "left limb rendered direction should preserve target-local rotation axis");
+assert.ok(vectorNearlyEqual(mirroredLimbActual.right, mirroredLimbExpected.right, 1e-5), "right limb rendered direction should preserve target-local rotation axis");
 
 const authoredRotationBone = new Object3D();
 authoredRotationBone.name = "head";
@@ -937,4 +990,49 @@ function makeRuntimeActionStub(initialWeight: number) {
       return false;
     }
   };
+}
+
+function createMirroredLimbBones() {
+  const root = new Object3D();
+  root.name = "mirroredLimbRoot";
+
+  const leftUpperArm = new Object3D();
+  leftUpperArm.name = "leftUpperArm";
+  leftUpperArm.quaternion.fromArray(mirroredLimbTargetRestLeft);
+  root.add(leftUpperArm);
+
+  const leftLowerArm = new Object3D();
+  leftLowerArm.name = "leftLowerArm";
+  leftLowerArm.position.set(0, 1, 0);
+  leftUpperArm.add(leftLowerArm);
+
+  const rightUpperArm = new Object3D();
+  rightUpperArm.name = "rightUpperArm";
+  rightUpperArm.quaternion.fromArray(mirroredLimbTargetRestRight);
+  root.add(rightUpperArm);
+
+  const rightLowerArm = new Object3D();
+  rightLowerArm.name = "rightLowerArm";
+  rightLowerArm.position.set(0, 1, 0);
+  rightUpperArm.add(rightLowerArm);
+
+  root.updateMatrixWorld(true);
+  return { root, leftUpperArm, leftLowerArm, rightUpperArm, rightLowerArm };
+}
+
+function readChildDirection(parent: Object3D, child: Object3D): [number, number, number] {
+  const parentWorld = new Vector3();
+  const childWorld = new Vector3();
+  parent.getWorldPosition(parentWorld);
+  child.getWorldPosition(childWorld);
+  childWorld.sub(parentWorld).normalize();
+  return [childWorld.x, childWorld.y, childWorld.z];
+}
+
+function vectorNearlyEqual(actual: readonly number[], expected: readonly number[], tolerance: number): boolean {
+  return (
+    Math.abs(actual[0]! - expected[0]!) <= tolerance &&
+    Math.abs(actual[1]! - expected[1]!) <= tolerance &&
+    Math.abs(actual[2]! - expected[2]!) <= tolerance
+  );
 }
