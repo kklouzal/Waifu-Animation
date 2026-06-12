@@ -1,4 +1,4 @@
-import { type Quat, type Transform, cloneTransform, clamp, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Quat, type Transform, EPSILON, cloneTransform, clamp, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, clonePose } from "./pose.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
@@ -33,6 +33,8 @@ export type SampleOptions = {
   loop?: boolean;
   restPose?: readonly Transform[];
 };
+
+const SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
 
 export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipValidationIssue[] {
   const issues: ClipValidationIssue[] = [];
@@ -107,6 +109,15 @@ function validateSourceRestQuaternion(
       issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion values must be finite" });
       return;
     }
+  }
+  const length = Math.hypot(sourceRest[0]!, sourceRest[1]!, sourceRest[2]!, sourceRest[3]!);
+  if (length <= EPSILON) {
+    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion must be normalizable" });
+    return;
+  }
+  const lengthSquared = length * length;
+  if (Math.abs(lengthSquared - 1) > SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE) {
+    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion must be normalized" });
   }
 }
 

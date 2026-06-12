@@ -182,6 +182,66 @@ const validSourceRestQuaternionClip: AnimationClip = {
 };
 assert.equal(validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted, true, "valid source rest metadata on quaternion tracks should remain accepted");
 
+const invalidZeroSourceRestQuaternionClip: AnimationClip = {
+  id: "invalid-zero-source-rest-quaternion",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 0]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1])
+    }
+  ]
+};
+const invalidZeroSourceRestQuaternionReport = validateAnimationInputs(skeleton, invalidZeroSourceRestQuaternionClip);
+assert.equal(invalidZeroSourceRestQuaternionReport.accepted, false);
+assert.ok(
+  invalidZeroSourceRestQuaternionReport.clipIssues.some(
+    (issue) =>
+      issue.track === 0 &&
+      issue.joint === "head" &&
+      issue.property === "quaternion" &&
+      issue.message === "sourceRestQuaternion must be normalizable"
+  ),
+  "validateAnimationInputs should reject zero-length source rest quaternion metadata"
+);
+
+const invalidNonUnitSourceRestQuaternionClip: AnimationClip = {
+  id: "invalid-non-unit-source-rest-quaternion",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 2]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1])
+    }
+  ]
+};
+const invalidNonUnitSourceRestQuaternionInspection = inspectClipAsset(
+  {
+    id: "invalid-non-unit-source-rest-quaternion",
+    label: "Invalid Non Unit Source Rest Quaternion",
+    url: "/invalid-non-unit-source-rest-quaternion.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  },
+  invalidNonUnitSourceRestQuaternionClip
+);
+assert.equal(invalidNonUnitSourceRestQuaternionInspection.accepted, false);
+assert.ok(
+  invalidNonUnitSourceRestQuaternionInspection.issues.some(
+    (issue) =>
+      issue.track === 0 &&
+      issue.joint === "head" &&
+      issue.property === "quaternion" &&
+      issue.message === "sourceRestQuaternion must be normalized"
+  ),
+  "inspectClipAsset should reject non-unit source rest quaternion metadata"
+);
+
 const invalidSourceRestQuaternionShapeClip: AnimationClip = {
   id: "invalid-source-rest-quaternion-shape",
   duration: 1,
