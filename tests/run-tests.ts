@@ -10,6 +10,10 @@ import {
   VisemeMixer,
   applyThreeFootPlantResult,
   applyThreePresenceTargets,
+  calculateThreeBaseLoopSeamWindow,
+  calculateThreeBaseLoopTransitionWeights,
+  calculateThreeOverlayFade,
+  calculateThreeRuntimeStartTime,
   clearThreeFootPlantOffsets,
   blendPoses,
   clamp01,
@@ -22,6 +26,7 @@ import {
   encodeAnimationBinary,
   readActiveThreeRuntimeClipSnapshots,
   readThreeRuntimeClipSnapshot,
+  prepareThreeRuntimeAction,
   createSkeleton,
   cloneTransform,
   distributeLookAt,
@@ -597,6 +602,100 @@ assert.equal(runtimeClips.length, 2);
 assert.equal(runtimeClips[0]!.lane, "base");
 assert.equal(runtimeClips[1]!.instance, 1);
 
+assert.equal(calculateThreeRuntimeStartTime(-1, { startTime: 4 }), 0);
+assert.equal(calculateThreeRuntimeStartTime(2, { startTime: -0.25 }), 0);
+assert.equal(calculateThreeRuntimeStartTime(2, { startTime: 2.25 }), 0.25);
+assert.equal(
+  calculateThreeRuntimeStartTime(4, { matchPhaseFrom: { action: { time: 1.5 }, duration: 3 }, random: () => 0.9 }),
+  2
+);
+assert.equal(calculateThreeRuntimeStartTime(4, { random: () => 0.25 }), 1);
+assert.equal(calculateThreeRuntimeStartTime(4, { random: () => Number.NaN }), 0);
+assert.equal(calculateThreeRuntimeStartTime(4, { randomizeBaseTime: false }), 0);
+
+const preparedBaseAction = makeRuntimeActionStub(0.75);
+const preparedBaseClip = makeRuntimeClipDiagnosticStub({
+  id: "prepared-base",
+  label: "Prepared Base",
+  lane: "base",
+  weight: 0,
+  targetWeight: 0,
+  time: 0,
+  duration: 4,
+  scheduled: false,
+  running: false,
+  action: preparedBaseAction
+});
+const preparedStartTime = prepareThreeRuntimeAction(preparedBaseClip, {
+  matchPhaseFrom: { action: { time: 1.5 }, duration: 3 },
+  weight: 2,
+  timeScale: Number.NaN
+});
+assert.equal(preparedStartTime, 2);
+assert.equal(preparedBaseAction.time, 2);
+assert.equal(preparedBaseAction.enabled, true);
+assert.equal(preparedBaseAction.paused, false);
+assert.equal(preparedBaseAction.effectiveWeight, 1);
+assert.equal(preparedBaseAction.effectiveTimeScale, 1);
+assert.equal(preparedBaseAction.resetCount, 1);
+assert.equal(preparedBaseAction.playCount, 1);
+assert.equal(preparedBaseAction.stopFadingCount, 1);
+assert.equal(preparedBaseAction.stopWarpingCount, 1);
+
+const preparedOverlayAction = makeRuntimeActionStub(0);
+const preparedOverlayClip = makeRuntimeClipDiagnosticStub({
+  id: "prepared-overlay",
+  label: "Prepared Overlay",
+  lane: "overlay",
+  weight: 0,
+  targetWeight: 0,
+  time: 0,
+  duration: 1,
+  scheduled: false,
+  running: false,
+  action: preparedOverlayAction
+});
+assert.equal(prepareThreeRuntimeAction(preparedOverlayClip, { startTime: 0.8, weight: -1, timeScale: 1.25 }), 0);
+assert.equal(preparedOverlayAction.time, 0);
+assert.equal(preparedOverlayAction.effectiveWeight, 0);
+assert.equal(preparedOverlayAction.effectiveTimeScale, 1.25);
+
+assert.equal(calculateThreeBaseLoopSeamWindow(Number.NaN), 0.32);
+assert.equal(calculateThreeBaseLoopSeamWindow(2), 0.36);
+assert.equal(calculateThreeBaseLoopSeamWindow(10), 0.72);
+const transitionWeights = calculateThreeBaseLoopTransitionWeights({ elapsed: 0.5, duration: 1, fromWeight: 0.8, toWeight: 0.5 });
+assert.ok(Math.abs(transitionWeights.progress - 0.5) < 1e-6);
+assert.ok(Math.abs(transitionWeights.fromWeight - 0.4) < 1e-6);
+assert.ok(Math.abs(transitionWeights.toWeight - 0.25) < 1e-6);
+assert.equal(calculateThreeBaseLoopTransitionWeights({ elapsed: Number.NaN, duration: -1, fromWeight: 1, toWeight: 1 }).progress, 0);
+assert.equal(calculateThreeBaseLoopTransitionWeights({ elapsed: 2, duration: 1, fromWeight: 1, toWeight: 1 }).complete, true);
+
+const overlayFadeIn = calculateThreeOverlayFade({
+  time: 0.25,
+  duration: 2,
+  currentWeight: 0,
+  targetWeight: 0.8,
+  deltaSeconds: Math.log(2) / 6.5
+});
+assert.equal(overlayFadeIn.fadingOut, false);
+assert.equal(overlayFadeIn.targetWeight, 0.8);
+assert.ok(Math.abs(overlayFadeIn.nextWeight - 0.4) < 1e-6);
+const overlayFadeOut = calculateThreeOverlayFade({
+  time: 1.7,
+  duration: 2,
+  currentWeight: 0.5,
+  targetWeight: 0.8,
+  deltaSeconds: Math.log(2) / 5.5
+});
+assert.equal(overlayFadeOut.fadeOutWindow, 0.42);
+assert.equal(overlayFadeOut.fadingOut, true);
+assert.equal(overlayFadeOut.targetWeight, 0);
+assert.ok(Math.abs(overlayFadeOut.nextWeight - 0.25) < 1e-6);
+assert.equal(
+  calculateThreeOverlayFade({ time: 2, duration: 2, currentWeight: 0.005, targetWeight: 1, deltaSeconds: 0 }).shouldStop,
+  true
+);
+
 const diagnosticBase = makeRuntimeClipDiagnosticStub({
   id: "bad-base",
   label: "Bad Base",
@@ -686,7 +785,16 @@ function makeRuntimeClipDiagnosticStub(options: {
   emotions?: string[];
   gestures?: string[];
   source?: Record<string, unknown>;
+  action?: ReturnType<typeof makeRuntimeActionStub>;
 }) {
+  const action =
+    options.action ??
+    ({
+      time: options.time,
+      getEffectiveWeight: () => options.weight,
+      isRunning: () => options.running,
+      isScheduled: () => options.scheduled
+    } as const);
   return {
     id: options.id,
     label: options.label,
@@ -694,12 +802,7 @@ function makeRuntimeClipDiagnosticStub(options: {
     format: WAIFU_ANIMATION_BINARY_FORMAT,
     sourceId: options.id,
     instance: options.instance ?? 0,
-    action: {
-      time: options.time,
-      getEffectiveWeight: () => options.weight,
-      isRunning: () => options.running,
-      isScheduled: () => options.scheduled
-    },
+    action,
     duration: options.duration,
     targetWeight: options.targetWeight,
     lastTriggeredAt: 0,
@@ -709,4 +812,52 @@ function makeRuntimeClipDiagnosticStub(options: {
     ...(options.gestures ? { gestures: options.gestures } : {}),
     ...(options.source ? { source: options.source } : {})
   } as const;
+}
+
+function makeRuntimeActionStub(initialWeight: number) {
+  return {
+    time: 0,
+    enabled: false,
+    paused: true,
+    effectiveWeight: initialWeight,
+    effectiveTimeScale: 0,
+    resetCount: 0,
+    playCount: 0,
+    stopFadingCount: 0,
+    stopWarpingCount: 0,
+    reset() {
+      this.resetCount += 1;
+      this.time = 0;
+      return this;
+    },
+    play() {
+      this.playCount += 1;
+      return this;
+    },
+    stopFading() {
+      this.stopFadingCount += 1;
+      return this;
+    },
+    stopWarping() {
+      this.stopWarpingCount += 1;
+      return this;
+    },
+    setEffectiveTimeScale(value: number) {
+      this.effectiveTimeScale = value;
+      return this;
+    },
+    setEffectiveWeight(value: number) {
+      this.effectiveWeight = value;
+      return this;
+    },
+    getEffectiveWeight() {
+      return this.effectiveWeight;
+    },
+    isRunning() {
+      return false;
+    },
+    isScheduled() {
+      return false;
+    }
+  };
 }

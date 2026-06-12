@@ -13,7 +13,7 @@ import {
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult } from "./ik.js";
-import { type Quat, type Vec3, clamp, clamp01, dampAlpha, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat } from "./math.js";
+import { type Quat, type Vec3, clamp, clamp01, dampAlpha, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, smoothStep } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
   BASE_PROCEDURAL_TRACK_POLICY,
@@ -89,6 +89,68 @@ export type ThreeRuntimeInfluence = {
 export type ThreeRuntimeInfluenceOptions = {
   debugWeight?: number;
   includeDebugAsOverlay?: boolean;
+};
+
+export type ThreeRuntimePhaseSource = {
+  action: Pick<AnimationAction, "time">;
+  duration: number;
+};
+
+export type ThreeRuntimeStartTimeOptions = {
+  startTime?: number;
+  matchPhaseFrom?: ThreeRuntimePhaseSource | null;
+  randomizeBaseTime?: boolean;
+  random?: () => number;
+};
+
+export type PrepareThreeRuntimeActionOptions = ThreeRuntimeStartTimeOptions & {
+  weight?: number;
+  timeScale?: number;
+};
+
+export type ThreeBaseLoopSeamWindowOptions = {
+  fraction?: number;
+  min?: number;
+  max?: number;
+};
+
+export type ThreeBaseLoopTransitionOptions = {
+  elapsed: number;
+  duration: number;
+  fromWeight?: number;
+  toWeight: number;
+};
+
+export type ThreeBaseLoopTransitionWeights = {
+  progress: number;
+  fromWeight: number;
+  toWeight: number;
+  complete: boolean;
+};
+
+export type ThreeOverlayFadeOptions = {
+  time: number;
+  duration: number;
+  currentWeight: number;
+  targetWeight: number;
+  deltaSeconds: number;
+  windowFraction?: number;
+  minWindow?: number;
+  maxWindow?: number;
+  completionEpsilon?: number;
+  fadeInSpeed?: number;
+  fadeOutSpeed?: number;
+  stopWeight?: number;
+};
+
+export type ThreeOverlayFadeResult = {
+  fadeOutWindow: number;
+  fadingOut: boolean;
+  complete: boolean;
+  targetWeight: number;
+  nextWeight: number;
+  blendSpeed: number;
+  shouldStop: boolean;
 };
 
 export type ThreePresenceBoneTarget = {
@@ -294,6 +356,90 @@ export function configureThreeRuntimeAction(action: AnimationAction): AnimationA
   return action;
 }
 
+export function calculateThreeRuntimeStartTime(duration: number, options: ThreeRuntimeStartTimeOptions = {}): number {
+  const safeDuration = sanitizeThreeRuntimeTime(duration);
+  if (safeDuration <= 0) return 0;
+  if (typeof options.startTime === "number") return euclideanModulo(sanitizeThreeRuntimeTime(options.startTime), safeDuration);
+
+  const matchFrom = options.matchPhaseFrom;
+  const sourceDuration = sanitizeThreeRuntimeTime(matchFrom?.duration ?? 0);
+  const sourceTime = sanitizeThreeRuntimeTime(matchFrom?.action.time ?? 0);
+  if (matchFrom && sourceDuration > 0) {
+    return (euclideanModulo(sourceTime, sourceDuration) / sourceDuration) * safeDuration;
+  }
+
+  if (options.randomizeBaseTime !== false) {
+    const randomValue = clamp01(options.random?.() ?? 0);
+    return randomValue * safeDuration;
+  }
+  return 0;
+}
+
+export function prepareThreeRuntimeAction<TEntry extends AnimationManifestEntry>(
+  clip: ThreeRuntimeClip<TEntry>,
+  options: PrepareThreeRuntimeActionOptions = {}
+): number {
+  const weight = sanitizeThreeRuntimeWeight(options.weight ?? 0);
+  const timeScale = sanitizePositiveThreeRuntimeValue(options.timeScale ?? 1, 1);
+  const startTime = clip.lane === "base" ? calculateThreeRuntimeStartTime(clip.duration, options) : 0;
+  clip.action.reset();
+  clip.action.enabled = true;
+  clip.action.paused = false;
+  clip.action.stopFading();
+  clip.action.stopWarping();
+  clip.action.setEffectiveTimeScale(timeScale);
+  clip.action.setEffectiveWeight(weight);
+  clip.action.play();
+  if (clip.lane === "base" && sanitizeThreeRuntimeTime(clip.duration) > 0) clip.action.time = startTime;
+  return startTime;
+}
+
+export function calculateThreeBaseLoopSeamWindow(duration: number, options: ThreeBaseLoopSeamWindowOptions = {}): number {
+  const safeDuration = sanitizeThreeRuntimeTime(duration);
+  return clamp(safeDuration * sanitizePositiveThreeRuntimeValue(options.fraction ?? 0.18, 0.18), options.min ?? 0.32, options.max ?? 0.72);
+}
+
+export function calculateThreeBaseLoopTransitionWeights(options: ThreeBaseLoopTransitionOptions): ThreeBaseLoopTransitionWeights {
+  const duration = Math.max(0.001, sanitizeThreeRuntimeTime(options.duration));
+  const progress = smoothStep(0, 1, sanitizeThreeRuntimeTime(options.elapsed) / duration);
+  const fromWeight = sanitizeThreeRuntimeWeight(options.fromWeight ?? 0) * (1 - progress);
+  const toWeight = sanitizeThreeRuntimeWeight(options.toWeight) * progress;
+  return {
+    progress,
+    fromWeight,
+    toWeight,
+    complete: progress >= 1
+  };
+}
+
+export function calculateThreeOverlayFade(options: ThreeOverlayFadeOptions): ThreeOverlayFadeResult {
+  const duration = sanitizeThreeRuntimeTime(options.duration);
+  const time = sanitizeThreeRuntimeTime(options.time);
+  const fadeOutWindow = clamp(
+    duration * sanitizePositiveThreeRuntimeValue(options.windowFraction ?? 0.22, 0.22),
+    options.minWindow ?? 0.18,
+    options.maxWindow ?? 0.42
+  );
+  const completionEpsilon = sanitizePositiveThreeRuntimeValue(options.completionEpsilon ?? 0.02, 0.02);
+  const fadingOut = time >= Math.max(0, duration - fadeOutWindow);
+  const complete = time >= Math.max(0, duration - completionEpsilon);
+  const targetWeight = fadingOut ? 0 : sanitizeThreeRuntimeWeight(options.targetWeight);
+  const currentWeight = sanitizeThreeRuntimeWeight(options.currentWeight);
+  const fadeInSpeed = sanitizePositiveThreeRuntimeValue(options.fadeInSpeed ?? 6.5, 6.5);
+  const fadeOutSpeed = sanitizePositiveThreeRuntimeValue(options.fadeOutSpeed ?? 5.5, 5.5);
+  const blendSpeed = targetWeight < currentWeight ? fadeOutSpeed : fadeInSpeed;
+  const nextWeight = dampWeight(currentWeight, targetWeight, blendSpeed, options.deltaSeconds);
+  return {
+    fadeOutWindow,
+    fadingOut,
+    complete,
+    targetWeight,
+    nextWeight,
+    blendSpeed,
+    shouldStop: complete && nextWeight < sanitizeThreeRuntimeWeight(options.stopWeight ?? 0.01)
+  };
+}
+
 export function readThreeRuntimeClipSnapshot<TEntry extends AnimationManifestEntry>(
   clip: ThreeRuntimeClip<TEntry>,
   options: ThreeRuntimeClipSnapshotOptions = {}
@@ -360,6 +506,19 @@ function sanitizeThreeRuntimeWeight(value: number): number {
 
 function sanitizeThreeRuntimeCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function sanitizePositiveThreeRuntimeValue(value: number, fallback: number): number {
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function euclideanModulo(value: number, divisor: number): number {
+  if (divisor <= 0) return 0;
+  return ((value % divisor) + divisor) % divisor;
+}
+
+function dampWeight(current: number, target: number, speed: number, deltaSeconds: number): number {
+  return current + (target - current) * dampAlpha(speed, deltaSeconds);
 }
 
 export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): ThreePresenceApplyResult {

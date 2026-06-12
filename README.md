@@ -46,7 +46,7 @@ npm test
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
 - `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
-- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded animation clips, track policies, runtime clip lanes, sanitized clip snapshots, and base/overlay/debug influence diagnostics.
+- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded animation clips, track policies, runtime clip lanes, action preparation, base-loop seam/transition policy helpers, overlay fade helpers, sanitized clip snapshots, and base/overlay/debug influence diagnostics.
 - `debug`: pose metrics, invalid transform diagnostics, runtime snapshots.
 
 ## Pipeline
@@ -62,4 +62,4 @@ The canonical frame pipeline is:
 7. Apply procedural look-at/aim and IK corrections through explicit hooks.
 8. Emit skeletal pose plus facial/viseme expression weights to the consumer.
 
-Waifu remains responsible for VRM model loading, browser rendering, websocket state, audio playback, and visual capture. `Waifu-Animation` owns reusable math, manifests, validation, retargeting, Three clip binding, runtime clip lane setup, and deterministic animation decisions.
+Waifu remains responsible for VRM model loading, browser rendering, websocket state, audio playback, and visual capture. `Waifu-Animation` owns reusable math, manifests, validation, retargeting, Three clip binding, runtime clip lane setup, generic lane blend/action policy, and deterministic animation decisions.
