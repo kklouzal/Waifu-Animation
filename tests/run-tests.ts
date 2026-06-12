@@ -282,6 +282,58 @@ assert.ok(evaluated.activeLayers.length === 1);
 assert.ok(evaluated.localPose[2]!.rotation[0] > 0.1);
 assert.equal(evaluated.diagnostics, undefined);
 
+const sanitizedRuntime = new AnimationRuntime(skeleton);
+const sanitizedLayer = sanitizedRuntime.setLayer("bad-inputs", nodClip, {
+  time: Number.NaN,
+  weight: Number.NEGATIVE_INFINITY,
+  targetWeight: -2,
+  fadeSpeed: Number.POSITIVE_INFINITY,
+  speed: -1,
+  priority: -3
+});
+assert.equal(sanitizedLayer.time, 0);
+assert.equal(sanitizedLayer.weight, 0);
+assert.equal(sanitizedLayer.targetWeight, 0);
+assert.equal(sanitizedLayer.fadeSpeed, 8);
+assert.equal(sanitizedLayer.speed, 0);
+assert.equal(sanitizedLayer.priority, 0);
+
+const sanitizedCrossfade = sanitizedRuntime.crossfade("bad-crossfade", nodClip, {
+  time: -1,
+  weight: Number.NaN,
+  targetWeight: Number.POSITIVE_INFINITY,
+  fadeSpeed: -4,
+  speed: Number.NaN,
+  priority: Number.NEGATIVE_INFINITY
+});
+assert.equal(sanitizedCrossfade.time, 0);
+assert.equal(sanitizedCrossfade.weight, 0);
+assert.equal(sanitizedCrossfade.targetWeight, 1);
+assert.equal(sanitizedCrossfade.fadeSpeed, 0);
+assert.equal(sanitizedCrossfade.speed, 1);
+assert.equal(sanitizedCrossfade.priority, 0);
+sanitizedRuntime.fadeOut("bad-crossfade", Number.NaN);
+assert.equal(sanitizedCrossfade.fadeSpeed, 8);
+
+const corruptedRuntime = new AnimationRuntime(skeleton);
+const corruptedLayer = corruptedRuntime.setLayer("corrupted", nodClip, { weight: 1, targetWeight: 1, loop: true });
+corruptedLayer.time = Number.POSITIVE_INFINITY;
+corruptedLayer.targetWeight = Number.NaN;
+corruptedLayer.fadeSpeed = Number.NEGATIVE_INFINITY;
+corruptedLayer.speed = Number.POSITIVE_INFINITY;
+corruptedLayer.priority = Number.NaN;
+corruptedRuntime.update(Number.NaN);
+corruptedRuntime.update(-1);
+const corruptedEvaluation = corruptedRuntime.evaluate();
+const corruptedActiveLayer = corruptedEvaluation.activeLayers.find((layer) => layer.id === "corrupted");
+assert.ok(corruptedActiveLayer);
+assert.equal(corruptedActiveLayer.time, 0);
+assert.equal(corruptedActiveLayer.weight, 1);
+assert.equal(corruptedActiveLayer.targetWeight, 0);
+assert.equal(corruptedActiveLayer.priority, 0);
+assert.ok(corruptedEvaluation.activeLayers.every((layer) => [layer.time, layer.weight, layer.targetWeight, layer.priority].every(Number.isFinite)));
+assertFiniteEvaluation(corruptedEvaluation);
+
 const invalidRuntime = new AnimationRuntime(skeleton);
 const invalidTranslationScaleClip: AnimationClip = {
   id: "invalid-translation-scale",
@@ -543,3 +595,14 @@ assert.equal(runtimeClips[0]!.lane, "base");
 assert.equal(runtimeClips[1]!.instance, 1);
 
 console.log("waifu-animation tests passed");
+
+function assertFiniteEvaluation(evaluation: ReturnType<AnimationRuntime["evaluate"]>): void {
+  for (const transform of evaluation.localPose) {
+    assert.ok(transform.translation.every(Number.isFinite));
+    assert.ok(transform.rotation.every(Number.isFinite));
+    assert.ok(transform.scale.every(Number.isFinite));
+  }
+  for (const matrix of evaluation.modelPose) {
+    assert.ok(Array.from(matrix).every(Number.isFinite));
+  }
+}

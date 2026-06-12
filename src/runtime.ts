@@ -85,12 +85,12 @@ export class AnimationRuntime {
     const layer: AnimationLayer = {
       id,
       clip,
-      time: options.time ?? 0,
-      weight: options.weight ?? 0,
-      targetWeight: options.targetWeight ?? options.weight ?? 1,
-      fadeSpeed: options.fadeSpeed ?? 8,
-      speed: options.speed ?? 1,
-      priority: options.priority ?? 0,
+      time: finiteNonNegative(options.time, 0),
+      weight: finiteNonNegative(options.weight, 0),
+      targetWeight: finiteNonNegative(options.targetWeight ?? options.weight, 1),
+      fadeSpeed: finiteNonNegative(options.fadeSpeed, 8),
+      speed: finiteNonNegative(options.speed, 1),
+      priority: finiteNonNegative(options.priority, 0),
       loop: options.loop ?? clip.loop ?? false,
       blendMode: options.blendMode ?? "override",
       ...(options.mask ? { mask: options.mask } : {})
@@ -104,15 +104,15 @@ export class AnimationRuntime {
     const resetTime = options.resetTime ?? !existing;
     const targetWeight = finiteNonNegative(options.targetWeight ?? options.weight ?? 1, 1);
     const fadeSpeed = finiteNonNegative(options.fadeSpeed, 8);
-    const priority = options.priority ?? existing?.priority ?? 0;
+    const priority = finiteNonNegative(options.priority ?? existing?.priority, 0);
     const layer: AnimationLayer = {
       id,
       clip,
-      time: resetTime ? (options.time ?? 0) : (options.time ?? existing?.time ?? 0),
+      time: finiteNonNegative(resetTime ? options.time : (options.time ?? existing?.time), 0),
       weight: resetTime ? finiteNonNegative(options.weight, 0) : finiteNonNegative(existing?.weight ?? options.weight, 0),
       targetWeight,
       fadeSpeed,
-      speed: options.speed ?? existing?.speed ?? 1,
+      speed: finiteNonNegative(options.speed ?? existing?.speed, 1),
       priority,
       loop: options.loop ?? clip.loop ?? existing?.loop ?? false,
       blendMode: options.blendMode ?? "override",
@@ -140,7 +140,7 @@ export class AnimationRuntime {
     const layer = this.layers.get(id);
     if (!layer) return;
     layer.targetWeight = 0;
-    layer.fadeSpeed = fadeSpeed;
+    layer.fadeSpeed = finiteNonNegative(fadeSpeed, 8);
   }
 
   removeLayer(id: string): void {
@@ -154,6 +154,7 @@ export class AnimationRuntime {
   update(deltaSeconds: number): void {
     const delta = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
     for (const layer of this.layers.values()) {
+      sanitizeLayerState(layer);
       layer.time += delta * layer.speed;
       const alpha = 1 - Math.exp(-Math.max(0, layer.fadeSpeed) * delta);
       layer.weight += (layer.targetWeight - layer.weight) * alpha;
@@ -164,6 +165,7 @@ export class AnimationRuntime {
   evaluate(options: RuntimeEvaluateOptions = {}): RuntimeEvaluation {
     const diagnostics = options.diagnostics ? [] as RuntimeEvaluationDiagnostic[] : undefined;
     const active = Array.from(this.layers.values())
+      .map((layer) => sanitizeLayerState(layer))
       .filter((layer) => layer.weight > 0.0001)
       .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
 
@@ -219,6 +221,16 @@ export class AnimationRuntime {
 
 function finiteNonNegative(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+function sanitizeLayerState(layer: AnimationLayer): AnimationLayer {
+  layer.time = finiteNonNegative(layer.time, 0);
+  layer.weight = finiteNonNegative(layer.weight, 0);
+  layer.targetWeight = finiteNonNegative(layer.targetWeight, 0);
+  layer.fadeSpeed = finiteNonNegative(layer.fadeSpeed, 0);
+  layer.speed = finiteNonNegative(layer.speed, 0);
+  layer.priority = finiteNonNegative(layer.priority, 0);
+  return layer;
 }
 
 function pushPoseDiagnostics(
