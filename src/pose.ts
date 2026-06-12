@@ -69,6 +69,13 @@ export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: 
   return mask;
 }
 
+function readMaskWeight(mask: JointMask | undefined, joint: number): number {
+  if (!mask) return 1;
+  if (joint < 0 || joint >= mask.length) return 0;
+  const value = mask[joint]!;
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
 export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: BlendPoseOptions = {}): Pose {
   const fallbackPose = options.fallbackPose ?? skeleton.restPose;
   const jointCount = skeleton.joints.length;
@@ -86,7 +93,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     for (let joint = 0; joint < jointCount; joint += 1) {
       const poseTransform = layer.pose[joint];
       if (!poseTransform) continue;
-      const maskWeight = Math.max(0, Number.isFinite(layer.mask?.[joint]) ? layer.mask![joint]! : 1);
+      const maskWeight = readMaskWeight(layer.mask, joint);
       const weight = layerWeight * maskWeight;
       if (weight <= 0) continue;
       accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, poseTransform, weight);
@@ -145,5 +152,5 @@ export function additiveDeltaPose(restPose: readonly Transform[], samplePose: re
 export function applyAdditivePose(base: readonly Transform[], deltaPose: readonly Transform[], weight: number, mask?: JointMask): Pose {
   if (base.length !== deltaPose.length) throw new Error("additive pose length mismatch");
   const layerWeight = Number.isFinite(weight) ? weight : 0;
-  return base.map((transform, index) => applyTransformDelta(transform, deltaPose[index]!, layerWeight * Math.max(0, mask?.[index] ?? 1)));
+  return base.map((transform, index) => applyTransformDelta(transform, deltaPose[index]!, layerWeight * readMaskWeight(mask, index)));
 }

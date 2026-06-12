@@ -8,6 +8,7 @@ import {
   PresencePlanner,
   WAIFU_ANIMATION_BINARY_FORMAT,
   VisemeMixer,
+  applyAdditivePose,
   applyThreeFootPlantResult,
   applyThreePresenceTargets,
   calculateThreeBaseLoopSeamWindow,
@@ -28,6 +29,7 @@ import {
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
   createSkeleton,
+  clonePose,
   cloneTransform,
   distributeLookAt,
   filterTracksByNamePolicy,
@@ -269,6 +271,47 @@ const blended = blendPoses(skeleton, [
 assert.ok(blended[2]!.rotation[0] > 0.05);
 assert.equal(blended[1]!.rotation[3], 1);
 
+const malformedMaskPose = clonePose(skeleton.restPose);
+malformedMaskPose[0]!.translation = [5, 1, 0];
+malformedMaskPose[1]!.translation = [4, 0, 0];
+malformedMaskPose[2]!.translation = [20, 0, 0];
+malformedMaskPose[3]!.translation = [8, 0, 0];
+const malformedPartialMask = new Float32Array([1, Number.NaN]);
+const malformedMaskedBlend = blendPoses(skeleton, [{ pose: malformedMaskPose, weight: 1, mask: malformedPartialMask }], { threshold: 0.01 });
+assert.equal(malformedMaskedBlend[0]!.translation[0], 5, "finite mask entries should still own their joints");
+assert.equal(malformedMaskedBlend[1]!.translation[0], 0, "NaN mask entries should not affect override blending");
+assert.equal(malformedMaskedBlend[2]!.translation[0], 0, "missing mask entries should not affect override blending");
+assert.equal(malformedMaskedBlend[3]!.translation[0], 0, "short partial masks should leave unspecified joints on fallback pose");
+
+const overweightMask = new Float32Array(skeleton.joints.length);
+overweightMask[2] = 2;
+const overweightMaskedBlend = blendPoses(
+  skeleton,
+  [
+    { pose: skeleton.restPose, weight: 1 },
+    { pose: malformedMaskPose, weight: 1, mask: overweightMask }
+  ],
+  { threshold: 0.01 }
+);
+assert.ok(Math.abs(overweightMaskedBlend[2]!.translation[0] - 40 / 3) < 1e-6, "positive mask weights above 1 should remain supported");
+
+const malformedAdditiveDelta = clonePose(skeleton.restPose);
+malformedAdditiveDelta[0]!.translation = [Number.NaN, 0, 0];
+malformedAdditiveDelta[1]!.translation = [4, 0, 0];
+malformedAdditiveDelta[2]!.translation = [20, 0, 0];
+malformedAdditiveDelta[3]!.translation = [8, 0, 0];
+const malformedAdditiveMask = new Float32Array([Number.NaN, Number.NaN]);
+const malformedAdditivePose = applyAdditivePose(skeleton.restPose, malformedAdditiveDelta, 1, malformedAdditiveMask);
+assert.equal(malformedAdditivePose[0]!.translation[0], 0, "NaN mask entries should block non-finite additive deltas");
+assert.equal(malformedAdditivePose[1]!.translation[0], 0, "NaN mask entries should not affect additive pose application");
+assert.equal(malformedAdditivePose[2]!.translation[0], 0, "missing mask entries should not affect additive pose application");
+assert.equal(malformedAdditivePose[3]!.translation[0], 0, "short additive masks should leave unspecified joints unchanged");
+for (const transform of malformedAdditivePose) {
+  assert.ok(
+    transform.translation.every(Number.isFinite) && transform.rotation.every(Number.isFinite) && transform.scale.every(Number.isFinite),
+    "malformed additive masks should not produce non-finite transforms"
+  );
+}
 
 const tinyWeightBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }]);
 assert.ok(tinyWeightBlend[2]!.rotation[0] > 0);
