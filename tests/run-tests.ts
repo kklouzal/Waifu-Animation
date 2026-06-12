@@ -105,6 +105,66 @@ assert.deepEqual(repairedRestSkeleton.restPose[0]!.scale, [1, 3, 1]);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
+const duplicateResolvedChannelClip: AnimationClip = {
+  id: "duplicate-resolved-channel",
+  duration: 1,
+  tracks: [
+    { humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+    { joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) }
+  ]
+};
+const duplicateResolvedChannelReport = validateAnimationInputs(skeleton, duplicateResolvedChannelClip);
+assert.equal(duplicateResolvedChannelReport.accepted, false);
+assert.ok(
+  duplicateResolvedChannelReport.clipIssues.some((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")),
+  "validateAnimationInputs should reject joint/humanBone aliases that resolve to one rotation channel"
+);
+const duplicateResolvedAsset = inspectAnimationAsset(
+  { id: "duplicate-resolved-channel", label: "Duplicate Resolved Channel", url: "/duplicate-resolved-channel.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+  duplicateResolvedChannelClip,
+  skeleton
+);
+assert.equal(duplicateResolvedAsset.status, "rejected");
+assert.ok(
+  duplicateResolvedAsset.issues.some((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")),
+  "inspectAnimationAsset should surface duplicate resolved target channels"
+);
+
+const duplicateDeclaredChannelClip: AnimationClip = {
+  id: "duplicate-declared-channel",
+  duration: 1,
+  tracks: [
+    { joint: "head", property: "position", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) },
+    { joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }
+  ]
+};
+const duplicateDeclaredInspection = inspectClipAsset(
+  { id: "duplicate-declared-channel", label: "Duplicate Declared Channel", url: "/duplicate-declared-channel.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+  duplicateDeclaredChannelClip
+);
+assert.equal(duplicateDeclaredInspection.accepted, false);
+assert.ok(
+  duplicateDeclaredInspection.issues.some((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head.translation")),
+  "inspectClipAsset should reject obvious duplicate declared channels without a skeleton"
+);
+
+const distinctPropertyClip: AnimationClip = {
+  id: "distinct-properties",
+  duration: 1,
+  tracks: [
+    { humanBone: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+    { joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) },
+    { joint: "head", property: "scale", times: toFloat32Array([0]), values: toFloat32Array([1, 1, 1]) }
+  ]
+};
+assert.equal(validateAnimationInputs(skeleton, distinctPropertyClip).accepted, true, "distinct transform properties on one joint should remain valid");
+assert.equal(
+  inspectClipAsset({ id: "distinct-properties", label: "Distinct Properties", url: "/distinct-properties.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, distinctPropertyClip)
+    .accepted,
+  true,
+  "declared channels with distinct normalized properties should remain valid"
+);
+
 const decodedNodClip = decodeAnimationBinary(encodeAnimationBinary(nodClip), "nod");
 assert.equal(decodedNodClip.id, "nod");
 assert.equal(decodedNodClip.tracks.length, 1);

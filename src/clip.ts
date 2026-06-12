@@ -36,15 +36,32 @@ export type SampleOptions = {
 
 export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipValidationIssue[] {
   const issues: ClipValidationIssue[] = [];
+  const resolvedChannels = new Map<string, { track: number; joint: string; property: ReturnType<typeof normalizedTrackProperty> }>();
   if (!clip.id) issues.push({ message: "clip id is required" });
   if (!Number.isFinite(clip.duration) || clip.duration <= 0) issues.push({ message: "clip duration must be positive and finite" });
   for (let index = 0; index < clip.tracks.length; index += 1) {
     const track = clip.tracks[index]!;
     const stride = trackStride(track.property);
     const jointName = track.joint ?? track.humanBone;
+    const property = normalizedTrackProperty(track.property);
     if (!jointName) issues.push({ track: index, property: track.property, message: "track needs joint or humanBone" });
-    if (skeleton && jointName && resolveTrackJointIndex(skeleton, track) < 0) {
+    const jointIndex = skeleton && jointName ? resolveTrackJointIndex(skeleton, track) : -1;
+    if (skeleton && jointName && jointIndex < 0) {
       issues.push({ track: index, joint: String(jointName), property: track.property, message: "track does not map to skeleton" });
+    }
+    const channel = resolvedTrackChannel(skeleton, track, jointIndex, property);
+    if (channel) {
+      const existing = resolvedChannels.get(channel.key);
+      if (existing) {
+        issues.push({
+          track: index,
+          joint: channel.joint,
+          property: track.property,
+          message: `duplicate target channel ${channel.joint}.${property} conflicts with track ${existing.track} (${existing.joint}.${existing.property})`
+        });
+      } else {
+        resolvedChannels.set(channel.key, { track: index, joint: channel.joint, property });
+      }
     }
     if (track.times.length < 1) issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track has no times" });
     if (track.values.length !== track.times.length * stride) {
@@ -62,6 +79,22 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     }
   }
   return issues;
+}
+
+function resolvedTrackChannel(
+  skeleton: Skeleton | undefined,
+  track: AnimationTrack,
+  jointIndex: number,
+  property: ReturnType<typeof normalizedTrackProperty>
+): { key: string; joint: string } | null {
+  const jointName = track.joint ?? track.humanBone;
+  if (!jointName) return null;
+  if (skeleton) {
+    if (jointIndex < 0) return null;
+    const joint = skeleton.joints[jointIndex]!;
+    return { key: `${jointIndex}:${property}`, joint: `${joint.name}[${jointIndex}]` };
+  }
+  return { key: `${String(jointName)}:${property}`, joint: String(jointName) };
 }
 
 export function trackStride(property: TrackProperty): 3 | 4 {

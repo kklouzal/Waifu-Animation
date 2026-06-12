@@ -12,7 +12,7 @@ npm run build
 
 Current coverage includes:
 
-- finite transform and clip validation;
+- finite transform and clip validation, including duplicate resolved target-channel rejection;
 - quaternion sanitization and shortest-path retargeting;
 - local clip sampling;
 - local-to-model pose conversion;
