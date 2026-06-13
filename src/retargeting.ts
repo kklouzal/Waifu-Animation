@@ -15,7 +15,8 @@ export function isHumanoidBoneName(value: string): value is HumanoidBoneName {
 export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sourceSample: Quat): Quat {
   const srcRest = normalizeQuat(sourceRest);
   const dstRest = normalizeQuat(targetRest);
-  const sourceDelta = multiplyQuat(invertQuat(srcRest), sourceSample);
+  const srcSample = normalizeQuat(sourceSample, srcRest);
+  const sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
   return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
 }
 

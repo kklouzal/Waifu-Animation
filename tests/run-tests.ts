@@ -1019,6 +1019,24 @@ assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
 const sourceRestX = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const localSourceDeltaY = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
 const sourceSampleWithLocalDelta = multiplyQuat(sourceRestX, localSourceDeltaY);
+const targetRestZ = quatFromAxisAngle([0, 0, 1], Math.PI / 3);
+const retargetedZeroSample = retargetQuaternionSample(sourceRestX, targetRestZ, [0, 0, 0, 0]);
+assert.ok(
+  Math.abs(retargetedZeroSample[0] - targetRestZ[0]) < 1e-5 &&
+    Math.abs(retargetedZeroSample[1] - targetRestZ[1]) < 1e-5 &&
+    Math.abs(retargetedZeroSample[2] - targetRestZ[2]) < 1e-5 &&
+    Math.abs(retargetedZeroSample[3] - targetRestZ[3]) < 1e-5,
+  "retargeting should treat non-normalizable source samples as identity source deltas"
+);
+const retargetedNonUnitSample = retargetQuaternionSample(sourceRestX, targetRestZ, sourceSampleWithLocalDelta.map((component) => component * 2) as [number, number, number, number]);
+const retargetedUnitSample = retargetQuaternionSample(sourceRestX, targetRestZ, sourceSampleWithLocalDelta);
+assert.ok(
+  Math.abs(retargetedNonUnitSample[0] - retargetedUnitSample[0]) < 1e-5 &&
+    Math.abs(retargetedNonUnitSample[1] - retargetedUnitSample[1]) < 1e-5 &&
+    Math.abs(retargetedNonUnitSample[2] - retargetedUnitSample[2]) < 1e-5 &&
+    Math.abs(retargetedNonUnitSample[3] - retargetedUnitSample[3]) < 1e-5,
+  "retargeting should repair non-unit source samples without changing their rotation"
+);
 const expectedEquivalentRestDelta = multiplyQuat(invertQuat(sourceRestX), sourceSampleWithLocalDelta);
 const retargetedToEquivalentRest = retargetQuaternionSample(sourceRestX, sourceRestX, sourceSampleWithLocalDelta);
 assert.ok(
