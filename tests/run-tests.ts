@@ -36,6 +36,8 @@ import {
   distributeLookAt,
   applySourceTrackPolicy,
   filterTracksByNamePolicy,
+  BASE_PROCEDURAL_TRACK_POLICY,
+  BASE_PROCEDURAL_SOURCE_TRACK_POLICY,
   LOCOMOTION_BASE_SOURCE_TRACK_POLICY,
   inspectAnimationAsset,
   inspectClipAsset,
@@ -657,6 +659,43 @@ assert.deepEqual(
     { exclude: [/hips\.position$/, /thumb/i] }
   ).map((track) => track.name),
   ["head.quaternion"]
+);
+
+assert.deepEqual(
+  filterTracksByNamePolicy(
+    [
+      { name: "hips.position" },
+      { name: "spine.quaternion" },
+      { name: "leftShoulder.quaternion" },
+      { name: "leftUpperArm.quaternion" },
+      { name: "rightLowerArm.quaternion" },
+      { name: "rightHand.quaternion" },
+      { name: "leftUpperLeg.quaternion" }
+    ],
+    BASE_PROCEDURAL_TRACK_POLICY
+  ).map((track) => track.name),
+  ["hips.position", "spine.quaternion", "leftUpperLeg.quaternion"],
+  "base procedural policy should leave arms to procedural posture instead of source-loop rest poses"
+);
+
+const baseAuthoredClip: AnimationClip = {
+  id: "base-authored-upper",
+  duration: 1,
+  loop: true,
+  tracks: [
+    { humanBone: "hips", property: "position", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) },
+    { humanBone: "spine", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftShoulder", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "rightUpperArm", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftHand", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "rightIndexProximal", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftUpperLeg", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) }
+  ]
+};
+assert.deepEqual(
+  applySourceTrackPolicy(baseAuthoredClip, BASE_PROCEDURAL_SOURCE_TRACK_POLICY).tracks.map((track) => track.humanBone ?? track.joint),
+  ["hips", "spine", "leftUpperLeg"],
+  "base source policy should strip authored arm and finger tracks before Three track names become UUID based"
 );
 
 const locomotionAuthoredClip: AnimationClip = {

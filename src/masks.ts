@@ -70,7 +70,14 @@ export const ROOT_TRANSLATION_EXCLUDE_POLICY: TrackMaskPolicy = {
 };
 
 export const BASE_PROCEDURAL_TRACK_POLICY: TrackMaskPolicy = {
-  exclude: [/(thumb|index|middle|ring|little)/i]
+  exclude: [/(shoulder|upperArm|lowerArm|hand|thumb|index|middle|ring|little)/i]
+};
+
+export const BASE_PROCEDURAL_SOURCE_TRACK_POLICY: SourceTrackMaskPolicy = {
+  exclude: [
+    /^(left|right)(Shoulder|UpperArm|LowerArm|Hand)/,
+    /^(left|right)(Thumb|Index|Middle|Ring|Little)/
+  ]
 };
 
 export const OVERLAY_UPPER_BODY_TRACK_POLICY: TrackMaskPolicy = {
@@ -78,8 +85,5 @@ export const OVERLAY_UPPER_BODY_TRACK_POLICY: TrackMaskPolicy = {
 };
 
 export const LOCOMOTION_BASE_SOURCE_TRACK_POLICY: SourceTrackMaskPolicy = {
-  exclude: [
-    /^(left|right)(Shoulder|UpperArm|LowerArm|Hand)/,
-    /^(left|right)(Thumb|Index|Middle|Ring|Little)/
-  ]
+  exclude: [...BASE_PROCEDURAL_SOURCE_TRACK_POLICY.exclude!]
 };

@@ -701,7 +701,18 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     lower.updateMatrixWorld(true);
     const finalUpperDirectionCorrection = quatFromUnitVectors(normalizeVec3(subVec3(objectWorldVec3(lower), objectWorldVec3(upper)), desiredUpperDirection), desiredUpperDirection);
     const appliedFinalUpperArmDirection = applyWorldQuaternionCorrection(upper, finalUpperDirectionCorrection, amount);
-    return { side, appliedUpperArmDirection: appliedUpperArmDirection || appliedFinalUpperArmDirection, appliedUpperArm, appliedLowerArm };
+    upper.updateMatrixWorld(true);
+    lower.updateMatrixWorld(true);
+    hand.updateMatrixWorld(true);
+    const desiredLowerDirection = normalizeVec3([-sign * 0.32, -0.88, -0.16 + sideSwing * 0.02], [0, -1, 0]);
+    const finalLowerDirectionCorrection = quatFromUnitVectors(normalizeVec3(subVec3(objectWorldVec3(hand), objectWorldVec3(lower)), desiredLowerDirection), desiredLowerDirection);
+    const appliedFinalLowerArmDirection = applyWorldQuaternionCorrection(lower, finalLowerDirectionCorrection, amount);
+    return {
+      side,
+      appliedUpperArmDirection: appliedUpperArmDirection || appliedFinalUpperArmDirection,
+      appliedUpperArm,
+      appliedLowerArm: appliedLowerArm || appliedFinalLowerArmDirection
+    };
   });
 }
 
