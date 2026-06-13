@@ -615,6 +615,29 @@ assert.equal(additiveLayer?.blendMode, "additive", "override crossfade should no
 assert.ok(Math.abs(additiveLayer!.targetWeight - 1) < 1e-6);
 assert.ok(Math.abs(additiveCrossfadePose.localPose[2]!.translation[0] - 11) < 1e-4);
 
+const runtimeSubtractiveAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+runtimeSubtractiveAdditive.setLayer("base", crossfadeNewClip, { weight: 1, targetWeight: 1 });
+runtimeSubtractiveAdditive.setLayer("subtract", additiveNudgeClip, { weight: -2, targetWeight: -2, blendMode: "additive" });
+const subtractiveAdditiveEvaluation = runtimeSubtractiveAdditive.evaluate();
+assert.ok(Math.abs(subtractiveAdditiveEvaluation.localPose[2]!.translation[0] - 8) < 1e-6, "negative additive runtime weights should subtract from the base pose");
+assert.equal(subtractiveAdditiveEvaluation.activeLayers.find((layer) => layer.id === "subtract")?.weight, -2);
+
+const runtimeAdditiveNegativeFade = new AnimationRuntime(skeleton);
+runtimeAdditiveNegativeFade.setLayer("fade-subtract", additiveNudgeClip, { weight: 0, targetWeight: -1, fadeSpeed: 1, blendMode: "additive" });
+runtimeAdditiveNegativeFade.update(Math.log(2));
+const additiveNegativeFadeEvaluation = runtimeAdditiveNegativeFade.evaluate();
+const additiveNegativeFadeLayer = additiveNegativeFadeEvaluation.activeLayers.find((layer) => layer.id === "fade-subtract");
+assert.ok(additiveNegativeFadeLayer, "additive layers should remain active while fading toward a negative target");
+assert.ok(Math.abs(additiveNegativeFadeLayer!.weight + 0.5) < 1e-6, "additive targetWeight should fade toward negative values");
+assert.equal(additiveNegativeFadeLayer!.targetWeight, -1);
+assert.ok(Math.abs(additiveNegativeFadeEvaluation.localPose[2]!.translation[0] + 0.5) < 1e-6);
+
+const runtimeNegativeOverride = new AnimationRuntime(skeleton);
+runtimeNegativeOverride.setLayer("negative-override", crossfadeNewClip, { weight: -1, targetWeight: -1 });
+const negativeOverrideEvaluation = runtimeNegativeOverride.evaluate();
+assert.equal(negativeOverrideEvaluation.activeLayers.length, 0, "negative override weights should sanitize to no influence");
+assert.equal(negativeOverrideEvaluation.localPose[2]!.translation[0], skeleton.restPose[2]!.translation[0]);
+
 const runtimeCrossfadeMasked = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
 runtimeCrossfadeMasked.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0 });
 runtimeCrossfadeMasked.setLayer("old", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 5 });

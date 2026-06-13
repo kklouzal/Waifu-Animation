@@ -82,17 +82,18 @@ export class AnimationRuntime {
   }
 
   setLayer(id: string, clip: AnimationClip, options: AnimationLayerOptions = {}): AnimationLayer {
+    const blendMode = options.blendMode ?? "override";
     const layer: AnimationLayer = {
       id,
       clip,
       time: finiteNonNegative(options.time, 0),
-      weight: finiteNonNegative(options.weight, 0),
-      targetWeight: finiteNonNegative(options.targetWeight ?? options.weight, 1),
+      weight: sanitizeLayerWeight(blendMode, options.weight, 0),
+      targetWeight: sanitizeLayerWeight(blendMode, options.targetWeight ?? options.weight, 1),
       fadeSpeed: finiteNonNegative(options.fadeSpeed, 8),
       speed: finiteNonNegative(options.speed, 1),
       priority: finiteNonNegative(options.priority, 0),
       loop: options.loop ?? clip.loop ?? false,
-      blendMode: options.blendMode ?? "override",
+      blendMode,
       ...(options.mask ? { mask: options.mask } : {})
     };
     this.layers.set(id, layer);
@@ -102,20 +103,21 @@ export class AnimationRuntime {
   crossfade(id: string, clip: AnimationClip, options: CrossfadeOptions = {}): AnimationLayer {
     const existing = this.layers.get(id);
     const resetTime = options.resetTime ?? !existing;
-    const targetWeight = finiteNonNegative(options.targetWeight ?? options.weight ?? 1, 1);
+    const blendMode = options.blendMode ?? "override";
+    const targetWeight = sanitizeLayerWeight(blendMode, options.targetWeight ?? options.weight ?? 1, 1);
     const fadeSpeed = finiteNonNegative(options.fadeSpeed, 8);
     const priority = finiteNonNegative(options.priority ?? existing?.priority, 0);
     const layer: AnimationLayer = {
       id,
       clip,
       time: finiteNonNegative(resetTime ? options.time : (options.time ?? existing?.time), 0),
-      weight: resetTime ? finiteNonNegative(options.weight, 0) : finiteNonNegative(existing?.weight ?? options.weight, 0),
+      weight: resetTime ? sanitizeLayerWeight(blendMode, options.weight, 0) : sanitizeLayerWeight(blendMode, existing?.weight ?? options.weight, 0),
       targetWeight,
       fadeSpeed,
       speed: finiteNonNegative(options.speed ?? existing?.speed, 1),
       priority,
       loop: options.loop ?? clip.loop ?? existing?.loop ?? false,
-      blendMode: options.blendMode ?? "override",
+      blendMode,
       ...(options.mask ? { mask: options.mask } : existing?.mask ? { mask: existing.mask } : {})
     };
     this.layers.set(id, layer);
@@ -158,7 +160,7 @@ export class AnimationRuntime {
       layer.time += delta * layer.speed;
       const alpha = 1 - Math.exp(-Math.max(0, layer.fadeSpeed) * delta);
       layer.weight += (layer.targetWeight - layer.weight) * alpha;
-      if (layer.targetWeight <= 0 && layer.weight < 0.0005) this.layers.delete(layer.id);
+      if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) this.layers.delete(layer.id);
     }
   }
 
@@ -166,7 +168,7 @@ export class AnimationRuntime {
     const diagnostics = options.diagnostics ? [] as RuntimeEvaluationDiagnostic[] : undefined;
     const active = Array.from(this.layers.values())
       .map((layer) => sanitizeLayerState(layer))
-      .filter((layer) => layer.weight > 0.0001)
+      .filter((layer) => isLayerActive(layer))
       .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
 
     const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];
@@ -223,14 +225,26 @@ function finiteNonNegative(value: number | undefined, fallback: number): number 
   return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
+function finiteSigned(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) ? value : fallback;
+}
+
+function sanitizeLayerWeight(blendMode: LayerBlendMode, value: number | undefined, fallback: number): number {
+  return blendMode === "additive" ? finiteSigned(value, fallback) : finiteNonNegative(value, fallback);
+}
+
 function sanitizeLayerState(layer: AnimationLayer): AnimationLayer {
   layer.time = finiteNonNegative(layer.time, 0);
-  layer.weight = finiteNonNegative(layer.weight, 0);
-  layer.targetWeight = finiteNonNegative(layer.targetWeight, 0);
+  layer.weight = sanitizeLayerWeight(layer.blendMode, layer.weight, 0);
+  layer.targetWeight = sanitizeLayerWeight(layer.blendMode, layer.targetWeight, 0);
   layer.fadeSpeed = finiteNonNegative(layer.fadeSpeed, 0);
   layer.speed = finiteNonNegative(layer.speed, 0);
   layer.priority = finiteNonNegative(layer.priority, 0);
   return layer;
+}
+
+function isLayerActive(layer: AnimationLayer): boolean {
+  return layer.blendMode === "additive" ? Math.abs(layer.weight) > 0.0001 : layer.weight > 0.0001;
 }
 
 function pushPoseDiagnostics(

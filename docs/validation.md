@@ -17,7 +17,7 @@ Current coverage includes:
 - local clip sampling;
 - local-to-model pose conversion;
 - weighted pose blending with masks;
-- runtime layer evaluation, opt-in evaluation diagnostics, and override crossfade orchestration;
+- runtime layer evaluation, subtractive additive runtime weights, opt-in evaluation diagnostics, and override crossfade orchestration;
 - declarative track-name masks;
 - Three adapter clip binding and runtime lane construction;
 - look-at target distribution;
