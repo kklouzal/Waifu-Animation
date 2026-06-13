@@ -786,14 +786,14 @@ assert.ok(
     Math.abs(retargetedToEquivalentRest[3] - sourceSampleWithLocalDelta[3]) < 1e-5,
   "retargeting should keep equivalent source and target rest bases stable"
 );
-const expectedNormalizedDelta = multiplyQuat(multiplyQuat(sourceRestX, expectedEquivalentRestDelta), invertQuat(sourceRestX));
+const expectedNormalizedDelta = expectedEquivalentRestDelta;
 const retargetedToNormalizedRest = retargetQuaternionSample(sourceRestX, [0, 0, 0, 1], sourceSampleWithLocalDelta);
 assert.ok(
   Math.abs(retargetedToNormalizedRest[0] - expectedNormalizedDelta[0]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[1] - expectedNormalizedDelta[1]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[2] - expectedNormalizedDelta[2]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[3] - expectedNormalizedDelta[3]) < 1e-5,
-  "retargeting should adapt source-local deltas into the target rest basis before applying normalized target rest"
+  "retargeting should preserve source local rotation deltas before applying normalized target rest"
 );
 
 const mismatchedBasisSourceRest = quatFromAxisAngle([0, 0, 1], Math.PI / 2);
@@ -829,12 +829,61 @@ mismatchedBasisBones.root.updateMatrixWorld(true);
 const mismatchedBasisActual = readChildDirection(mismatchedBasisBones.upper, mismatchedBasisBones.lower);
 const mismatchedBasisExpectedRotation = retargetQuaternionSample(mismatchedBasisSourceRest, [...mismatchedBasisTargetRest], mismatchedBasisSample);
 const mismatchedBasisExpected = rotateVec3ByQuat(mismatchedBasisExpectedRotation, [0, 1, 0]);
-const mismatchedBasisOldPath = rotateVec3ByQuat(multiplyQuat(invertQuat(mismatchedBasisSourceRest), mismatchedBasisSample), [0, 1, 0]);
-assert.ok(
-  !vectorNearlyEqual(mismatchedBasisExpected, mismatchedBasisOldPath, 1e-4),
-  "basis fixture should distinguish adapted retargeting from blind source-local delta reuse"
+const mismatchedBasisConjugatedPath = rotateVec3ByQuat(
+  multiplyQuat(
+    multiplyQuat(mismatchedBasisSourceRest, multiplyQuat(invertQuat(mismatchedBasisSourceRest), mismatchedBasisSample)),
+    invertQuat(mismatchedBasisSourceRest)
+  ),
+  [0, 1, 0]
 );
-assert.ok(vectorNearlyEqual(mismatchedBasisActual, mismatchedBasisExpected, 1e-5), "Three retargeting should render child direction in the adapted target basis");
+assert.ok(
+  !vectorNearlyEqual(mismatchedBasisExpected, mismatchedBasisConjugatedPath, 1e-4),
+  "basis fixture should distinguish local delta retargeting from rest-basis conjugation"
+);
+assert.ok(vectorNearlyEqual(mismatchedBasisActual, mismatchedBasisExpected, 1e-5), "Three retargeting should render child direction from the source local delta");
+
+const motusRightUpperLegRest: [number, number, number, number] = [-0.0006, 0.1254, 0.9682, -0.2166];
+const motusRightUpperLegSample: [number, number, number, number] = [-0.0035, 0.1166, 0.9636, -0.2406];
+const motusTargetRest: [number, number, number, number] = [0, 0, 0, 1];
+const motusLegBones = createSingleLimbBones(motusTargetRest, "rightUpperLeg", "rightLowerLeg", [0, -1, 0]);
+const motusLegClip = createThreeAnimationClip(
+  {
+    id: "motus-right-leg-pre-rotation",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "rightUpperLeg",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(motusRightUpperLegRest),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([...motusRightUpperLegRest, ...motusRightUpperLegSample])
+      }
+    ]
+  },
+  {
+    resolveBone: (bone) => (bone === "rightUpperLeg" ? motusLegBones.upper : null)
+  }
+);
+const motusLegMixer = new AnimationMixer(motusLegBones.root);
+const motusLegAction = motusLegMixer.clipAction(motusLegClip);
+motusLegAction.setLoop(LoopOnce, 1);
+motusLegAction.clampWhenFinished = true;
+motusLegAction.play();
+motusLegMixer.setTime(1);
+motusLegBones.root.updateMatrixWorld(true);
+const motusLegActual = readChildDirection(motusLegBones.upper, motusLegBones.lower);
+const motusLegExpectedRotation = retargetQuaternionSample(motusRightUpperLegRest, motusTargetRest, motusRightUpperLegSample);
+const motusLegExpected = rotateVec3ByQuat(motusLegExpectedRotation, [0, -1, 0]);
+const motusLegConjugatedRotation = multiplyQuat(
+  multiplyQuat(motusRightUpperLegRest, multiplyQuat(invertQuat(motusRightUpperLegRest), motusRightUpperLegSample)),
+  invertQuat(motusRightUpperLegRest)
+);
+const motusLegConjugated = rotateVec3ByQuat(motusLegConjugatedRotation, [0, -1, 0]);
+assert.ok(
+  !vectorNearlyEqual(motusLegExpected, motusLegConjugated, 1e-3),
+  "right-leg fixture should catch conjugating Motus Man pre-rotations into the target leg"
+);
+assert.ok(vectorNearlyEqual(motusLegActual, motusLegExpected, 1e-5), "right leg should preserve forward local stride instead of twisting inward");
 
 const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const mirroredLimbSourceRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
@@ -1405,18 +1454,18 @@ function createMirroredLimbBones() {
   return { root, leftUpperArm, leftLowerArm, rightUpperArm, rightLowerArm };
 }
 
-function createSingleLimbBones(targetRest: readonly number[]) {
+function createSingleLimbBones(targetRest: readonly number[], upperName = "leftUpperArm", lowerName = "leftLowerArm", lowerOffset: readonly number[] = [0, 1, 0]) {
   const root = new Object3D();
   root.name = "singleLimbRoot";
 
   const upper = new Object3D();
-  upper.name = "leftUpperArm";
+  upper.name = upperName;
   upper.quaternion.fromArray(targetRest);
   root.add(upper);
 
   const lower = new Object3D();
-  lower.name = "leftLowerArm";
-  lower.position.set(0, 1, 0);
+  lower.name = lowerName;
+  lower.position.set(lowerOffset[0] ?? 0, lowerOffset[1] ?? 1, lowerOffset[2] ?? 0);
   upper.add(lower);
 
   root.updateMatrixWorld(true);
