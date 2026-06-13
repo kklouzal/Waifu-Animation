@@ -997,6 +997,25 @@ const ik = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0],
 assert.ok(ik.targetReach > 0.9);
 assert.ok(Number.isFinite(ik.joint[0]));
 
+const fullReachIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0, -2, 0], pole: [0, 0, 1] });
+assert.equal(fullReachIk.clamped, false, "default IK softening must not report a physical reach clamp at full extension");
+assert.ok(Math.abs(fullReachIk.targetReach - 1) < 1e-5, "physically reachable targets should report full target reach");
+assert.ok(fullReachIk.solvedReach < 1, "default IK softening may still keep the solved endpoint short of full extension");
+assert.equal(fullReachIk.stretchLimited, true);
+
+const stretchLimitedIk = solveTwoBoneIk({
+  root: [0, 0, 0],
+  joint: [0, -1, 0],
+  end: [0, -2, 0],
+  target: [0, -1.5, 0],
+  pole: [0, 0, 1],
+  maxStretch: 0.5
+});
+assert.equal(stretchLimitedIk.clamped, false, "explicit stretch limits should not be mislabeled as physical reach clamps");
+assert.equal(stretchLimitedIk.stretchLimited, true);
+assert.ok(stretchLimitedIk.solvedReach < 0.7, "explicit stretch limit should still shorten the solved endpoint");
+assert.ok(Math.abs(stretchLimitedIk.targetReach - 1) < 1e-5);
+
 const ikCorrections = solveTwoBoneIkCorrections({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0.5, -1.5, 0], pole: [0, 0, 1] });
 const correctedUpper = rotateVec3ByQuat(ikCorrections.rootCorrection, [0, -1, 0]);
 assert.ok(Math.hypot(correctedUpper[0] - ikCorrections.correctedUpperDirection[0], correctedUpper[1] - ikCorrections.correctedUpperDirection[1], correctedUpper[2] - ikCorrections.correctedUpperDirection[2]) < 1e-5);
@@ -1035,6 +1054,14 @@ assert.equal(footPlant.plantedCount, 2);
 assert.ok(footPlant.pelvisOffset[1] < 0);
 assert.ok(footPlant.legs.every((leg) => leg.ik && Number.isFinite(leg.ik.joint[1])));
 assert.ok(footPlant.legs.every((leg) => leg.ik && Math.abs(Math.hypot(...leg.ik.rootCorrection) - 1) < 1e-5));
+
+const fullReachFootPlant = solveFootPlant(
+  [{ id: "left", hip: [0, 0, 0], knee: [0, -1, 0], ankle: [0, -1.9, 0], ground: { point: [0, -2.08, 0], normal: [0, 1, 0] } }],
+  { footHeight: 0.08, maxAnkleCorrection: 0.5 }
+);
+assert.equal(fullReachFootPlant.legs[0]!.ik?.clamped, false);
+assert.equal(fullReachFootPlant.legs[0]!.ik?.stretchLimited, true);
+assert.ok(!fullReachFootPlant.issues.includes("left: ik target reach clamped"), "default IK softening must not emit foot-plant reach clamp issues");
 
 const missingGroundPlant = solveFootPlant([{ id: "left", hip: [0, 1, 0], knee: [0, 0.5, 0], ankle: [0, 0.1, 0] }]);
 assert.equal(missingGroundPlant.plantedCount, 0);

@@ -28,7 +28,9 @@ export type TwoBoneIkResult = {
   joint: Vec3;
   end: Vec3;
   targetReach: number;
+  solvedReach: number;
   clamped: boolean;
+  stretchLimited: boolean;
 };
 
 export type TwoBoneIkCorrectionResult = TwoBoneIkResult & {
@@ -41,10 +43,15 @@ export type TwoBoneIkCorrectionResult = TwoBoneIkResult & {
 export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const upperLength = Math.max(1e-5, lengthVec3(subVec3(input.joint, input.root)));
   const lowerLength = Math.max(1e-5, lengthVec3(subVec3(input.end, input.joint)));
-  const maxReach = (upperLength + lowerLength) * (input.maxStretch ?? 0.998);
+  const physicalMinReach = Math.abs(upperLength - lowerLength) + 1e-5;
+  const physicalMaxReach = upperLength + lowerLength;
+  const maxReach = physicalMaxReach * (input.maxStretch ?? 0.998);
   const rootToTarget = subVec3(input.target, input.root);
   const targetDistance = lengthVec3(rootToTarget);
-  const clampedDistance = clamp(targetDistance, Math.abs(upperLength - lowerLength) + 1e-5, maxReach);
+  const clampedDistance = clamp(targetDistance, physicalMinReach, maxReach);
+  const physicalReachDistance = clamp(targetDistance, physicalMinReach, physicalMaxReach);
+  const physicalClamped = targetDistance < physicalMinReach - 1e-4 || targetDistance > physicalMaxReach + 1e-4;
+  const stretchLimited = !physicalClamped && Math.abs(clampedDistance - targetDistance) > 1e-4;
   const direction = normalizeVec3(rootToTarget, normalizeVec3(subVec3(input.end, input.root), [0, -1, 0]));
   const pole = bendPlanePole(input.pole ?? subVec3(input.joint, input.root), direction);
   const cosAngle = clamp((upperLength * upperLength + clampedDistance * clampedDistance - lowerLength * lowerLength) / (2 * upperLength * clampedDistance), -1, 1);
@@ -56,8 +63,10 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
     root: input.root,
     joint: newJoint,
     end: newEnd,
-    targetReach: targetDistance <= 1e-5 ? 0 : clampedDistance / targetDistance,
-    clamped: Math.abs(clampedDistance - targetDistance) > 1e-4
+    targetReach: targetDistance <= 1e-5 ? 0 : physicalClamped ? physicalReachDistance / targetDistance : 1,
+    solvedReach: targetDistance <= 1e-5 ? 0 : clampedDistance / targetDistance,
+    clamped: physicalClamped,
+    stretchLimited
   };
 }
 
