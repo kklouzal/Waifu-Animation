@@ -325,6 +325,49 @@ assert.ok(
   "inspectClipAsset should reject source rest quaternion metadata on non-rotation tracks"
 );
 
+const invalidZeroRotationSampleClip: AnimationClip = {
+  id: "invalid-zero-rotation-sample",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 0]) }]
+};
+const invalidZeroRotationSampleReport = validateAnimationInputs(skeleton, invalidZeroRotationSampleClip);
+assert.equal(invalidZeroRotationSampleReport.accepted, false);
+assert.ok(
+  invalidZeroRotationSampleReport.clipIssues.some(
+    (issue) =>
+      issue.track === 0 &&
+      issue.joint === "head" &&
+      issue.property === "quaternion" &&
+      issue.message === "rotation track quaternions must be normalizable"
+  ),
+  "validateAnimationInputs should reject zero-length rotation samples"
+);
+
+const invalidNonUnitRotationSampleInspection = inspectClipAsset(
+  {
+    id: "invalid-non-unit-rotation-sample",
+    label: "Invalid Non Unit Rotation Sample",
+    url: "/invalid-non-unit-rotation-sample.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  },
+  {
+    id: "invalid-non-unit-rotation-sample",
+    duration: 1,
+    tracks: [{ joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 2]) }]
+  }
+);
+assert.equal(invalidNonUnitRotationSampleInspection.accepted, false);
+assert.ok(
+  invalidNonUnitRotationSampleInspection.issues.some(
+    (issue) =>
+      issue.track === 0 &&
+      issue.joint === "head" &&
+      issue.property === "rotation" &&
+      issue.message === "rotation track quaternions must be normalized"
+  ),
+  "inspectClipAsset should reject materially non-normalized rotation samples"
+);
+
 const duplicateTrackTimeClip: AnimationClip = {
   id: "duplicate-track-time",
   duration: 1,
@@ -416,18 +459,20 @@ const oppositeQuaternionEndpointClip: AnimationClip = {
     }
   ]
 };
+const oppositeQuaternionEndpointInspection = inspectAnimationAsset(
+  {
+    id: "opposite-quaternion-endpoints",
+    label: "Opposite Quaternion Endpoints",
+    url: "/opposite-quaternion-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true
+  },
+  oppositeQuaternionEndpointClip,
+  skeleton
+);
+assert.equal(oppositeQuaternionEndpointInspection.status, "accepted", "sign-opposite normalized rotation endpoints should remain valid");
 assert.equal(
-  inspectAnimationAsset(
-    {
-      id: "opposite-quaternion-endpoints",
-      label: "Opposite Quaternion Endpoints",
-      url: "/opposite-quaternion-endpoints.waifuanim.bin",
-      format: WAIFU_ANIMATION_BINARY_FORMAT,
-      loop: true
-    },
-    oppositeQuaternionEndpointClip,
-    skeleton
-  ).issues.some((issue) => issue.message === loopEndpointWarning),
+  oppositeQuaternionEndpointInspection.issues.some((issue) => issue.message === loopEndpointWarning),
   false,
   "looping rotation endpoints should compare quaternion-equivalent signs"
 );

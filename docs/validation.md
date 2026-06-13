@@ -13,7 +13,7 @@ npm run build
 Current coverage includes:
 
 - finite transform and clip validation, including duplicate resolved target-channel rejection;
-- quaternion sanitization and shortest-path retargeting, including normalized `sourceRestQuaternion` metadata validation;
+- quaternion sanitization and shortest-path retargeting, including normalized `sourceRestQuaternion` metadata and rotation sample quaternion validation;
 - local clip sampling;
 - local-to-model pose conversion;
 - weighted pose blending with masks;

@@ -35,6 +35,7 @@ export type SampleOptions = {
 };
 
 const SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
+const ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
 
 export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipValidationIssue[] {
   const issues: ClipValidationIssue[] = [];
@@ -84,8 +85,40 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     if (track.values.some((value) => !Number.isFinite(value))) {
       issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track values must be finite" });
     }
+    validateRotationTrackQuaternions(issues, track, index, String(jointName ?? ""), property);
   }
   return issues;
+}
+
+function validateRotationTrackQuaternions(
+  issues: ClipValidationIssue[],
+  track: AnimationTrack,
+  index: number,
+  joint: string,
+  property: ReturnType<typeof normalizedTrackProperty>
+): void {
+  if (property !== "rotation") return;
+  if (track.values.some((value) => !Number.isFinite(value))) return;
+  let reportedNonNormalizable = false;
+  let reportedNonNormalized = false;
+  const sampleCount = Math.floor(track.values.length / 4);
+  for (let sample = 0; sample < sampleCount; sample += 1) {
+    const offset = sample * 4;
+    const length = Math.hypot(track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!, track.values[offset + 3]!);
+    if (length <= EPSILON) {
+      if (!reportedNonNormalizable) {
+        issues.push({ track: index, joint, property: track.property, message: "rotation track quaternions must be normalizable" });
+        reportedNonNormalizable = true;
+      }
+      continue;
+    }
+    const lengthSquared = length * length;
+    if (Math.abs(lengthSquared - 1) > ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE && !reportedNonNormalized) {
+      issues.push({ track: index, joint, property: track.property, message: "rotation track quaternions must be normalized" });
+      reportedNonNormalized = true;
+    }
+    if (reportedNonNormalizable && reportedNonNormalized) return;
+  }
 }
 
 function validateSourceRestQuaternion(
