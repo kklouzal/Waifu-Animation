@@ -12,8 +12,8 @@ import {
   type Object3D
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
-import { type FootPlantResult } from "./ik.js";
-import { type Quat, type Vec3, clamp, clamp01, dampAlpha, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, smoothStep } from "./math.js";
+import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
+import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
   BASE_PROCEDURAL_TRACK_POLICY,
@@ -178,6 +178,29 @@ export type ThreePresenceApplyResult = {
   applied: boolean;
   targets: ThreePresenceAppliedTarget[];
   issues: string[];
+};
+
+export type ThreeLocomotionUpperBodyTargetsOptions = {
+  influence?: number;
+  phase?: number;
+  swing?: number;
+  speed?: number;
+};
+
+export type ThreeLocomotionUpperBodyPostureOptions = ThreeLocomotionUpperBodyTargetsOptions & {
+  resolveBone: ThreeBoneResolver;
+  deltaSeconds: number;
+  enabled?: boolean;
+};
+
+export type ThreeLocomotionArmSide = "left" | "right";
+
+export type ThreeLocomotionArmTarget = {
+  side: ThreeLocomotionArmSide;
+  appliedUpperArm: boolean;
+  appliedLowerArm: boolean;
+  appliedUpperArmDirection: boolean;
+  skippedReason?: string;
 };
 
 export type ThreeFootPlantLegBinding = {
@@ -504,6 +527,10 @@ function sanitizeThreeRuntimeWeight(value: number): number {
   return clamp01(Number.isFinite(value) ? value : 0);
 }
 
+function sanitizeThreeRuntimePhase(value: number): number {
+  return euclideanModulo(Number.isFinite(value) ? value : 0, 1);
+}
+
 function sanitizeThreeRuntimeCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
@@ -543,6 +570,139 @@ export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): T
     if (!appliedTarget.applied) appliedTarget.skippedReason = "invalid-or-negligible-target";
   }
   return { applied: targets.some((target) => target.applied), targets, issues };
+}
+
+export function createThreeLocomotionUpperBodyTargets(options: ThreeLocomotionUpperBodyTargetsOptions = {}): ThreePresenceBoneTarget[] {
+  const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
+  if (influence <= 0) return [];
+  const phase = sanitizeThreeRuntimePhase(options.phase ?? 0);
+  const swing = clamp(Number.isFinite(options.swing ?? Number.NaN) ? options.swing! : Math.sin(phase * Math.PI * 2), -1, 1);
+  const counterSwing = -swing;
+  const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 18, 18);
+
+  return [
+    { bone: "leftShoulder", rotation: [0.015, -0.018, 0.026 + swing * 0.014], influence: influence * 0.72, speed },
+    { bone: "rightShoulder", rotation: [0.015, 0.018, -0.026 + counterSwing * 0.014], influence: influence * 0.72, speed },
+    { bone: "leftUpperArm", rotation: [0.26 + swing * 0.18, 0.055 + swing * 0.03, 1.64 + swing * 0.05], influence, speed: speed * 1.4 },
+    { bone: "rightUpperArm", rotation: [0.26 + counterSwing * 0.18, -0.055 + counterSwing * 0.03, -1.64 + counterSwing * 0.05], influence, speed: speed * 1.4 },
+    { bone: "leftLowerArm", rotation: [1.55 + Math.max(0, -swing) * 0.24, 0.42 + swing * 0.05, -1.18 - Math.max(0, swing) * 0.18], influence, speed: speed * 1.15 },
+    { bone: "rightLowerArm", rotation: [1.55 + Math.max(0, -counterSwing) * 0.24, -0.42 + counterSwing * 0.05, 1.18 + Math.max(0, counterSwing) * 0.18], influence, speed: speed * 1.15 },
+    { bone: "leftHand", rotation: [0.16, 0.08, -0.2 + swing * 0.024], influence: influence * 0.82, speed },
+    { bone: "rightHand", rotation: [0.16, -0.08, 0.2 + counterSwing * 0.024], influence: influence * 0.82, speed }
+  ];
+}
+
+export function applyThreeLocomotionUpperBodyPosture(options: ThreeLocomotionUpperBodyPostureOptions): ThreePresenceApplyResult {
+  const targetOptions: ThreeLocomotionUpperBodyTargetsOptions = {};
+  if (options.influence !== undefined) targetOptions.influence = options.influence;
+  if (options.phase !== undefined) targetOptions.phase = options.phase;
+  if (options.swing !== undefined) targetOptions.swing = options.swing;
+  if (options.speed !== undefined) targetOptions.speed = options.speed;
+  const applyOptions: ThreePresenceApplyOptions = {
+    resolveBone: options.resolveBone,
+    deltaSeconds: options.deltaSeconds,
+    targets: createThreeLocomotionUpperBodyTargets(targetOptions)
+  };
+  if (options.enabled !== undefined) applyOptions.enabled = options.enabled;
+  const result = applyThreePresenceTargets(applyOptions);
+  const arms = applyThreeLocomotionArmTargets(options);
+  return {
+    applied: result.applied || arms.some((arm) => arm.appliedUpperArmDirection || arm.appliedUpperArm || arm.appliedLowerArm),
+    targets: [
+      ...result.targets,
+      ...arms.flatMap((arm) => [
+        {
+          bone: `${arm.side}UpperArm`,
+          applied: arm.appliedUpperArmDirection || arm.appliedUpperArm,
+          influence: sanitizeThreeRuntimeWeight(options.influence ?? 1),
+          ...(arm.skippedReason && !arm.appliedUpperArm ? { skippedReason: arm.skippedReason } : {})
+        },
+        {
+          bone: `${arm.side}LowerArm`,
+          applied: arm.appliedLowerArm,
+          influence: sanitizeThreeRuntimeWeight(options.influence ?? 1),
+          ...(arm.skippedReason && !arm.appliedLowerArm ? { skippedReason: arm.skippedReason } : {})
+        }
+      ])
+    ],
+    issues: result.issues
+  };
+}
+
+function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPostureOptions): ThreeLocomotionArmTarget[] {
+  if (options.enabled === false) return [];
+  const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
+  const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 18, 18);
+  const amount = clamp01(influence * (options.deltaSeconds === undefined ? 1 : dampAlpha(speed * 1.25, options.deltaSeconds)));
+  if (amount <= 0) {
+    return [
+      { side: "left", appliedUpperArmDirection: false, appliedUpperArm: false, appliedLowerArm: false, skippedReason: "zero-influence" },
+      { side: "right", appliedUpperArmDirection: false, appliedUpperArm: false, appliedLowerArm: false, skippedReason: "zero-influence" }
+    ];
+  }
+
+  const hips = options.resolveBone("hips");
+  const leftUpper = options.resolveBone("leftUpperArm");
+  const rightUpper = options.resolveBone("rightUpperArm");
+  const shoulderWidth = estimateShoulderWidth(leftUpper, rightUpper);
+  const phase = sanitizeThreeRuntimePhase(options.phase ?? 0);
+  const swing = clamp(Number.isFinite(options.swing ?? Number.NaN) ? options.swing! : Math.sin(phase * Math.PI * 2), -1, 1);
+
+  return (["left", "right"] as const).map((side) => {
+    const sign = side === "left" ? 1 : -1;
+    const upper = options.resolveBone(`${side}UpperArm`);
+    const lower = options.resolveBone(`${side}LowerArm`);
+    const hand = options.resolveBone(`${side}Hand`);
+    if (!upper || !lower || !hand) {
+      return { side, appliedUpperArmDirection: false, appliedUpperArm: false, appliedLowerArm: false, skippedReason: "missing-arm-bone" };
+    }
+
+    upper.parent?.updateMatrixWorld(true);
+    upper.updateMatrixWorld(true);
+    lower.updateMatrixWorld(true);
+    hand.updateMatrixWorld(true);
+
+    const root = objectWorldVec3(upper);
+    const joint = objectWorldVec3(lower);
+    const end = objectWorldVec3(hand);
+    const hip = hips ? objectWorldVec3(hips) : [root[0], root[1] - 0.52, root[2]] satisfies Vec3;
+    const upperLength = lengthVec3(subVec3(joint, root));
+    const lowerLength = lengthVec3(subVec3(end, joint));
+    const armLength = Math.max(0.25, upperLength + lowerLength);
+    const sideSwing = side === "left" ? swing : -swing;
+    const desiredUpperDirection = normalizeVec3([sign * 0.02, -0.985, 0.12 + sideSwing * 0.02], [0, -1, 0]);
+    const upperCorrection = quatFromUnitVectors(normalizeVec3(subVec3(joint, root), desiredUpperDirection), desiredUpperDirection);
+    const appliedUpperArmDirection = applyWorldQuaternionCorrection(upper, upperCorrection, amount);
+    upper.updateMatrixWorld(true);
+    lower.updateMatrixWorld(true);
+    hand.updateMatrixWorld(true);
+    const correctedRoot = objectWorldVec3(upper);
+    const correctedJoint = objectWorldVec3(lower);
+    const correctedEnd = objectWorldVec3(hand);
+    const desiredJoint = addVec3(correctedRoot, scaleVec3(desiredUpperDirection, upperLength));
+    const handTarget: Vec3 = [
+      hip[0] + sign * Math.min(0.038, shoulderWidth * 0.08),
+      correctedRoot[1] - armLength * 0.72,
+      hip[2] + 0.045 + sideSwing * 0.018
+    ];
+    const pole = normalizeVec3(subVec3(desiredJoint, correctedRoot), desiredUpperDirection);
+    const ik = solveTwoBoneIkCorrections({
+      root: correctedRoot,
+      joint: correctedJoint,
+      end: correctedEnd,
+      target: handTarget,
+      pole: [sign * Math.max(0.02, shoulderWidth * 0.06), pole[1] - 0.08, 0.42 + sideSwing * 0.035],
+      maxStretch: 0.58
+    });
+
+    const appliedUpperArm = applyWorldQuaternionCorrection(upper, ik.rootCorrection, amount);
+    const appliedLowerArm = applyWorldQuaternionCorrection(lower, ik.jointCorrection, amount);
+    upper.updateMatrixWorld(true);
+    lower.updateMatrixWorld(true);
+    const finalUpperDirectionCorrection = quatFromUnitVectors(normalizeVec3(subVec3(objectWorldVec3(lower), objectWorldVec3(upper)), desiredUpperDirection), desiredUpperDirection);
+    const appliedFinalUpperArmDirection = applyWorldQuaternionCorrection(upper, finalUpperDirectionCorrection, amount);
+    return { side, appliedUpperArmDirection: appliedUpperArmDirection || appliedFinalUpperArmDirection, appliedUpperArm, appliedLowerArm };
+  });
 }
 
 export function clearThreeFootPlantOffsets(options: ThreeFootPlantClearOptions): ThreeFootPlantClearResult {
@@ -696,6 +856,20 @@ function worldOffsetToLocal(bone: Object3D, offset: Vec3, amount: number): Vec3 
     tmpWorldDirection.applyQuaternion(tmpParentWorld);
   }
   return [tmpWorldDirection.x, tmpWorldDirection.y, tmpWorldDirection.z];
+}
+
+function objectWorldVec3(object: Object3D): Vec3 {
+  object.getWorldPosition(tmpWorldDirection);
+  return [tmpWorldDirection.x, tmpWorldDirection.y, tmpWorldDirection.z];
+}
+
+function estimateShoulderWidth(leftUpper: Object3D | null | undefined, rightUpper: Object3D | null | undefined): number {
+  if (!leftUpper || !rightUpper) return 0.42;
+  leftUpper.updateMatrixWorld(true);
+  rightUpper.updateMatrixWorld(true);
+  const left = objectWorldVec3(leftUpper);
+  const right = objectWorldVec3(rightUpper);
+  return clamp(lengthVec3([left[0] - right[0], left[1] - right[1], left[2] - right[2]]), 0.22, 0.72);
 }
 
 function quatToThree(value: Quat): Quaternion {

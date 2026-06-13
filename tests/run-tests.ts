@@ -10,6 +10,7 @@ import {
   VisemeMixer,
   applyAdditivePose,
   applyThreeFootPlantResult,
+  applyThreeLocomotionUpperBodyPosture,
   applyThreePresenceTargets,
   calculateThreeBaseLoopSeamWindow,
   calculateThreeBaseLoopTransitionWeights,
@@ -18,6 +19,7 @@ import {
   clearThreeFootPlantOffsets,
   blendPoses,
   clamp01,
+  createThreeLocomotionUpperBodyTargets,
   createJointMask,
   DEFAULT_BLEND_THRESHOLD,
   createThreeAnimationClip,
@@ -32,7 +34,9 @@ import {
   clonePose,
   cloneTransform,
   distributeLookAt,
+  applySourceTrackPolicy,
   filterTracksByNamePolicy,
+  LOCOMOTION_BASE_SOURCE_TRACK_POLICY,
   inspectAnimationAsset,
   inspectClipAsset,
   localToModelPose,
@@ -653,6 +657,124 @@ assert.deepEqual(
     { exclude: [/hips\.position$/, /thumb/i] }
   ).map((track) => track.name),
   ["head.quaternion"]
+);
+
+const locomotionAuthoredClip: AnimationClip = {
+  id: "locomotion-authored-upper",
+  duration: 1,
+  loop: true,
+  tracks: [
+    { humanBone: "hips", property: "position", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) },
+    { humanBone: "spine", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftShoulder", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftUpperArm", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "rightLowerArm", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "rightHand", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftIndexProximal", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "rightThumbDistal", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftUpperLeg", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "leftLowerLeg", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
+    { humanBone: "rightFoot", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) }
+  ]
+};
+const locomotionBaseClip = applySourceTrackPolicy(locomotionAuthoredClip, LOCOMOTION_BASE_SOURCE_TRACK_POLICY);
+assert.deepEqual(
+  locomotionBaseClip.tracks.map((track) => track.humanBone ?? track.joint),
+  ["hips", "spine", "leftUpperLeg", "leftLowerLeg", "rightFoot"],
+  "locomotion base policy should strip authored arm, shoulder, hand, and finger tracks while keeping root/spine/legs/feet"
+);
+assert.equal(locomotionAuthoredClip.tracks.length, 11, "source track policy should not mutate the original clip");
+
+const locomotionRuntimeRoot = new Object3D();
+const locomotionRuntimeBones = new Map<string, Object3D>();
+for (const name of ["hips", "spine", "leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand", "leftIndexProximal", "rightThumbDistal", "leftUpperLeg", "leftLowerLeg", "rightFoot"]) {
+  const bone = new Object3D();
+  bone.name = name;
+  locomotionRuntimeRoot.add(bone);
+  locomotionRuntimeBones.set(name, bone);
+}
+const locomotionThreeClip = createThreeAnimationClip(locomotionBaseClip, {
+  resolveBone: (bone) => locomotionRuntimeBones.get(bone)
+});
+assert.deepEqual(
+  locomotionThreeClip.tracks.map((track) => track.name.split(".").at(-1)),
+  ["position", "quaternion", "quaternion", "quaternion", "quaternion"],
+  "runtime clip creation should consume source-filtered locomotion tracks"
+);
+assert.equal(
+  locomotionThreeClip.tracks.some((track) =>
+    ["leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand", "leftIndexProximal", "rightThumbDistal"].some((name) => track.name.includes(locomotionRuntimeBones.get(name)!.uuid))
+  ),
+  false,
+  "runtime locomotion clip should not contain authored upper-body tracks after policy filtering"
+);
+
+const locomotionUpperBodyTargets = createThreeLocomotionUpperBodyTargets({ influence: 1.5, phase: 0.25, speed: 20 });
+assert.deepEqual(
+  locomotionUpperBodyTargets.map((target) => target.bone),
+  ["leftShoulder", "rightShoulder", "leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm", "leftHand", "rightHand"],
+  "locomotion posture helper should expose a reusable full arm target set"
+);
+assert.equal(locomotionUpperBodyTargets.find((target) => target.bone === "leftUpperArm")?.influence, 1, "locomotion posture influence should clamp");
+assert.ok(
+  (locomotionUpperBodyTargets.find((target) => target.bone === "leftUpperArm")?.rotation[2] ?? 0) > 1,
+  "locomotion posture should roll the left upper arm down from a horizontal source-stripped pose"
+);
+assert.ok(
+  (locomotionUpperBodyTargets.find((target) => target.bone === "rightUpperArm")?.rotation[2] ?? 0) < -1,
+  "locomotion posture should roll the right upper arm down from a horizontal source-stripped pose"
+);
+assert.ok(
+  (locomotionUpperBodyTargets.find((target) => target.bone === "leftUpperArm")?.rotation[0] ?? 0) >
+    (createThreeLocomotionUpperBodyTargets({ influence: 1, phase: 0.75 }).find((target) => target.bone === "leftUpperArm")?.rotation[0] ?? 0),
+  "locomotion posture should phase arm swing"
+);
+
+const locomotionPostureBones = new Map<string, Object3D>();
+const locomotionPostureRoot = new Object3D();
+for (const name of locomotionUpperBodyTargets.map((target) => target.bone)) {
+  const bone = new Object3D();
+  bone.name = name;
+  locomotionPostureBones.set(name, bone);
+}
+const locomotionPostureHips = new Object3D();
+locomotionPostureHips.name = "hips";
+locomotionPostureBones.set("hips", locomotionPostureHips);
+locomotionPostureBones.get("leftUpperArm")!.position.set(0.24, 1.38, 0);
+locomotionPostureBones.get("leftLowerArm")!.position.set(0.53, 0.98, 0);
+locomotionPostureBones.get("leftHand")!.position.set(0.72, 0.58, 0);
+locomotionPostureBones.get("rightUpperArm")!.position.set(-0.24, 1.38, 0);
+locomotionPostureBones.get("rightLowerArm")!.position.set(-0.53, 0.98, 0);
+locomotionPostureBones.get("rightHand")!.position.set(-0.72, 0.58, 0);
+locomotionPostureRoot.add(locomotionPostureHips);
+locomotionPostureRoot.add(locomotionPostureBones.get("leftUpperArm")!);
+locomotionPostureBones.get("leftUpperArm")!.add(locomotionPostureBones.get("leftLowerArm")!);
+locomotionPostureBones.get("leftLowerArm")!.add(locomotionPostureBones.get("leftHand")!);
+locomotionPostureRoot.add(locomotionPostureBones.get("rightUpperArm")!);
+locomotionPostureBones.get("rightUpperArm")!.add(locomotionPostureBones.get("rightLowerArm")!);
+locomotionPostureBones.get("rightLowerArm")!.add(locomotionPostureBones.get("rightHand")!);
+const locomotionPostureResult = applyThreeLocomotionUpperBodyPosture({
+  resolveBone: (bone) => locomotionPostureBones.get(bone),
+  deltaSeconds: 1,
+  phase: 0,
+  influence: 1,
+  speed: 100
+});
+assert.equal(locomotionPostureResult.applied, true, "locomotion posture should apply through the same target path as presence");
+locomotionPostureRoot.updateMatrixWorld(true);
+const leftPostureRoot = locomotionPostureBones.get("leftUpperArm")!.getWorldPosition(new Vector3());
+const leftPostureJoint = locomotionPostureBones.get("leftLowerArm")!.getWorldPosition(new Vector3());
+const leftPostureUpperDirection = leftPostureJoint.sub(leftPostureRoot).normalize();
+const rightPostureRoot = locomotionPostureBones.get("rightUpperArm")!.getWorldPosition(new Vector3());
+const rightPostureJoint = locomotionPostureBones.get("rightLowerArm")!.getWorldPosition(new Vector3());
+const rightPostureUpperDirection = rightPostureJoint.sub(rightPostureRoot).normalize();
+assert.ok(
+  leftPostureUpperDirection.y < -0.6 && Math.abs(leftPostureUpperDirection.x) < 0.25 && rightPostureUpperDirection.y < -0.6 && Math.abs(rightPostureUpperDirection.x) < 0.25,
+  "locomotion posture application should keep upper arms close to the torso in model space"
+);
+assert.ok(
+  Math.abs(locomotionPostureBones.get("leftLowerArm")!.quaternion.x) > 0.05 || Math.abs(locomotionPostureBones.get("leftLowerArm")!.quaternion.z) > 0.05,
+  "locomotion posture IK should bend the lower arm toward the hand target"
 );
 
 const runtime = new AnimationRuntime(skeleton);
