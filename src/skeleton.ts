@@ -115,7 +115,13 @@ export function createSkeleton(definitions: JointDefinition[]): Skeleton {
   const joints = definitions.map((joint, index): SkeletonJoint => {
     const parentIndex = resolveParentIndex(joint, index, nameToIndex);
     if (parentIndex >= index) throw new Error(`joint ${joint.name} parent must appear before child`);
-    if (joint.humanoid) humanoid.set(joint.humanoid, index);
+    if (joint.humanoid) {
+      const existingIndex = humanoid.get(joint.humanoid);
+      if (existingIndex !== undefined) {
+        throw new Error(`duplicate humanoid bone ${joint.humanoid} on joints ${definitions[existingIndex]!.name} and ${joint.name}`);
+      }
+      humanoid.set(joint.humanoid, index);
+    }
     return {
       name: joint.name,
       parentIndex,
@@ -146,12 +152,25 @@ function resolveParentIndex(joint: JointDefinition, index: number, nameToIndex: 
 export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] {
   const issues: SkeletonValidationIssue[] = [];
   if (skeleton.joints.length === 0) issues.push({ message: "skeleton has no joints" });
+  const humanoidToIndex = new Map<HumanoidBoneName, number>();
   for (let index = 0; index < skeleton.joints.length; index += 1) {
     const joint = skeleton.joints[index]!;
     if (!joint.name) issues.push({ index, message: "joint has no name" });
     if (joint.parentIndex >= index) issues.push({ index, joint: joint.name, message: "parent index must be before child" });
     if (joint.parentIndex < NO_PARENT) issues.push({ index, joint: joint.name, message: "parent index is invalid" });
     if (!isFiniteTransform(joint.rest)) issues.push({ index, joint: joint.name, message: "rest transform is invalid" });
+    if (joint.humanoid) {
+      const existingIndex = humanoidToIndex.get(joint.humanoid);
+      if (existingIndex !== undefined) {
+        issues.push({
+          index,
+          joint: joint.name,
+          message: `duplicate humanoid bone ${joint.humanoid} also assigned to ${skeleton.joints[existingIndex]!.name}`
+        });
+      } else {
+        humanoidToIndex.set(joint.humanoid, index);
+      }
+    }
   }
   return issues;
 }
@@ -182,4 +201,3 @@ export function localToModelPose(skeleton: Skeleton, localPose: readonly Transfo
   }
   return out;
 }
-

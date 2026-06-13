@@ -57,6 +57,7 @@ import {
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   toFloat32Array,
+  validateSkeleton,
   validateAnimationInputs
 } from "../src/index.js";
 
@@ -110,6 +111,25 @@ assert.deepEqual(clonedTransform.scale, [1, 2, 1]);
 const repairedRestSkeleton = createSkeleton([{ name: "root", rest: { translation: [Number.NaN, 5, Infinity], scale: [Number.NaN, 3, -Infinity] } }]);
 assert.deepEqual(repairedRestSkeleton.restPose[0]!.translation, [0, 5, 0]);
 assert.deepEqual(repairedRestSkeleton.restPose[0]!.scale, [1, 3, 1]);
+assert.throws(
+  () =>
+    createSkeleton([
+      { name: "hips", humanoid: "hips" },
+      { name: "pelvis", humanoid: "hips" }
+    ]),
+  /duplicate humanoid bone hips on joints hips and pelvis/,
+  "createSkeleton should reject duplicate humanoid bone assignments"
+);
+const duplicateHumanoidSkeleton = {
+  ...skeleton,
+  joints: skeleton.joints.map((joint, index) => (index === 3 ? { ...joint, humanoid: "head" as const } : joint))
+};
+assert.ok(
+  validateSkeleton(duplicateHumanoidSkeleton).some(
+    (issue) => issue.index === 3 && issue.joint === "leftUpperArm" && issue.message === "duplicate humanoid bone head also assigned to head"
+  ),
+  "validateSkeleton should report duplicate humanoid bone assignments on malformed skeletons"
+);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
