@@ -777,15 +777,64 @@ assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
 const sourceRestX = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const localSourceDeltaY = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
 const sourceSampleWithLocalDelta = multiplyQuat(sourceRestX, localSourceDeltaY);
-const expectedNormalizedDelta = multiplyQuat(invertQuat(sourceRestX), sourceSampleWithLocalDelta);
+const expectedEquivalentRestDelta = multiplyQuat(invertQuat(sourceRestX), sourceSampleWithLocalDelta);
+const retargetedToEquivalentRest = retargetQuaternionSample(sourceRestX, sourceRestX, sourceSampleWithLocalDelta);
+assert.ok(
+  Math.abs(retargetedToEquivalentRest[0] - sourceSampleWithLocalDelta[0]) < 1e-5 &&
+    Math.abs(retargetedToEquivalentRest[1] - sourceSampleWithLocalDelta[1]) < 1e-5 &&
+    Math.abs(retargetedToEquivalentRest[2] - sourceSampleWithLocalDelta[2]) < 1e-5 &&
+    Math.abs(retargetedToEquivalentRest[3] - sourceSampleWithLocalDelta[3]) < 1e-5,
+  "retargeting should keep equivalent source and target rest bases stable"
+);
+const expectedNormalizedDelta = multiplyQuat(multiplyQuat(sourceRestX, expectedEquivalentRestDelta), invertQuat(sourceRestX));
 const retargetedToNormalizedRest = retargetQuaternionSample(sourceRestX, [0, 0, 0, 1], sourceSampleWithLocalDelta);
 assert.ok(
   Math.abs(retargetedToNormalizedRest[0] - expectedNormalizedDelta[0]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[1] - expectedNormalizedDelta[1]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[2] - expectedNormalizedDelta[2]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[3] - expectedNormalizedDelta[3]) < 1e-5,
-  "retargeting should extract source-local deltas before applying target rest so non-commuting limb rotations keep their local axis"
+  "retargeting should adapt source-local deltas into the target rest basis before applying normalized target rest"
 );
+
+const mismatchedBasisSourceRest = quatFromAxisAngle([0, 0, 1], Math.PI / 2);
+const mismatchedBasisTargetRest = [0, 0, 0, 1] as const;
+const mismatchedBasisDelta = quatFromAxisAngle([1, 0, 0], Math.PI / 3);
+const mismatchedBasisSample = multiplyQuat(mismatchedBasisSourceRest, mismatchedBasisDelta);
+const mismatchedBasisBones = createSingleLimbBones(mismatchedBasisTargetRest);
+const mismatchedBasisClip = createThreeAnimationClip(
+  {
+    id: "mismatched-rest-basis",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "leftUpperArm",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(mismatchedBasisSourceRest),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([...mismatchedBasisSourceRest, ...mismatchedBasisSample])
+      }
+    ]
+  },
+  {
+    resolveBone: (bone) => (bone === "leftUpperArm" ? mismatchedBasisBones.upper : null)
+  }
+);
+const mismatchedBasisMixer = new AnimationMixer(mismatchedBasisBones.root);
+const mismatchedBasisAction = mismatchedBasisMixer.clipAction(mismatchedBasisClip);
+mismatchedBasisAction.setLoop(LoopOnce, 1);
+mismatchedBasisAction.clampWhenFinished = true;
+mismatchedBasisAction.play();
+mismatchedBasisMixer.setTime(1);
+mismatchedBasisBones.root.updateMatrixWorld(true);
+const mismatchedBasisActual = readChildDirection(mismatchedBasisBones.upper, mismatchedBasisBones.lower);
+const mismatchedBasisExpectedRotation = retargetQuaternionSample(mismatchedBasisSourceRest, [...mismatchedBasisTargetRest], mismatchedBasisSample);
+const mismatchedBasisExpected = rotateVec3ByQuat(mismatchedBasisExpectedRotation, [0, 1, 0]);
+const mismatchedBasisOldPath = rotateVec3ByQuat(multiplyQuat(invertQuat(mismatchedBasisSourceRest), mismatchedBasisSample), [0, 1, 0]);
+assert.ok(
+  !vectorNearlyEqual(mismatchedBasisExpected, mismatchedBasisOldPath, 1e-4),
+  "basis fixture should distinguish adapted retargeting from blind source-local delta reuse"
+);
+assert.ok(vectorNearlyEqual(mismatchedBasisActual, mismatchedBasisExpected, 1e-5), "Three retargeting should render child direction in the adapted target basis");
 
 const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const mirroredLimbSourceRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
@@ -1354,6 +1403,24 @@ function createMirroredLimbBones() {
 
   root.updateMatrixWorld(true);
   return { root, leftUpperArm, leftLowerArm, rightUpperArm, rightLowerArm };
+}
+
+function createSingleLimbBones(targetRest: readonly number[]) {
+  const root = new Object3D();
+  root.name = "singleLimbRoot";
+
+  const upper = new Object3D();
+  upper.name = "leftUpperArm";
+  upper.quaternion.fromArray(targetRest);
+  root.add(upper);
+
+  const lower = new Object3D();
+  lower.name = "leftLowerArm";
+  lower.position.set(0, 1, 0);
+  upper.add(lower);
+
+  root.updateMatrixWorld(true);
+  return { root, upper, lower };
 }
 
 function readChildDirection(parent: Object3D, child: Object3D): [number, number, number] {
