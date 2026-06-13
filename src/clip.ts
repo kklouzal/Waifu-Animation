@@ -232,10 +232,11 @@ export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boole
 
 export function sampleTrack(track: AnimationTrack, timeSeconds: number): number[] {
   const stride = trackStride(track.property);
-  if (track.times.length === 0) return stride === 4 ? [0, 0, 0, 1] : [0, 0, 0];
-  if (timeSeconds <= track.times[0]!) return readTrackValue(track, 0, stride);
+  const property = normalizedTrackProperty(track.property);
+  if (track.times.length === 0) return defaultTrackSample(property);
+  if (timeSeconds <= track.times[0]!) return readTrackValue(track, 0, stride, property);
   const last = track.times.length - 1;
-  if (timeSeconds >= track.times[last]!) return readTrackValue(track, last, stride);
+  if (timeSeconds >= track.times[last]!) return readTrackValue(track, last, stride, property);
   let low = 1;
   let high = track.times.length - 1;
   while (low < high) {
@@ -248,15 +249,21 @@ export function sampleTrack(track: AnimationTrack, timeSeconds: number): number[
   const start = track.times[lower]!;
   const end = track.times[upper]!;
   const t = end > start ? (timeSeconds - start) / (end - start) : 0;
-  const a = readTrackValue(track, lower, stride);
-  const b = readTrackValue(track, upper, stride);
+  const a = readTrackValue(track, lower, stride, property);
+  const b = readTrackValue(track, upper, stride, property);
   if (stride === 4) return slerpQuat(a as Quat, b as Quat, t);
   return lerpVec3(a as [number, number, number], b as [number, number, number], t);
 }
 
-function readTrackValue(track: AnimationTrack, keyIndex: number, stride: 3 | 4): number[] {
+function defaultTrackSample(property: ReturnType<typeof normalizedTrackProperty>): number[] {
+  if (property === "rotation") return [0, 0, 0, 1];
+  if (property === "scale") return [1, 1, 1];
+  return [0, 0, 0];
+}
+
+function readTrackValue(track: AnimationTrack, keyIndex: number, stride: 3 | 4, property: ReturnType<typeof normalizedTrackProperty>): number[] {
   const offset = keyIndex * stride;
-  const fallback = stride === 4 ? [0, 0, 0, 1] : [0, 0, 0];
+  const fallback = defaultTrackSample(property);
   const values = fallback.map((value, index) => track.values[offset + index] ?? value);
   return stride === 4 ? normalizeQuat(values as Quat) : values;
 }

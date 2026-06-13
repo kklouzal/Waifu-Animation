@@ -502,6 +502,22 @@ assert.equal(
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
 assert.ok(sampled[2]!.rotation[0] > 0.1);
 
+const malformedFallbackClip: AnimationClip = {
+  id: "malformed-fallbacks",
+  duration: 1,
+  tracks: [
+    { humanBone: "hips", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([]) },
+    { humanBone: "spine", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([]) },
+    { humanBone: "head", property: "scale", times: toFloat32Array([0]), values: toFloat32Array([]) },
+    { humanBone: "leftUpperArm", property: "scale", times: toFloat32Array([]), values: toFloat32Array([]) }
+  ]
+};
+const malformedFallbackPose = sampleClipToPose(skeleton, malformedFallbackClip, 0);
+assert.deepEqual(malformedFallbackPose[0]!.translation, [0, 0, 0], "missing translation samples should fall back to zero translation");
+assert.deepEqual(malformedFallbackPose[1]!.rotation, [0, 0, 0, 1], "missing rotation samples should fall back to identity rotation");
+assert.deepEqual(malformedFallbackPose[2]!.scale, [1, 1, 1], "missing scale samples should fall back to identity scale");
+assert.deepEqual(malformedFallbackPose[3]!.scale, [1, 1, 1], "empty scale tracks should fall back to identity scale");
+
 const models = localToModelPose(skeleton, sampled);
 assert.equal(models.length, skeleton.joints.length);
 assert.equal(models[0]![13], 1);
