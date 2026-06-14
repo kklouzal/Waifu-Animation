@@ -18,9 +18,10 @@ export function zeroVisemes(): VisemeWeights {
 }
 
 export function limitVisemeStack(values: VisemeWeights, maxTotal: number): VisemeWeights {
+  const safeMaxTotal = finiteNonNegative(maxTotal, 0);
   const total = VISEME_NAMES.reduce((sum, name) => sum + values[name], 0);
-  if (total <= maxTotal || total <= 0) return { ...values };
-  const scale = maxTotal / total;
+  if (total <= safeMaxTotal || total <= 0) return { ...values };
+  const scale = safeMaxTotal / total;
   return {
     aa: values.aa * scale,
     ih: values.ih * scale,
@@ -41,7 +42,7 @@ export class VisemeMixer {
   constructor(options: VisemeMixerOptions = {}) {
     this.attack = options.attack ?? 30;
     this.release = options.release ?? 20;
-    this.maxTotal = options.maxTotal ?? 0.36;
+    this.maxTotal = finiteNonNegative(options.maxTotal, 0.36);
     this.intensity = options.intensity ?? 1;
   }
 
@@ -56,7 +57,7 @@ export class VisemeMixer {
   }
 
   update(deltaSeconds: number, talking = true): VisemeWeights {
-    const dt = Math.max(0, deltaSeconds);
+    const dt = finiteNonNegative(deltaSeconds, 0);
     for (const name of VISEME_NAMES) {
       const target = talking ? this.target[name] : 0;
       const speed = target > this.current[name] ? visemeSpeedFor(this.attack, name) : visemeSpeedFor(this.release, name);
@@ -116,7 +117,7 @@ export class BlinkScheduler {
       this.state.nextAtMs = nowMs + randomRange(this.random, 1500, 4300 - clamp01(attentiveness) * 900);
       return this.state.value;
     }
-    const alpha = 1 - Math.exp(-20 * Math.max(0, deltaSeconds));
+    const alpha = 1 - Math.exp(-20 * finiteNonNegative(deltaSeconds, 0));
     this.state.value += (0 - this.state.value) * alpha;
     return this.state.value;
   }
@@ -220,4 +221,8 @@ export function mixExpressions(layers: Array<{ values: Record<string, number>; w
     }
   }
   return output;
+}
+
+function finiteNonNegative(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }

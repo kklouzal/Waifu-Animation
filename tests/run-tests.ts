@@ -5,6 +5,7 @@ import {
   type AnimationClip,
   BlinkScheduler,
   FacialExpressionMixer,
+  limitVisemeStack,
   PresencePlanner,
   WAIFU_ANIMATION_BINARY_FORMAT,
   VisemeMixer,
@@ -61,7 +62,8 @@ import {
   toFloat32Array,
   validateClip,
   validateSkeleton,
-  validateAnimationInputs
+  validateAnimationInputs,
+  zeroVisemes
 } from "../src/index.js";
 
 const skeleton = createSkeleton([
@@ -1629,11 +1631,16 @@ const visemes = new VisemeMixer({ maxTotal: 0.4 });
 visemes.setTarget({ aa: 0.4, ou: 0.4 });
 const mixed = visemes.update(1 / 30);
 assert.ok(mixed.aa + mixed.ou <= 0.4001);
+assert.deepEqual(limitVisemeStack({ aa: 0.2, ih: 0.2, ou: 0.2, ee: 0.2, oh: 0.2 }, Number.NaN), zeroVisemes());
+const invalidVisemes = new VisemeMixer({ maxTotal: Number.NaN });
+invalidVisemes.setTarget({ aa: 1, ih: 1 });
+assert.ok(Object.values(invalidVisemes.update(Number.NaN)).every(Number.isFinite), "viseme mixer should keep weights finite for non-finite timing and limits");
 
 const blink = new BlinkScheduler("test", 0);
 assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
 blink.trigger(32, 100);
 assert.equal(blink.update(48, 1 / 60, 0.5), 1);
+assert.equal(Number.isFinite(blink.update(200, Number.NaN, 0.5)), true, "blink scheduler should ignore non-finite delta time");
 
 const facial = new FacialExpressionMixer({
   visemes: {
