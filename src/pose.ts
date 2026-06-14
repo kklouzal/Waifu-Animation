@@ -2,7 +2,6 @@ import {
   type Quat,
   type Transform,
   applyTransformDelta,
-  clamp01,
   cloneTransform,
   dotQuat,
   isFiniteTransform,
@@ -59,12 +58,16 @@ export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): Po
   return issues;
 }
 
+function sanitizeMaskWeight(weight: number): number {
+  return Number.isFinite(weight) ? Math.max(0, weight) : 0;
+}
+
 export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: Record<string, number> = {}): JointMask {
   const mask = new Float32Array(skeleton.joints.length);
-  mask.fill(defaultWeight);
+  mask.fill(sanitizeMaskWeight(defaultWeight));
   for (const [jointName, weight] of Object.entries(entries)) {
     const index = skeleton.nameToIndex.get(jointName) ?? skeleton.humanoid.get(jointName as never);
-    if (index !== undefined) mask[index] = clamp01(weight);
+    if (index !== undefined) mask[index] = sanitizeMaskWeight(weight);
   }
   return mask;
 }

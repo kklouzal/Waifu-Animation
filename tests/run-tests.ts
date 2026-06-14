@@ -550,6 +550,31 @@ const blended = blendPoses(skeleton, [
 assert.ok(blended[2]!.rotation[0] > 0.05);
 assert.equal(blended[1]!.rotation[3], 1);
 
+const ozzStyleMask = createJointMask(skeleton, 1.25, {
+  hips: -2,
+  head: 2.5,
+  leftUpperArm: Number.NaN,
+  missingJoint: 7
+});
+assert.equal(ozzStyleMask[0], 0, "createJointMask should clamp negative named entries to zero");
+assert.equal(ozzStyleMask[1], 1.25, "createJointMask should preserve positive default weights above 1");
+assert.equal(ozzStyleMask[2], 2.5, "createJointMask should preserve positive named weights above 1");
+assert.equal(ozzStyleMask[3], 0, "createJointMask should sanitize non-finite named entries to zero");
+
+const negativeDefaultMask = createJointMask(skeleton, -1, { spine: 0.5 });
+assert.equal(negativeDefaultMask[0], 0, "createJointMask should clamp negative defaults to zero");
+assert.equal(negativeDefaultMask[1], 0.5, "createJointMask should still apply finite entries over negative defaults");
+
+const nonFiniteDefaultMask = createJointMask(skeleton, Number.POSITIVE_INFINITY, {
+  head: Number.NEGATIVE_INFINITY,
+  leftUpperArm: 1.5
+});
+assert.deepEqual(
+  Array.from(nonFiniteDefaultMask),
+  [0, 0, 0, 1.5],
+  "createJointMask should sanitize non-finite defaults and entries without clamping positive overweight entries"
+);
+
 const malformedMaskPose = clonePose(skeleton.restPose);
 malformedMaskPose[0]!.translation = [5, 1, 0];
 malformedMaskPose[1]!.translation = [4, 0, 0];
