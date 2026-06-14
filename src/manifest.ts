@@ -1,4 +1,4 @@
-import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
+import { type AnimationClip, type AnimationTrack, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
 import { WAIFU_ANIMATION_BINARY_FORMAT } from "./binary.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
@@ -93,12 +93,12 @@ export async function loadManifest(url: string, loader: AssetLoader, options: Ma
 export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationClip): ClipAssetInspection {
   const issues = validateClip(clip);
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
-  const hasTranslationTracks = clip.tracks.some((track) => normalizedTrackProperty(track.property) === "translation");
+  const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
   if (isRootMotionNamed(entry, clip)) {
     if (!rootMotionPolicy) {
       issues.push({ message: "root-motion clip must declare source.rootMotion.policy" });
-    } else if (rootMotionPolicy === "preserved" && !hasTranslationTracks) {
-      issues.push({ message: "root-motion policy is preserved but clip has no translation tracks" });
+    } else if (rootMotionPolicy === "preserved" && !hasRootCarrierTranslationTrack) {
+      issues.push({ message: "root-motion policy is preserved but clip has no root carrier translation track" });
     }
   }
   if (entry.playback) {
@@ -123,6 +123,14 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
 
 function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): boolean {
   return /\broot[-_ ]?motion\b/i.test(`${entry.id} ${entry.label} ${entry.url} ${clip.id} ${clip.name ?? ""}`);
+}
+
+function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
+  return normalizedTrackProperty(track.property) === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
+}
+
+function isRootCarrierJointName(joint: string | undefined): boolean {
+  return joint === "root" || joint === "Root" || joint === "hips" || joint === "Hips" || joint === "pelvis" || joint === "Pelvis";
 }
 
 export function readRootMotionPolicy(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionPolicy | null {

@@ -586,6 +586,45 @@ assert.equal(
   ).accepted,
   true
 );
+const preservedRootMotionHeadOnlyClip: AnimationClip = {
+  id: "root-motion-head-only",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0.1, 0]) }]
+};
+const preservedRootMotionHeadOnlyInspection = inspectClipAsset(
+  {
+    id: "root-motion-head-only",
+    label: "Root Motion Head Only",
+    url: "/root-motion-head-only.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "preserved" } }
+  },
+  preservedRootMotionHeadOnlyClip
+);
+assert.equal(preservedRootMotionHeadOnlyInspection.accepted, false);
+assert.ok(
+  preservedRootMotionHeadOnlyInspection.issues.some((issue) => issue.message === "root-motion policy is preserved but clip has no root carrier translation track"),
+  "preserved root-motion clips should not accept arbitrary non-root translation tracks"
+);
+const preservedRootMotionHipsClip: AnimationClip = {
+  id: "root-motion-hips",
+  duration: 1,
+  tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) }]
+};
+assert.equal(
+  inspectClipAsset(
+    {
+      id: "root-motion-hips",
+      label: "Root Motion Hips",
+      url: "/root-motion-hips.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "preserved" } }
+    },
+    preservedRootMotionHipsClip
+  ).accepted,
+  true,
+  "preserved root-motion clips should accept hips translation tracks"
+);
 const invalidRootMotionPolicyInspection = inspectAnimationAsset(
   {
     id: "root-motion-walk",
