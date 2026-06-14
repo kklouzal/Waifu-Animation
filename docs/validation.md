@@ -13,7 +13,8 @@ npm run build
 Current coverage includes:
 
 - finite transform and clip validation, including duplicate resolved target-channel rejection;
-- quaternion sanitization and shortest-path retargeting, including normalized `sourceRestQuaternion` metadata and rotation sample quaternion validation;
+- quaternion sanitization and shortest-path retargeting, including normalized `sourceRestQuaternion` metadata, binary source-rest roundtrips, malformed source-rest encode rejection, and rotation sample quaternion validation;
+- malformed binary payload rejection, including invalid target kinds and misaligned float tables;
 - local clip sampling;
 - local-to-model pose conversion;
 - weighted pose blending with masks;
@@ -22,12 +23,12 @@ Current coverage includes:
 - Three adapter clip binding and runtime lane construction;
 - look-at target distribution;
 - deterministic presence planning for cues, gaze targets, and bounded procedural bone targets;
-- two-bone IK solve sanity;
+- two-bone IK solve sanity, including diagonal target projection onto the upper-bone sphere;
 - normalized two-bone IK correction quaternions;
-- foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, finite leg IK output, and Three.js application/cleanup of pelvis plus leg correction quaternions;
+- foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, finite leg IK output, and Three.js application/cleanup of pelvis plus leg correction quaternions with sanitized timing;
 - viseme stack limiting;
-- configurable viseme smoothing, facial expression composition, and blink scheduler trigger sanity;
-- pose rotation metrics.
+- configurable viseme smoothing, facial expression composition, and blink scheduler trigger/timing sanity;
+- pose rotation metrics, including sign-equivalent quaternion handling.
 
 ## Runtime Evaluation Diagnostics
 

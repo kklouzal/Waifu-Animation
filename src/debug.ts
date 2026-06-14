@@ -1,4 +1,4 @@
-import { type Transform } from "./math.js";
+import { type Transform, dotQuat } from "./math.js";
 import { type PoseValidationIssue, validatePose } from "./pose.js";
 import { type Skeleton } from "./skeleton.js";
 
@@ -15,7 +15,7 @@ export function poseRotationMetric(a: readonly Transform[], b: readonly Transfor
   for (let index = 0; index < length; index += 1) {
     const aq = a[index]!.rotation;
     const bq = b[index]!.rotation;
-    const dot = Math.abs(aq[0] * bq[0] + aq[1] * bq[1] + aq[2] * bq[2] + aq[3] * bq[3]);
+    const dot = Math.abs(dotQuat(aq, bq));
     const delta = 2 * Math.acos(Math.min(1, dot));
     sum += delta * delta;
     max = Math.max(max, delta);
@@ -26,4 +26,3 @@ export function poseRotationMetric(a: readonly Transform[], b: readonly Transfor
 export function invalidPoseReport(skeleton: Skeleton, pose: readonly Transform[]): PoseValidationIssue[] {
   return validatePose(skeleton, pose);
 }
-

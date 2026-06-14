@@ -314,6 +314,17 @@ const validSourceRestQuaternionClip: AnimationClip = {
   ]
 };
 assert.equal(validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted, true, "valid source rest metadata on quaternion tracks should remain accepted");
+const decodedSourceRestQuaternionClip = decodeAnimationBinary(encodeAnimationBinary(validSourceRestQuaternionClip), "valid-source-rest-quaternion");
+assert.deepEqual(
+  Array.from(decodedSourceRestQuaternionClip.tracks[0]!.sourceRestQuaternion ?? []),
+  [0, 0, 0, 1],
+  "binary roundtrips should preserve source rest quaternion metadata"
+);
+assert.throws(
+  () => encodeAnimationBinary({ ...validSourceRestQuaternionClip, tracks: [{ ...validSourceRestQuaternionClip.tracks[0]!, sourceRestQuaternion: toFloat32Array([0, 0, 1]) }] }),
+  /animation track head\.quaternion sourceRestQuaternion must contain exactly 4 values/,
+  "binary encoding should reject malformed source rest quaternion metadata before writing a corrupt payload"
+);
 
 const invalidZeroSourceRestQuaternionClip: AnimationClip = {
   id: "invalid-zero-source-rest-quaternion",
@@ -546,6 +557,11 @@ assert.throws(
   () => decodeAnimationBinary(invalidTargetKindBinary, "invalid-target-kind"),
   /animation track 0 target kind is invalid/,
   "decodeAnimationBinary should reject unknown target kinds instead of treating them as joint tracks"
+);
+assert.throws(
+  () => decodeAnimationBinary(invalidTargetKindBinary.slice(0, invalidTargetKindBinary.byteLength - 1), "misaligned-floats"),
+  /animation binary float data is misaligned/,
+  "decodeAnimationBinary should reject payloads whose float table is not 4-byte aligned"
 );
 
 const rootMotionRotationOnlyClip: AnimationClip = {
@@ -1571,6 +1587,11 @@ assert.ok(ik.targetReach > 0.9);
 assert.ok(Number.isFinite(ik.joint[0]));
 const finiteIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0, -1.5, 0], pole: [0, 0, 1], maxStretch: Number.NaN });
 assert.ok(finiteIk.joint.every(Number.isFinite), "IK should keep solved joints finite for non-finite stretch limits");
+const diagonalIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [1, -1, 0], pole: [0, 0, 1], soften: 0 });
+assert.ok(
+  Math.abs(Math.hypot(...diagonalIk.joint) - 1) < 1e-5,
+  "IK projection should keep the solved joint on the upper-bone sphere for diagonal targets"
+);
 
 const fullReachIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0, -2, 0], pole: [0, 0, 1] });
 assert.equal(fullReachIk.clamped, false, "default IK softening must not report a physical reach clamp at full extension");
@@ -1723,6 +1744,18 @@ const fallbackSpeedFootPlant = applyThreeFootPlantResult(footPlant, {
 });
 assert.equal(fallbackSpeedFootPlant.pelvisApplied, true, "Three foot plant application should fall back from non-finite speeds");
 assert.ok(fallbackSpeedFootPlant.pelvisOffsetLocal.every(Number.isFinite), "Three foot plant fallback offsets should remain finite");
+const nonFiniteDeltaPelvis = new Object3D();
+nonFiniteDeltaPelvis.name = "hips";
+const nonFiniteDeltaFootPlant = applyThreeFootPlantResult(footPlant, {
+  resolveBone: (bone) => (bone === "hips" ? nonFiniteDeltaPelvis : null),
+  pelvis: "hips",
+  legs: [],
+  deltaSeconds: Number.NaN,
+  applyPelvis: true,
+  applyLegIk: false
+});
+assert.equal(nonFiniteDeltaFootPlant.pelvisApplied, false, "Three foot plant damping should treat non-finite delta time as zero elapsed time");
+assert.deepEqual(nonFiniteDeltaFootPlant.pelvisOffsetLocal, [0, 0, 0]);
 
 const visemes = new VisemeMixer({ maxTotal: 0.4 });
 visemes.setTarget({ aa: 0.4, ou: 0.4 });
@@ -1741,6 +1774,7 @@ assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
 blink.trigger(32, 100);
 assert.equal(blink.update(48, 1 / 60, 0.5), 1);
 assert.equal(Number.isFinite(blink.update(200, Number.NaN, 0.5)), true, "blink scheduler should ignore non-finite delta time");
+assert.equal(blink.update(216, Number.NaN, 0.5), blink.update(216, Number.NaN, 0.5), "blink scheduler should keep non-finite delta decay deterministic");
 
 const facial = new FacialExpressionMixer({
   visemes: {
@@ -1767,6 +1801,13 @@ assert.ok(faceState.expressions.happy > 0.1);
 
 const metric = poseRotationMetric(skeleton.restPose, evaluated.localPose);
 assert.ok(metric.maxRotationDelta > 0);
+const signEquivalentPose = clonePose(skeleton.restPose);
+signEquivalentPose[2]!.rotation = signEquivalentPose[2]!.rotation.map((component) => -component) as [number, number, number, number];
+assert.equal(
+  poseRotationMetric(skeleton.restPose, signEquivalentPose).maxRotationDelta,
+  0,
+  "pose rotation metrics should treat sign-opposite quaternions as equivalent rotations"
+);
 
 const headBone = new Object3D();
 headBone.name = "normalizedHead";

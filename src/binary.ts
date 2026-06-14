@@ -40,7 +40,7 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
       property: encodeProperty(property),
       times,
       values,
-      sourceRestQuaternion: track.sourceRestQuaternion ? toFloat32Array(track.sourceRestQuaternion) : null
+      sourceRestQuaternion: readSourceRestQuaternion(track)
     };
   });
 
@@ -129,6 +129,9 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
   if (stringByteOffset + stringBytes > bytes.byteLength || floatByteOffset > bytes.byteLength) {
     throw new Error("animation binary table bounds are invalid");
   }
+  if ((bytes.byteLength - floatByteOffset) % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error("animation binary float data is misaligned");
+  }
   const floatData = new Float32Array(buffer, floatByteOffset);
   const tracks: AnimationTrack[] = [];
 
@@ -189,6 +192,16 @@ function decodeProperty(property: number): "translation" | "rotation" | "scale" 
   if (property === PROPERTY_ROTATION) return "rotation";
   if (property === PROPERTY_SCALE) return "scale";
   throw new Error(`unknown animation binary property ${property}`);
+}
+
+function readSourceRestQuaternion(track: AnimationTrack): Float32Array | null {
+  if (!track.sourceRestQuaternion) return null;
+  const sourceRestQuaternion = toFloat32Array(track.sourceRestQuaternion);
+  if (sourceRestQuaternion.length !== 4) {
+    const targetName = track.humanBone ?? track.joint ?? "<unknown>";
+    throw new Error(`animation track ${targetName}.${track.property} sourceRestQuaternion must contain exactly 4 values`);
+  }
+  return sourceRestQuaternion;
 }
 
 function align4(value: number): number {

@@ -544,6 +544,10 @@ function sanitizePositiveThreeRuntimeValue(value: number, fallback: number): num
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
+function sanitizeThreeRuntimeSwing(value: number | undefined, phase: number): number {
+  return clamp(Number.isFinite(value ?? Number.NaN) ? value! : Math.sin(phase * Math.PI * 2), -1, 1);
+}
+
 function euclideanModulo(value: number, divisor: number): number {
   if (divisor <= 0) return 0;
   return ((value % divisor) + divisor) % divisor;
@@ -551,6 +555,10 @@ function euclideanModulo(value: number, divisor: number): number {
 
 function dampWeight(current: number, target: number, speed: number, deltaSeconds: number): number {
   return current + (target - current) * dampAlpha(speed, deltaSeconds);
+}
+
+function dampedInfluenceAmount(influence: number, speed: number, deltaSeconds: number | undefined): number {
+  return clamp01(influence * (deltaSeconds === undefined ? 1 : dampAlpha(speed, sanitizeThreeRuntimeTime(deltaSeconds))));
 }
 
 export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): ThreePresenceApplyResult {
@@ -583,7 +591,7 @@ export function createThreeLocomotionUpperBodyTargets(options: ThreeLocomotionUp
   const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
   if (influence <= 0) return [];
   const phase = sanitizeThreeRuntimePhase(options.phase ?? 0);
-  const swing = clamp(Number.isFinite(options.swing ?? Number.NaN) ? options.swing! : Math.sin(phase * Math.PI * 2), -1, 1);
+  const swing = sanitizeThreeRuntimeSwing(options.swing, phase);
   const counterSwing = -swing;
   const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 18, 18);
 
@@ -640,7 +648,7 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
   if (options.enabled === false) return [];
   const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
   const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 18, 18);
-  const amount = clamp01(influence * (options.deltaSeconds === undefined ? 1 : dampAlpha(speed * 1.25, options.deltaSeconds)));
+  const amount = dampedInfluenceAmount(influence, speed * 1.25, options.deltaSeconds);
   if (amount <= 0) {
     return [
       { side: "left", appliedUpperArmDirection: false, appliedUpperArm: false, appliedLowerArm: false, skippedReason: "zero-influence" },
@@ -653,7 +661,7 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
   const rightUpper = options.resolveBone("rightUpperArm");
   const shoulderWidth = estimateShoulderWidth(leftUpper, rightUpper);
   const phase = sanitizeThreeRuntimePhase(options.phase ?? 0);
-  const swing = clamp(Number.isFinite(options.swing ?? Number.NaN) ? options.swing! : Math.sin(phase * Math.PI * 2), -1, 1);
+  const swing = sanitizeThreeRuntimeSwing(options.swing, phase);
 
   return (["left", "right"] as const).map((side) => {
     const sign = side === "left" ? 1 : -1;
@@ -741,7 +749,7 @@ export function clearThreeFootPlantOffsets(options: ThreeFootPlantClearOptions):
 export function applyThreeFootPlantResult(result: FootPlantResult, options: ThreeFootPlantApplyOptions): ThreeFootPlantApplyResult {
   const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
   const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 32, 32);
-  const amount = influence * (options.deltaSeconds === undefined ? 1 : dampAlpha(speed, sanitizeThreeRuntimeTime(options.deltaSeconds)));
+  const amount = dampedInfluenceAmount(influence, speed, options.deltaSeconds);
   const issues = [...result.issues];
   const applyPelvis = options.applyPelvis !== false;
   const applyLegIk = options.applyLegIk !== false;
@@ -914,7 +922,7 @@ function applyAnkleGroundAlignment(bone: Object3D, groundNormal: Vec3, localUp: 
   const correction = quatFromUnitVectors(worldUp, normal, [0, 0, 1]);
   tmpLocalDirection.set(correction[0], correction[1], correction[2]);
   if (tmpLocalDirection.lengthSq() <= 1e-12) return false;
-  return applyWorldQuaternionDelta(bone, tmpCorrection.set(correction[0], correction[1], correction[2], correction[3]).normalize(), influence);
+  return applyWorldQuaternionDelta(bone, quatToThree(correction), influence);
 }
 
 function applyWorldQuaternionDelta(bone: Object3D, deltaWorld: Quaternion, influence: number): boolean {

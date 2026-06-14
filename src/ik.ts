@@ -55,7 +55,7 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const direction = normalizeVec3(rootToTarget, normalizeVec3(subVec3(input.end, input.root), [0, -1, 0]));
   const pole = bendPlanePole(input.pole ?? subVec3(input.joint, input.root), direction);
   const cosAngle = clamp((upperLength * upperLength + clampedDistance * clampedDistance - lowerLength * lowerLength) / (2 * upperLength * clampedDistance), -1, 1);
-  const along = Math.cos(Math.acos(cosAngle)) * upperLength;
+  const along = cosAngle * upperLength;
   const height = Math.sqrt(Math.max(0, upperLength * upperLength - along * along));
   const newJoint = addVec3(addVec3(input.root, scaleVec3(direction, along)), scaleVec3(pole, height));
   const newEnd = addVec3(input.root, scaleVec3(direction, clampedDistance));

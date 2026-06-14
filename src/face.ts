@@ -117,7 +117,7 @@ export class BlinkScheduler {
       this.state.nextAtMs = nowMs + randomRange(this.random, 1500, 4300 - clamp01(attentiveness) * 900);
       return this.state.value;
     }
-    const alpha = 1 - Math.exp(-20 * finiteNonNegative(deltaSeconds, 0));
+    const alpha = dampAlpha(20, deltaSeconds);
     this.state.value += (0 - this.state.value) * alpha;
     return this.state.value;
   }

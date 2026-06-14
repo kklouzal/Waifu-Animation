@@ -27,6 +27,13 @@
 - `AnimationRuntime.crossfade` creates or replaces an override target layer, fades matching same-priority override sources toward zero, leaves additive layers active, and relies on the existing priority/mask threshold evaluation for final pose composition.
 - The optional Three adapter now owns `applyThreePresenceTargets`, the reusable bridge that applies package-planned procedural presence bone targets to Three/VRM bones with finite-target checks, clamped influence, damped quaternion slerp, and missing-bone telemetry.  Waifu no longer carries its own procedural bone-target quaternion application helper.
 
+### 2026-06-14 final polish
+
+- Binary clip encoding now rejects malformed `sourceRestQuaternion` metadata before writing payloads, and decoding rejects float tables whose byte length is not aligned to `Float32Array` storage.
+- Debug pose rotation metrics compare quaternions through shared quaternion dot-product math, preserving sign-equivalent rotation behavior.
+- Blink and Three adapter damping paths route non-finite elapsed time through shared damp-alpha sanitization, keeping scheduler decay, locomotion posture, and foot-plant application deterministic for bad frame timing.
+- Two-bone IK projection keeps the solved joint on the upper-bone sphere without redundant trigonometric roundtrips.
+
 ## Ozz-Inspired Frame Model
 
 The canonical model mirrors Ozz Animation's runtime flow:
