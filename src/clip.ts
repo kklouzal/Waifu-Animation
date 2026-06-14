@@ -1,5 +1,6 @@
 import { type Quat, type Transform, EPSILON, cloneTransform, clamp, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, clonePose } from "./pose.js";
+import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
 export type TrackProperty = "translation" | "rotation" | "scale" | "position" | "quaternion";
@@ -214,7 +215,8 @@ export function sanitizeQuaternionTrackValues(values: ArrayLike<number>): Float3
 }
 
 export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSeconds: number, options: SampleOptions = {}): Pose {
-  const output = clonePose(options.restPose ?? createRestPose(skeleton));
+  const restPose = options.restPose ?? createRestPose(skeleton);
+  const output = clonePose(restPose);
   const time = sampleTime(clip, timeSeconds, options.loop ?? clip.loop ?? false);
   for (const track of clip.tracks) {
     const jointIndex = resolveTrackJointIndex(skeleton, track);
@@ -225,10 +227,16 @@ export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSe
     const transform = cloneTransform(output[jointIndex]);
     if (property === "translation") transform.translation = sampled as [number, number, number];
     if (property === "scale") transform.scale = sampled as [number, number, number];
-    if (property === "rotation") transform.rotation = sampled as [number, number, number, number];
+    if (property === "rotation") transform.rotation = retargetSampledRotation(track, restPose[jointIndex]?.rotation, sampled as Quat);
     output[jointIndex] = transform;
   }
   return output;
+}
+
+function retargetSampledRotation(track: AnimationTrack, targetRest: Quat | undefined, sampled: Quat): Quat {
+  const sourceRest = track.sourceRestQuaternion;
+  if (!sourceRest || sourceRest.length !== 4 || !targetRest) return sampled;
+  return retargetQuaternionSample([sourceRest[0]!, sourceRest[1]!, sourceRest[2]!, sourceRest[3]!], targetRest, sampled);
 }
 
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {

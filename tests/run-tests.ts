@@ -619,6 +619,45 @@ assert.equal(
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
 assert.ok(sampled[2]!.rotation[0] > 0.1);
 
+const coreRetargetSourceRest = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+const coreRetargetTargetRest = quatFromAxisAngle([0, 0, 1], Math.PI / 3);
+const coreRetargetDelta = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
+const coreRetargetSourceSample = multiplyQuat(coreRetargetSourceRest, coreRetargetDelta);
+const coreRetargetSkeleton = createSkeleton([
+  { name: "root" },
+  { name: "upper", parentName: "root", humanoid: "leftUpperArm", rest: { rotation: coreRetargetTargetRest } }
+]);
+const coreRetargetClip: AnimationClip = {
+  id: "core-source-rest-retarget",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "leftUpperArm",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array(coreRetargetSourceRest),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([...coreRetargetSourceRest, ...coreRetargetSourceSample])
+    }
+  ]
+};
+const coreRetargetExpected = retargetQuaternionSample(coreRetargetSourceRest, coreRetargetTargetRest, coreRetargetSourceSample);
+const coreRetargetPose = sampleClipToPose(coreRetargetSkeleton, coreRetargetClip, 1);
+assert.ok(
+  !quaternionNearlyEqual(coreRetargetSourceSample, coreRetargetExpected, 1e-4),
+  "core retarget fixture should distinguish raw source-basis rotations from target-rest rotations"
+);
+assert.ok(
+  quaternionNearlyEqual(coreRetargetPose[1]!.rotation, coreRetargetExpected, 1e-5),
+  "sampleClipToPose should retarget source-rest rotation tracks into the skeleton rest basis"
+);
+const coreRetargetRuntime = new AnimationRuntime(coreRetargetSkeleton);
+coreRetargetRuntime.setLayer("retargeted", coreRetargetClip, { weight: 1, targetWeight: 1, time: 1 });
+const coreRetargetEvaluation = coreRetargetRuntime.evaluate();
+assert.ok(
+  quaternionNearlyEqual(coreRetargetEvaluation.localPose[1]!.rotation, coreRetargetExpected, 1e-5),
+  "AnimationRuntime.evaluate should use the retargeted core sampling path"
+);
+
 const malformedFallbackClip: AnimationClip = {
   id: "malformed-fallbacks",
   duration: 1,
@@ -1981,4 +2020,18 @@ function vectorNearlyEqual(actual: readonly number[], expected: readonly number[
     Math.abs(actual[1]! - expected[1]!) <= tolerance &&
     Math.abs(actual[2]! - expected[2]!) <= tolerance
   );
+}
+
+function quaternionNearlyEqual(actual: readonly number[], expected: readonly number[], tolerance: number): boolean {
+  const direct =
+    Math.abs(actual[0]! - expected[0]!) <= tolerance &&
+    Math.abs(actual[1]! - expected[1]!) <= tolerance &&
+    Math.abs(actual[2]! - expected[2]!) <= tolerance &&
+    Math.abs(actual[3]! - expected[3]!) <= tolerance;
+  const negated =
+    Math.abs(actual[0]! + expected[0]!) <= tolerance &&
+    Math.abs(actual[1]! + expected[1]!) <= tolerance &&
+    Math.abs(actual[2]! + expected[2]!) <= tolerance &&
+    Math.abs(actual[3]! + expected[3]!) <= tolerance;
+  return direct || negated;
 }
