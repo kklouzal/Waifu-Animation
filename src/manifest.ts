@@ -125,9 +125,9 @@ function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): 
   return /\broot[-_ ]?motion\b/i.test(`${entry.id} ${entry.label} ${entry.url} ${clip.id} ${clip.name ?? ""}`);
 }
 
-function readRootMotionPolicy(entry: AnimationManifestEntry, clip: AnimationClip): RootMotionPolicy | null {
+export function readRootMotionPolicy(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionPolicy | null {
   const entrySource = entry.source ?? {};
-  const clipMetadata = clip.metadata ?? {};
+  const clipMetadata = clip?.metadata ?? {};
   const sourceRootMotion = entrySource.rootMotion;
   if (typeof sourceRootMotion === "string" && isRootMotionPolicy(sourceRootMotion)) return sourceRootMotion;
   if (typeof sourceRootMotion === "object" && sourceRootMotion && "policy" in sourceRootMotion) {

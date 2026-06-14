@@ -45,7 +45,7 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const lowerLength = Math.max(1e-5, lengthVec3(subVec3(input.end, input.joint)));
   const physicalMinReach = Math.abs(upperLength - lowerLength) + 1e-5;
   const physicalMaxReach = upperLength + lowerLength;
-  const maxReach = physicalMaxReach * (input.maxStretch ?? 0.998);
+  const maxReach = physicalMaxReach * finiteNonNegative(input.maxStretch, 0.998);
   const rootToTarget = subVec3(input.target, input.root);
   const targetDistance = lengthVec3(rootToTarget);
   const clampedDistance = clamp(targetDistance, physicalMinReach, maxReach);
@@ -158,27 +158,28 @@ export type FootPlantResult = {
 
 export function computeAnkleTargetFromGround(contact: GroundContact, footHeight: number): Vec3 {
   const normal = normalizeVec3(contact.normal ?? [0, 1, 0], [0, 1, 0]);
-  const rayStart = contact.rayStart ?? addVec3(contact.point, [0, Math.max(0.001, footHeight + 0.5), 0]);
+  const safeFootHeight = finiteNonNegative(footHeight, 0);
+  const rayStart = contact.rayStart ?? addVec3(contact.point, [0, Math.max(0.001, safeFootHeight + 0.5), 0]);
   const ai = subVec3(rayStart, contact.point);
   const abLength = dotVec3(ai, normal);
-  if (Math.abs(abLength) <= 1e-5) return addVec3(contact.point, scaleVec3(normal, footHeight));
+  if (Math.abs(abLength) <= 1e-5) return addVec3(contact.point, scaleVec3(normal, safeFootHeight));
 
   const projected = subVec3(rayStart, scaleVec3(normal, abLength));
   const ib = subVec3(projected, contact.point);
   const ibLength = lengthVec3(ib);
-  if (ibLength <= 1e-5) return addVec3(contact.point, scaleVec3(normal, footHeight));
+  if (ibLength <= 1e-5) return addVec3(contact.point, scaleVec3(normal, safeFootHeight));
 
-  const ih = scaleVec3(ib, (ibLength * footHeight) / abLength / ibLength);
-  return addVec3(addVec3(contact.point, ih), scaleVec3(normal, footHeight));
+  const ih = scaleVec3(ib, (ibLength * safeFootHeight) / abLength / ibLength);
+  return addVec3(addVec3(contact.point, ih), scaleVec3(normal, safeFootHeight));
 }
 
 export function solveFootPlant(input: readonly FootPlantLegInput[], options: FootPlantOptions = {}): FootPlantResult {
   const down = normalizeVec3(options.down ?? [0, -1, 0], [0, -1, 0]);
-  const defaultFootHeight = Math.max(0, options.footHeight ?? 0.08);
+  const defaultFootHeight = finiteNonNegative(options.footHeight, 0.08);
   const defaultInfluence = clamp01(options.influence ?? 1);
   const pelvisCompensation = clamp01(options.pelvisCompensation ?? 1);
-  const maxPelvisOffset = Math.max(0, options.maxPelvisOffset ?? 0.35);
-  const maxAnkleCorrection = Math.max(0, options.maxAnkleCorrection ?? 0.5);
+  const maxPelvisOffset = finiteNonNegative(options.maxPelvisOffset, 0.35);
+  const maxAnkleCorrection = finiteNonNegative(options.maxAnkleCorrection, 0.5);
   const legs: FootPlantLegResult[] = [];
   const issues: string[] = [];
   let lowestCorrection = 0;
@@ -202,10 +203,10 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
       continue;
     }
 
-    const rawTarget = computeAnkleTargetFromGround(leg.ground, leg.footHeight ?? defaultFootHeight);
+    const rawTarget = computeAnkleTargetFromGround(leg.ground, finiteNonNegative(leg.footHeight, defaultFootHeight));
     const rawOffset = subVec3(rawTarget, leg.ankle);
     const rawDistance = lengthVec3(rawOffset);
-    const allowedCorrection = Math.min(leg.maxAnkleCorrection ?? maxAnkleCorrection, maxAnkleCorrection);
+    const allowedCorrection = Math.min(finiteNonNegative(leg.maxAnkleCorrection, maxAnkleCorrection), maxAnkleCorrection);
     const clamped = rawDistance > allowedCorrection && allowedCorrection > 0;
     const targetAnkle = clamped ? addVec3(leg.ankle, scaleVec3(normalizeVec3(rawOffset, [0, 0, 0]), allowedCorrection)) : rawTarget;
     const ankleOffset = subVec3(targetAnkle, leg.ankle);
@@ -261,4 +262,8 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     legs,
     issues
   };
+}
+
+function finiteNonNegative(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }

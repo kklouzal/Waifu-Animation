@@ -67,7 +67,8 @@ export class AttentionScheduler {
 }
 
 export function breathingWeight(elapsedSeconds: number, energy: number): number {
-  return Math.sin(elapsedSeconds * (1.15 + clamp01(energy) * 0.55)) * (0.5 + clamp01(energy) * 0.5);
+  const elapsed = finiteNonNegative(elapsedSeconds, 0);
+  return Math.sin(elapsed * (1.15 + clamp01(energy) * 0.55)) * (0.5 + clamp01(energy) * 0.5);
 }
 
 export type PresenceState = "idle" | "listening" | "speaking" | "thinking";
@@ -218,6 +219,10 @@ function damp(current: number, target: number, speed: number, deltaSeconds: numb
   return current + (target - current) * dampAlpha(speed, deltaSeconds);
 }
 
+function finiteNonNegative(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
 function mixTarget(rest: number, gesture: number, amount: number): number {
   return rest + (gesture - rest) * clamp01(amount);
 }
@@ -305,8 +310,8 @@ export class PresencePlanner {
 
   update(input: PresenceUpdateInput): PresenceFrame {
     const nowMs = input.nowMs;
-    const elapsedSeconds = input.elapsedSeconds;
-    const deltaSeconds = input.deltaSeconds;
+    const elapsedSeconds = finiteNonNegative(input.elapsedSeconds, 0);
+    const deltaSeconds = finiteNonNegative(input.deltaSeconds, 0);
     const behavior = normalizeBehavior(input.behavior);
     const affect = normalizeAffect(input.affect);
     const energy = behavior.energy;

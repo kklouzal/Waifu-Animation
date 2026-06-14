@@ -43,7 +43,7 @@ export class VisemeMixer {
     this.attack = options.attack ?? 30;
     this.release = options.release ?? 20;
     this.maxTotal = finiteNonNegative(options.maxTotal, 0.36);
-    this.intensity = options.intensity ?? 1;
+    this.intensity = finiteNonNegative(options.intensity, 1);
   }
 
   setTarget(next: Partial<VisemeWeights>): void {

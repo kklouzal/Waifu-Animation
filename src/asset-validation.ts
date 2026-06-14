@@ -1,6 +1,6 @@
 import { decodeAnimationBinary } from "./binary.js";
 import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
-import { type AnimationManifest, type AnimationManifestEntry, inspectClipAsset } from "./manifest.js";
+import { type AnimationManifest, type AnimationManifestEntry, inspectClipAsset, readRootMotionPolicy } from "./manifest.js";
 import { type Quat, dotQuat, normalizeQuat } from "./math.js";
 import { type HumanoidBoneName, type Skeleton, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
@@ -234,11 +234,5 @@ function readString(value: unknown): string | null {
 }
 
 function readRootMotionPolicyLabel(entry: AnimationManifestEntry, clip?: AnimationClip): string {
-  const source = entry.source ?? {};
-  const rootMotion = source.rootMotion;
-  if (typeof rootMotion === "string") return rootMotion;
-  if (rootMotion && typeof rootMotion === "object" && "policy" in rootMotion && typeof rootMotion.policy === "string") return rootMotion.policy;
-  if (typeof source.rootMotionPolicy === "string") return source.rootMotionPolicy;
-  if (typeof clip?.metadata?.rootMotionPolicy === "string") return clip.metadata.rootMotionPolicy;
-  return "none";
+  return readRootMotionPolicy(entry, clip) ?? "none";
 }

@@ -1,4 +1,4 @@
-import { type Mat4 } from "./math.js";
+import { type Mat4, dampAlpha } from "./math.js";
 import { type AnimationClip, type ClipValidationIssue, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
 import {
   DEFAULT_BLEND_THRESHOLD,
@@ -158,7 +158,7 @@ export class AnimationRuntime {
     for (const layer of this.layers.values()) {
       sanitizeLayerState(layer);
       layer.time += delta * layer.speed;
-      const alpha = 1 - Math.exp(-Math.max(0, layer.fadeSpeed) * delta);
+      const alpha = dampAlpha(layer.fadeSpeed, delta);
       layer.weight += (layer.targetWeight - layer.weight) * alpha;
       if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) this.layers.delete(layer.id);
     }

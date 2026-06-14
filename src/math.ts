@@ -168,7 +168,7 @@ export function multiplyQuat(a: Quat, b: Quat): Quat {
 
 export function invertQuat(value: Quat): Quat {
   const dot = dotQuat(value, value);
-  if (dot <= EPSILON) return cloneQuat(IDENTITY_QUAT);
+  if (!Number.isFinite(dot) || dot <= EPSILON) return cloneQuat(IDENTITY_QUAT);
   const c = conjugateQuat(value);
   return [c[0] / dot, c[1] / dot, c[2] / dot, c[3] / dot];
 }

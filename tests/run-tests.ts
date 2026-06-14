@@ -19,6 +19,7 @@ import {
   calculateThreeRuntimeStartTime,
   clearThreeFootPlantOffsets,
   blendPoses,
+  breathingWeight,
   clamp01,
   createThreeLocomotionUpperBodyTargets,
   createJointMask,
@@ -98,6 +99,7 @@ assert.ok(Math.abs(finiteQuatFallback[2] - Math.SQRT1_2) < 1e-12);
 assert.ok(Math.abs(finiteQuatFallback[3] - Math.SQRT1_2) < 1e-12);
 assert.deepEqual(normalizeQuat([Infinity, 0, 0, 1], [0, 0, 0, 2]), [0, 0, 0, 1]);
 assert.deepEqual(normalizeQuat([0, 0, 0, 0], [Number.NaN, 0, 0, 0]), [0, 0, 0, 1]);
+assert.deepEqual(invertQuat([Number.POSITIVE_INFINITY, 0, 0, 1]), [0, 0, 0, 1]);
 assert.deepEqual(
   Array.from(sanitizeQuaternionTrackValues([0, 0, 0, 1, 0, 0, 0, -1])),
   [0, 0, 0, 1, -0, -0, -0, 1],
@@ -538,6 +540,13 @@ assert.equal(decodedNodClip.id, "nod");
 assert.equal(decodedNodClip.tracks.length, 1);
 assert.deepEqual(Array.from(decodedNodClip.tracks[0]!.times), [0, 0.5, 1]);
 assert.ok(decodedNodClip.tracks[0]!.values instanceof Float32Array);
+const invalidTargetKindBinary = encodeAnimationBinary(nodClip);
+new DataView(invalidTargetKindBinary).setUint32(32, 99, true);
+assert.throws(
+  () => decodeAnimationBinary(invalidTargetKindBinary, "invalid-target-kind"),
+  /animation track 0 target kind is invalid/,
+  "decodeAnimationBinary should reject unknown target kinds instead of treating them as joint tracks"
+);
 
 const rootMotionRotationOnlyClip: AnimationClip = {
   ...nodClip,
@@ -560,6 +569,22 @@ assert.equal(
     rootMotionRotationOnlyClip
   ).accepted,
   true
+);
+const invalidRootMotionPolicyInspection = inspectAnimationAsset(
+  {
+    id: "root-motion-walk",
+    label: "Root Motion Walk",
+    url: "/root-motion-walk.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "keep-everything" } }
+  },
+  rootMotionRotationOnlyClip
+);
+assert.equal(invalidRootMotionPolicyInspection.status, "rejected");
+assert.equal(invalidRootMotionPolicyInspection.rootMotionPolicy, "none");
+assert.ok(
+  invalidRootMotionPolicyInspection.issues.some((issue) => issue.message === "root-motion clip must declare source.rootMotion.policy"),
+  "asset validation should use the same root-motion policy interpretation as manifest inspection"
 );
 assert.equal(
   inspectAnimationAsset(
@@ -1482,6 +1507,7 @@ assert.deepEqual(
 const look = distributeLookAt([0.4, 0.2, 2]);
 assert.ok(look.head.yaw > 0);
 assert.ok(look.eyes.pitch > 0);
+assert.equal(Number.isFinite(breathingWeight(Number.NaN, 0.5)), true, "breathing weight should ignore non-finite elapsed time");
 
 const presenceA = new PresencePlanner("presence-test", 0);
 const presenceB = new PresencePlanner("presence-test", 0);
@@ -1511,10 +1537,24 @@ assert.deepEqual(presenceFrameA.lookAtTarget, presenceFrameB.lookAtTarget);
 assert.ok(presenceFrameA.cueAmounts.glance > 0);
 assert.ok(presenceFrameA.boneTargets.some((target) => target.bone === "head" && target.influence > 0));
 assert.ok(presenceFrameA.boneTargets.every((target) => target.rotation.every(Number.isFinite)));
+const finitePresenceFrame = presenceA.update({
+  nowMs: 300,
+  elapsedSeconds: Number.NaN,
+  deltaSeconds: Number.NaN,
+  behavior: { state: "speaking", energy: Number.NaN },
+  affect: { arousal: Number.NaN, curiosity: Number.NaN, attentiveness: Number.NaN },
+  targetMouth: Number.NaN,
+  clipBaseInfluence: Number.NaN,
+  clipOverlayInfluence: Number.NaN
+});
+assert.ok(finitePresenceFrame.lookAtTarget.every(Number.isFinite), "presence look target should stay finite for non-finite timing");
+assert.ok(finitePresenceFrame.boneTargets.every((target) => target.rotation.every(Number.isFinite)), "presence bone targets should stay finite for non-finite timing");
 
 const ik = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0.5, -1.5, 0], pole: [0, 0, 1] });
 assert.ok(ik.targetReach > 0.9);
 assert.ok(Number.isFinite(ik.joint[0]));
+const finiteIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0, -1.5, 0], pole: [0, 0, 1], maxStretch: Number.NaN });
+assert.ok(finiteIk.joint.every(Number.isFinite), "IK should keep solved joints finite for non-finite stretch limits");
 
 const fullReachIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0, -2, 0], pole: [0, 0, 1] });
 assert.equal(fullReachIk.clamped, false, "default IK softening must not report a physical reach clamp at full extension");
@@ -1592,6 +1632,23 @@ const clampedFootPlant = solveFootPlant(
 );
 assert.equal(clampedFootPlant.legs[0]!.clamped, true);
 assert.ok(clampedFootPlant.legs[0]!.correctionDistance <= 0.1001);
+const finiteFootPlant = solveFootPlant(
+  [
+    {
+      id: "left",
+      hip: [0, 1, 0],
+      knee: [0, 0.5, 0],
+      ankle: [0, 0.1, 0],
+      footHeight: Number.NaN,
+      maxAnkleCorrection: Number.NaN,
+      maxStretch: Number.NaN,
+      ground: { point: [0, 0, 0], normal: [0, 1, 0] }
+    }
+  ],
+  { footHeight: Number.NaN, maxAnkleCorrection: Number.NaN, maxPelvisOffset: Number.NaN, maxStretch: Number.NaN }
+);
+assert.ok(finiteFootPlant.pelvisOffset.every(Number.isFinite), "foot plant pelvis offset should stay finite for non-finite options");
+assert.ok(finiteFootPlant.legs.every((leg) => leg.targetAnkle.every(Number.isFinite) && (leg.ik?.joint.every(Number.isFinite) ?? true)), "foot plant leg outputs should stay finite for non-finite options");
 
 const pelvisBone = new Object3D();
 pelvisBone.name = "hips";
@@ -1646,6 +1703,9 @@ assert.deepEqual(limitVisemeStack({ aa: 0.2, ih: 0.2, ou: 0.2, ee: 0.2, oh: 0.2 
 const invalidVisemes = new VisemeMixer({ maxTotal: Number.NaN });
 invalidVisemes.setTarget({ aa: 1, ih: 1 });
 assert.ok(Object.values(invalidVisemes.update(Number.NaN)).every(Number.isFinite), "viseme mixer should keep weights finite for non-finite timing and limits");
+const invalidIntensityVisemes = new VisemeMixer({ intensity: Number.NaN });
+invalidIntensityVisemes.setTarget({ aa: 1 });
+assert.ok(Object.values(invalidIntensityVisemes.update(1 / 30)).every(Number.isFinite), "viseme mixer should keep weights finite for non-finite intensity");
 
 const blink = new BlinkScheduler("test", 0);
 assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);

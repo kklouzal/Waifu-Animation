@@ -145,6 +145,9 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     const property = decodeProperty(propertyCode);
     const stride = trackStride(property);
 
+    if (targetKind !== TARGET_HUMAN_BONE && targetKind !== TARGET_JOINT) {
+      throw new Error(`animation track ${index} target kind is invalid`);
+    }
     if (nameByteOffset + nameByteLength > stringBytes) throw new Error(`animation track ${index} name bounds are invalid`);
     if (timeOffset + keyCount > floatData.length) throw new Error(`animation track ${index} time bounds are invalid`);
     if (valueOffset + keyCount * stride > floatData.length) throw new Error(`animation track ${index} value bounds are invalid`);

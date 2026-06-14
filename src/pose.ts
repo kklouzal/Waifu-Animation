@@ -107,21 +107,21 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
   const threshold = Math.max(0, options.threshold ?? DEFAULT_BLEND_THRESHOLD);
   for (let joint = 0; joint < jointCount; joint += 1) {
     const accumulated = totalWeights[joint]!;
+    const fallbackTransform = readFallbackTransform(skeleton, fallbackPose, joint);
     if (threshold > 0 && (!hasAnyLayer || accumulated < threshold)) {
       const restWeight = !hasAnyLayer ? 1 : threshold - accumulated;
       if (restWeight > 0) {
-        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, readFallbackTransform(skeleton, fallbackPose, joint), restWeight);
+        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, fallbackTransform, restWeight);
         totalWeights[joint] = (totalWeights[joint] ?? 0) + restWeight;
       }
     }
 
     const total = totalWeights[joint]!;
     if (total <= 0) {
-      output[joint] = cloneTransform(readFallbackTransform(skeleton, fallbackPose, joint));
+      output[joint] = cloneTransform(fallbackTransform);
       continue;
     }
     const invTotal = 1 / total;
-    const fallbackTransform = readFallbackTransform(skeleton, fallbackPose, joint);
     output[joint] = normalizeTransform({
       translation: [translationSums[joint]![0] * invTotal, translationSums[joint]![1] * invTotal, translationSums[joint]![2] * invTotal],
       rotation: normalizeQuat(rotationSums[joint]!, fallbackTransform.rotation),
