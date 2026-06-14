@@ -110,25 +110,30 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     if (threshold > 0 && (!hasAnyLayer || accumulated < threshold)) {
       const restWeight = !hasAnyLayer ? 1 : threshold - accumulated;
       if (restWeight > 0) {
-        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, fallbackPose[joint]!, restWeight);
+        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, readFallbackTransform(skeleton, fallbackPose, joint), restWeight);
         totalWeights[joint] = (totalWeights[joint] ?? 0) + restWeight;
       }
     }
 
     const total = totalWeights[joint]!;
     if (total <= 0) {
-      output[joint] = cloneTransform(fallbackPose[joint]);
+      output[joint] = cloneTransform(readFallbackTransform(skeleton, fallbackPose, joint));
       continue;
     }
     const invTotal = 1 / total;
+    const fallbackTransform = readFallbackTransform(skeleton, fallbackPose, joint);
     output[joint] = normalizeTransform({
       translation: [translationSums[joint]![0] * invTotal, translationSums[joint]![1] * invTotal, translationSums[joint]![2] * invTotal],
-      rotation: normalizeQuat(rotationSums[joint]!, fallbackPose[joint]!.rotation),
+      rotation: normalizeQuat(rotationSums[joint]!, fallbackTransform.rotation),
       scale: [scaleSums[joint]![0] * invTotal, scaleSums[joint]![1] * invTotal, scaleSums[joint]![2] * invTotal]
     });
   }
 
   return output;
+}
+
+function readFallbackTransform(skeleton: Skeleton, fallbackPose: readonly Transform[], joint: number): Transform {
+  return fallbackPose[joint] ?? skeleton.restPose[joint]!;
 }
 
 function accumulateTransform(rotationSum: Quat, translationSum: [number, number, number], scaleSum: [number, number, number], transform: Transform, weight: number): void {
@@ -148,8 +153,8 @@ function accumulateTransform(rotationSum: Quat, translationSum: [number, number,
 }
 
 export function additiveDeltaPose(restPose: readonly Transform[], samplePose: readonly Transform[]): Pose {
-  if (restPose.length !== samplePose.length) throw new Error("additive delta pose length mismatch");
-  return restPose.map((rest, index) => transformDelta(rest, samplePose[index]!));
+  if (samplePose.length > restPose.length) throw new Error("additive delta pose length mismatch");
+  return restPose.map((rest, index) => transformDelta(rest, samplePose[index] ?? rest));
 }
 
 export function applyAdditivePose(base: readonly Transform[], deltaPose: readonly Transform[], weight: number, mask?: JointMask): Pose {

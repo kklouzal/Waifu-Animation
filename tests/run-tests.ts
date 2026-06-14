@@ -30,6 +30,7 @@ import {
   readActiveThreeRuntimeClipSnapshots,
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
+  additiveDeltaPose,
   createSkeleton,
   clonePose,
   cloneTransform,
@@ -613,6 +614,24 @@ assert.equal(malformedMaskedBlend[1]!.translation[0], 0, "NaN mask entries shoul
 assert.equal(malformedMaskedBlend[2]!.translation[0], 0, "missing mask entries should not affect override blending");
 assert.equal(malformedMaskedBlend[3]!.translation[0], 0, "short partial masks should leave unspecified joints on fallback pose");
 
+const shortOverridePose = clonePose(skeleton.restPose);
+shortOverridePose[0]!.translation = [6, 0, 0];
+shortOverridePose[1]!.translation = [7, 0, 0];
+shortOverridePose.length = 2;
+const shortOverrideBlend = blendPoses(skeleton, [{ pose: shortOverridePose, weight: 1 }], { threshold: 0.01 });
+assert.equal(shortOverrideBlend[0]!.translation[0], 6, "short override poses should still blend available joints");
+assert.equal(shortOverrideBlend[1]!.translation[0], 7, "short override poses should still blend available child joints");
+assert.deepEqual(shortOverrideBlend[2]!.translation, skeleton.restPose[2]!.translation, "short override poses should fall back missing joints to rest pose");
+assert.deepEqual(shortOverrideBlend[3]!.translation, skeleton.restPose[3]!.translation, "short override poses should keep trailing missing joints on rest pose");
+
+const shortFallbackPose = clonePose(skeleton.restPose);
+shortFallbackPose[0]!.translation = [9, 0, 0];
+shortFallbackPose.length = 1;
+const shortFallbackBlend = blendPoses(skeleton, [], { threshold: 0.01, fallbackPose: shortFallbackPose });
+assert.equal(shortFallbackBlend[0]!.translation[0], 9, "valid fallback joints should still be used when fallback pose is short");
+assert.deepEqual(shortFallbackBlend[1]!.translation, skeleton.restPose[1]!.translation, "short fallback poses should use skeleton rest pose for missing joints");
+assert.deepEqual(shortFallbackBlend[2]!.translation, skeleton.restPose[2]!.translation, "short fallback poses should use skeleton rest pose for missing threshold fallback");
+
 const overweightMask = new Float32Array(skeleton.joints.length);
 overweightMask[2] = 2;
 const overweightMaskedBlend = blendPoses(
@@ -642,6 +661,20 @@ for (const transform of malformedAdditivePose) {
     "malformed additive masks should not produce non-finite transforms"
   );
 }
+
+const shortAdditiveSample = clonePose(skeleton.restPose);
+shortAdditiveSample[0]!.translation = [3, 0, 0];
+shortAdditiveSample.length = 1;
+const shortAdditiveDelta = additiveDeltaPose(skeleton.restPose, shortAdditiveSample);
+const shortAdditivePose = applyAdditivePose(skeleton.restPose, shortAdditiveDelta, 1);
+assert.equal(shortAdditivePose[0]!.translation[0], 3, "short additive samples should apply available deltas");
+assert.deepEqual(shortAdditivePose[1]!.translation, skeleton.restPose[1]!.translation, "short additive samples should use rest deltas for missing joints");
+assert.deepEqual(shortAdditivePose[2]!.translation, skeleton.restPose[2]!.translation, "short additive samples should leave trailing missing joints unchanged");
+assert.throws(
+  () => additiveDeltaPose(skeleton.restPose, [...clonePose(skeleton.restPose), cloneTransform(skeleton.restPose[0]!)]),
+  /additive delta pose length mismatch/,
+  "oversized additive samples should still fail clearly"
+);
 
 const tinyWeightBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }]);
 assert.ok(tinyWeightBlend[2]!.rotation[0] > 0);
