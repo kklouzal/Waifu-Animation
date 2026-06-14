@@ -133,6 +133,100 @@ assert.ok(
   ),
   "validateSkeleton should report duplicate humanoid bone assignments on malformed skeletons"
 );
+const nonIntegerParentSkeleton = {
+  ...skeleton,
+  joints: skeleton.joints.map((joint, index) => (index === 2 ? { ...joint, parentIndex: Number.NaN } : joint))
+};
+assert.ok(
+  validateSkeleton(nonIntegerParentSkeleton).some(
+    (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "parent index must be an integer"
+  ),
+  "validateSkeleton should report non-integer parent indices on malformed skeletons"
+);
+const duplicateJointNameSkeleton = {
+  ...skeleton,
+  joints: skeleton.joints.map((joint, index) => (index === 3 ? { ...joint, name: "head" } : joint))
+};
+assert.ok(
+  validateSkeleton(duplicateJointNameSkeleton).some(
+    (issue) => issue.index === 3 && issue.joint === "head" && issue.message === "duplicate joint name also assigned to index 2"
+  ),
+  "validateSkeleton should report duplicate joint names on externally mutated skeletons"
+);
+const staleParentsSkeleton = {
+  ...skeleton,
+  parents: Int16Array.from([-1, 0, 0, 1])
+};
+assert.ok(
+  validateSkeleton(staleParentsSkeleton).some(
+    (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "parents entry does not match joint parent"
+  ),
+  "validateSkeleton should report stale parents arrays"
+);
+const shortParentsSkeleton = {
+  ...skeleton,
+  parents: Int16Array.from([-1, 0])
+};
+assert.ok(
+  validateSkeleton(shortParentsSkeleton).some((issue) => issue.message === "parents length does not match joints"),
+  "validateSkeleton should report parents length mismatches"
+);
+const staleRestPoseSkeleton = {
+  ...skeleton,
+  restPose: skeleton.restPose.map((transform, index) => (index === 2 ? { ...cloneTransform(transform), translation: [0, 99, 0] as [number, number, number] } : cloneTransform(transform)))
+};
+assert.ok(
+  validateSkeleton(staleRestPoseSkeleton).some(
+    (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "rest pose entry does not match joint rest"
+  ),
+  "validateSkeleton should report stale rest pose entries"
+);
+const shortRestPoseSkeleton = {
+  ...skeleton,
+  restPose: skeleton.restPose.slice(0, 2)
+};
+assert.ok(
+  validateSkeleton(shortRestPoseSkeleton).some((issue) => issue.message === "rest pose length does not match joints"),
+  "validateSkeleton should report rest pose length mismatches"
+);
+const staleNameToIndexSkeleton = {
+  ...skeleton,
+  nameToIndex: new Map([
+    ["hips", 0],
+    ["spine", 1],
+    ["head", 3],
+    ["leftUpperArm", 3],
+    ["stale", 1]
+  ])
+};
+const staleNameToIndexIssues = validateSkeleton(staleNameToIndexSkeleton);
+assert.ok(
+  staleNameToIndexIssues.some((issue) => issue.index === 2 && issue.joint === "head" && issue.message === "nameToIndex entry does not match joint index"),
+  "validateSkeleton should report mismatched nameToIndex lookups"
+);
+assert.ok(
+  staleNameToIndexIssues.some((issue) => issue.message === "nameToIndex entry stale is stale"),
+  "validateSkeleton should report stale nameToIndex entries"
+);
+const staleHumanoidSkeleton = {
+  ...skeleton,
+  humanoid: new Map([
+    ["hips", 0],
+    ["spine", 1],
+    ["head", 3],
+    ["leftUpperArm", 3],
+    ["rightHand", 1]
+  ])
+};
+const staleHumanoidIssues = validateSkeleton(staleHumanoidSkeleton);
+assert.ok(
+  staleHumanoidIssues.some((issue) => issue.index === 2 && issue.joint === "head" && issue.message === "humanoid map entry head does not match joint index"),
+  "validateSkeleton should report mismatched humanoid map lookups"
+);
+assert.ok(
+  staleHumanoidIssues.some((issue) => issue.message === "humanoid map entry rightHand is stale"),
+  "validateSkeleton should report stale humanoid map entries"
+);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
