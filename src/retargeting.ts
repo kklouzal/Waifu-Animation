@@ -1,4 +1,4 @@
-import { type Quat, cloneQuat, invertQuat, multiplyQuat, normalizeQuat } from "./math.js";
+import { type Quat, cloneQuat, ensureShortestQuat, invertQuat, multiplyQuat, normalizeQuat } from "./math.js";
 import { type HumanoidBoneName, VRM_HUMANOID_BONES } from "./skeleton.js";
 
 export type RetargetedQuaternionTrack = {
@@ -34,9 +34,7 @@ export function retargetQuaternionTrackValues(values: readonly number[], sourceR
       invalidSamples += 1;
       retargeted = previous;
     }
-    if (i > 0 && previous[0] * retargeted[0] + previous[1] * retargeted[1] + previous[2] * retargeted[2] + previous[3] * retargeted[3] < 0) {
-      retargeted = [-retargeted[0], -retargeted[1], -retargeted[2], -retargeted[3]];
-    }
+    if (i > 0) retargeted = ensureShortestQuat(previous, retargeted);
     output.push(...retargeted);
     previous = retargeted;
   }

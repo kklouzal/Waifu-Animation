@@ -1,4 +1,4 @@
-import { type Quat, type Transform, EPSILON, cloneTransform, clamp, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Quat, type Transform, EPSILON, cloneTransform, clamp, ensureShortestQuat, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, clonePose } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
@@ -205,9 +205,7 @@ export function sanitizeQuaternionTrackValues(values: ArrayLike<number>): Float3
   let previous: Quat = [0, 0, 0, 1];
   for (let i = 0; i < values.length; i += 4) {
     let current = normalizeQuat([values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1]);
-    if (i > 0 && previous[0] * current[0] + previous[1] * current[1] + previous[2] * current[2] + previous[3] * current[3] < 0) {
-      current = [-current[0], -current[1], -current[2], -current[3]];
-    }
+    if (i > 0) current = ensureShortestQuat(previous, current);
     output.set(current, i);
     previous = current;
   }

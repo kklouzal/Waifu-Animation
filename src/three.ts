@@ -898,18 +898,7 @@ function applyWorldQuaternionCorrection(bone: Object3D, correction: Quat, influe
   if (lengthVec3([correction[0], correction[1], correction[2]]) <= 1e-7 || influence <= 0) return false;
   bone.updateMatrixWorld(true);
   bone.getWorldQuaternion(tmpCurrentWorld);
-  tmpCorrection.copy(quatToThree(correction));
-  if (influence < 0.999) tmpCorrection.slerp(tmpIdentity, 1 - influence).normalize();
-  tmpTargetWorld.copy(tmpCorrection).multiply(tmpCurrentWorld).normalize();
-  bone.parent?.getWorldQuaternion(tmpParentWorld);
-  if (bone.parent) {
-    tmpLocal.copy(tmpParentWorld).invert().multiply(tmpTargetWorld).normalize();
-  } else {
-    tmpLocal.copy(tmpTargetWorld);
-  }
-  bone.quaternion.copy(tmpLocal);
-  bone.updateMatrixWorld(true);
-  return true;
+  return applyWorldQuaternionDelta(bone, quatToThree(correction), influence);
 }
 
 function applyAnkleGroundAlignment(bone: Object3D, groundNormal: Vec3, localUp: Vec3, influence: number): boolean {
@@ -921,7 +910,11 @@ function applyAnkleGroundAlignment(bone: Object3D, groundNormal: Vec3, localUp: 
   const correction = quatFromUnitVectors(worldUp, normal, [0, 0, 1]);
   tmpLocalDirection.set(correction[0], correction[1], correction[2]);
   if (tmpLocalDirection.lengthSq() <= 1e-12) return false;
-  tmpCorrection.set(correction[0], correction[1], correction[2], correction[3]).normalize();
+  return applyWorldQuaternionDelta(bone, tmpCorrection.set(correction[0], correction[1], correction[2], correction[3]).normalize(), influence);
+}
+
+function applyWorldQuaternionDelta(bone: Object3D, deltaWorld: Quaternion, influence: number): boolean {
+  tmpCorrection.copy(deltaWorld);
   if (influence < 0.999) tmpCorrection.slerp(tmpIdentity, 1 - influence).normalize();
   tmpTargetWorld.copy(tmpCorrection).multiply(tmpCurrentWorld).normalize();
   bone.parent?.getWorldQuaternion(tmpParentWorld);

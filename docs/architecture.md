@@ -64,7 +64,7 @@ Waifu consumes this package for reusable concerns:
 - zeroing and limiting viseme stacks;
 - smoothing mouth/viseme targets and composing blink, speech, mood, emotion, and thinking expression weights through `FacialExpressionMixer`;
 - deterministic presence scheduling, gaze target planning, and bounded procedural bone targets through `PresencePlanner`;
-- foot-plant planning data for future app-side ground-contact and leg IK application;
+- foot-plant planning data plus optional Three.js pelvis/leg/ankle correction application hooks;
 - declarative root/body/finger track policies.
 
 Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime. The current baseline already keeps the Three adapter and animation plumbing in `Waifu-Animation`.

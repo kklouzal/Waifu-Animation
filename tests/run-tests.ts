@@ -53,6 +53,7 @@ import {
   multiplyQuat,
   invertQuat,
   retargetQuaternionSample,
+  retargetQuaternionTrackValues,
   sampleClipToPose,
   sampleTrack,
   sanitizeQuaternionTrackValues,
@@ -97,6 +98,11 @@ assert.ok(Math.abs(finiteQuatFallback[2] - Math.SQRT1_2) < 1e-12);
 assert.ok(Math.abs(finiteQuatFallback[3] - Math.SQRT1_2) < 1e-12);
 assert.deepEqual(normalizeQuat([Infinity, 0, 0, 1], [0, 0, 0, 2]), [0, 0, 0, 1]);
 assert.deepEqual(normalizeQuat([0, 0, 0, 0], [Number.NaN, 0, 0, 0]), [0, 0, 0, 1]);
+assert.deepEqual(
+  Array.from(sanitizeQuaternionTrackValues([0, 0, 0, 1, 0, 0, 0, -1])),
+  [0, 0, 0, 1, -0, -0, -0, 1],
+  "quaternion track sanitization should keep equivalent samples in the shortest hemisphere"
+);
 const repairedTransform = normalizeTransform({
   translation: [Number.NaN, 2, Infinity],
   rotation: [0, 0, 0, 0],
@@ -1273,6 +1279,11 @@ assert.ok(
     Math.abs(retargetedToNormalizedRest[2] - expectedNormalizedDelta[2]) < 1e-5 &&
     Math.abs(retargetedToNormalizedRest[3] - expectedNormalizedDelta[3]) < 1e-5,
   "retargeting should preserve source local rotation deltas before applying normalized target rest"
+);
+assert.deepEqual(
+  retargetQuaternionTrackValues([0, 0, 0, 1, 0, 0, 0, -1], undefined, [0, 0, 0, 1]).values,
+  [0, 0, 0, 1, -0, -0, -0, 1],
+  "retargeted quaternion tracks should keep equivalent samples in the shortest hemisphere"
 );
 
 const mismatchedBasisSourceRest = quatFromAxisAngle([0, 0, 1], Math.PI / 2);

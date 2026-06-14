@@ -41,13 +41,15 @@ npm test
 - `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
 - `pose`: rest pose creation, blending, additive layers, masks, pose validation.
 - `runtime`: deterministic layer stack, crossfades, priorities, final local/model pose evaluation.
+- `masks`: declarative track-name policies for renderer adapters.
+- `manifest`: manifest includes, duplicate/id validation, clip asset inspection, usable/rejected clip helpers.
 - `procedural`: look-at distribution, seeded attention/idle scheduling helpers.
 - `ik`: two-bone IK and target clamping foundations.
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
 - `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
 - `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded animation clips, track policies, runtime clip lanes, action preparation, base-loop seam/transition policy helpers, overlay fade helpers, sanitized clip snapshots, and base/overlay/debug influence diagnostics.
-- `debug`: pose metrics, invalid transform diagnostics, runtime snapshots.
+- `debug`, `validation`, and `asset-validation`: pose metrics, invalid transform diagnostics, runtime snapshots, input checks, and manifest/clip asset validation.
 
 ## Pipeline
 
