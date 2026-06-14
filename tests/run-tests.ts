@@ -52,11 +52,13 @@ import {
   invertQuat,
   retargetQuaternionSample,
   sampleClipToPose,
+  sampleTrack,
   sanitizeQuaternionTrackValues,
   solveFootPlant,
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   toFloat32Array,
+  validateClip,
   validateSkeleton,
   validateAnimationInputs
 } from "../src/index.js";
@@ -537,6 +539,30 @@ assert.deepEqual(malformedFallbackPose[0]!.translation, [0, 0, 0], "missing tran
 assert.deepEqual(malformedFallbackPose[1]!.rotation, [0, 0, 0, 1], "missing rotation samples should fall back to identity rotation");
 assert.deepEqual(malformedFallbackPose[2]!.scale, [1, 1, 1], "missing scale samples should fall back to identity scale");
 assert.deepEqual(malformedFallbackPose[3]!.scale, [1, 1, 1], "empty scale tracks should fall back to identity scale");
+
+const unsupportedPropertyClip = {
+  id: "unsupported-property",
+  duration: 1,
+  tracks: [{ humanBone: "hips", property: "visibility", times: toFloat32Array([0]), values: toFloat32Array([1, 1, 1]) }]
+} as unknown as AnimationClip;
+const unsupportedPropertyIssues = validateClip(unsupportedPropertyClip, skeleton);
+assert.equal(
+  unsupportedPropertyIssues.some(
+    (issue) => issue.track === 0 && issue.property === "visibility" && issue.message === "track property is unsupported"
+  ),
+  true,
+  "unsupported external track properties should be reported instead of treated as 3-float transform channels"
+);
+assert.throws(
+  () => sampleTrack(unsupportedPropertyClip.tracks[0]!, 0),
+  /unsupported animation track property visibility/,
+  "unsupported external track properties should fail during direct sampling"
+);
+assert.throws(
+  () => sampleClipToPose(skeleton, unsupportedPropertyClip, 0),
+  /unsupported animation track property visibility/,
+  "unsupported mapped track properties should not be silently ignored during pose sampling"
+);
 
 const models = localToModelPose(skeleton, sampled);
 assert.equal(models.length, skeleton.joints.length);
@@ -1244,6 +1270,35 @@ const authoredRotationClip = createThreeAnimationClip(
 const authoredTrackValues = Array.from(authoredRotationClip.tracks[0]!.values as ArrayLike<number>);
 assert.deepEqual(authoredTrackValues.slice(0, 4), [0, 0, 0, 1], "authored target-local rotations must not be pre-multiplied by target rest");
 assert.ok(authoredTrackValues[5]! > 0.19, "authored target-local rotations should preserve sampled components");
+
+const posedDuringAsyncLoadBone = new Object3D();
+posedDuringAsyncLoadBone.name = "leftUpperLeg";
+posedDuringAsyncLoadBone.quaternion.fromArray(quatFromAxisAngle([0, 0, 1], Math.PI / 2));
+const explicitRestClip = createThreeAnimationClip(
+  {
+    id: "explicit-target-rest",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "leftUpperLeg",
+        property: "quaternion",
+        sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([0, 0, 0, 1, 0, 0, 0, 1])
+      }
+    ]
+  },
+  {
+    resolveBone: (bone) => (bone === "leftUpperLeg" ? posedDuringAsyncLoadBone : null),
+    targetRestQuaternion: () => [0, 0, 0, 1]
+  }
+);
+const explicitRestValues = Array.from(explicitRestClip.tracks[0]!.values as ArrayLike<number>);
+assert.deepEqual(
+  explicitRestValues.slice(0, 4),
+  [0, 0, 0, 1],
+  "explicit target rest should prevent live async-loaded bone poses from being baked into retargeted tracks"
+);
 
 const look = distributeLookAt([0.4, 0.2, 2]);
 assert.ok(look.head.yaw > 0);

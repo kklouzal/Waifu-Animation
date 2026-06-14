@@ -130,6 +130,7 @@ function hasLoopCompatibleEndpoints(clip: AnimationClip): boolean {
   for (const track of clip.tracks) {
     if (track.times.length < 2) continue;
     const property = normalizedTrackProperty(track.property);
+    if (!property) continue;
     const stride = property === "rotation" ? 4 : 3;
     const first = 0;
     const last = (track.times.length - 1) * stride;

@@ -28,6 +28,7 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
     const times = toFloat32Array(track.times);
     const values = toFloat32Array(track.values);
     const property = normalizedTrackProperty(track.property);
+    if (!property) throw new Error(`animation track ${targetName}.${track.property} has unsupported property`);
     const stride = trackStride(property);
     if (times.length < 1) throw new Error(`animation track ${targetName}.${track.property} has no keys`);
     if (values.length !== times.length * stride) {

@@ -3,6 +3,7 @@ import { type Pose, clonePose } from "./pose.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
 export type TrackProperty = "translation" | "rotation" | "scale" | "position" | "quaternion";
+export type NormalizedTrackProperty = "translation" | "rotation" | "scale";
 
 export type AnimationTrack = {
   joint?: string;
@@ -25,7 +26,7 @@ export type AnimationClip = {
 export type ClipValidationIssue = {
   track?: number;
   joint?: string;
-  property?: TrackProperty;
+  property?: string;
   message: string;
 };
 
@@ -39,14 +40,18 @@ const ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
 
 export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipValidationIssue[] {
   const issues: ClipValidationIssue[] = [];
-  const resolvedChannels = new Map<string, { track: number; joint: string; property: ReturnType<typeof normalizedTrackProperty> }>();
+  const resolvedChannels = new Map<string, { track: number; joint: string; property: NormalizedTrackProperty }>();
   if (!clip.id) issues.push({ message: "clip id is required" });
   if (!Number.isFinite(clip.duration) || clip.duration <= 0) issues.push({ message: "clip duration must be positive and finite" });
   for (let index = 0; index < clip.tracks.length; index += 1) {
     const track = clip.tracks[index]!;
-    const stride = trackStride(track.property);
     const jointName = track.joint ?? track.humanBone;
     const property = normalizedTrackProperty(track.property);
+    if (!property) {
+      issues.push({ track: index, joint: String(jointName ?? ""), property: String(track.property), message: "track property is unsupported" });
+      continue;
+    }
+    const stride = trackStride(property);
     if (!jointName) issues.push({ track: index, property: track.property, message: "track needs joint or humanBone" });
     const jointIndex = skeleton && jointName ? resolveTrackJointIndex(skeleton, track) : -1;
     if (skeleton && jointName && jointIndex < 0) {
@@ -95,7 +100,7 @@ function validateRotationTrackQuaternions(
   track: AnimationTrack,
   index: number,
   joint: string,
-  property: ReturnType<typeof normalizedTrackProperty>
+  property: NormalizedTrackProperty
 ): void {
   if (property !== "rotation") return;
   if (track.values.some((value) => !Number.isFinite(value))) return;
@@ -126,7 +131,7 @@ function validateSourceRestQuaternion(
   track: AnimationTrack,
   index: number,
   joint: string,
-  property: ReturnType<typeof normalizedTrackProperty>
+  property: NormalizedTrackProperty
 ): void {
   const sourceRest = track.sourceRestQuaternion;
   if (!sourceRest) return;
@@ -158,7 +163,7 @@ function resolvedTrackChannel(
   skeleton: Skeleton | undefined,
   track: AnimationTrack,
   jointIndex: number,
-  property: ReturnType<typeof normalizedTrackProperty>
+  property: NormalizedTrackProperty
 ): { key: string; joint: string } | null {
   const jointName = track.joint ?? track.humanBone;
   if (!jointName) return null;
@@ -170,14 +175,17 @@ function resolvedTrackChannel(
   return { key: `${String(jointName)}:${property}`, joint: String(jointName) };
 }
 
-export function trackStride(property: TrackProperty): 3 | 4 {
-  return property === "rotation" || property === "quaternion" ? 4 : 3;
+export function trackStride(property: string): 3 | 4 {
+  const normalized = normalizedTrackProperty(property);
+  if (!normalized) throw new Error(`unsupported animation track property ${String(property)}`);
+  return normalized === "rotation" ? 4 : 3;
 }
 
-export function normalizedTrackProperty(property: TrackProperty): "translation" | "rotation" | "scale" {
+export function normalizedTrackProperty(property: string): NormalizedTrackProperty | null {
   if (property === "quaternion") return "rotation";
   if (property === "position") return "translation";
-  return property;
+  if (property === "translation" || property === "rotation" || property === "scale") return property;
+  return null;
 }
 
 export function resolveTrackJointIndex(skeleton: Skeleton, track: AnimationTrack): number {
@@ -212,6 +220,7 @@ export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSe
     const jointIndex = resolveTrackJointIndex(skeleton, track);
     if (jointIndex < 0) continue;
     const property = normalizedTrackProperty(track.property);
+    if (!property) throw new Error(`unsupported animation track property ${String(track.property)}`);
     const sampled = sampleTrack(track, time);
     const transform = cloneTransform(output[jointIndex]);
     if (property === "translation") transform.translation = sampled as [number, number, number];
@@ -231,8 +240,9 @@ export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boole
 }
 
 export function sampleTrack(track: AnimationTrack, timeSeconds: number): number[] {
-  const stride = trackStride(track.property);
   const property = normalizedTrackProperty(track.property);
+  if (!property) throw new Error(`unsupported animation track property ${String(track.property)}`);
+  const stride = trackStride(property);
   if (track.times.length === 0) return defaultTrackSample(property);
   if (timeSeconds <= track.times[0]!) return readTrackValue(track, 0, stride, property);
   const last = track.times.length - 1;
@@ -255,13 +265,13 @@ export function sampleTrack(track: AnimationTrack, timeSeconds: number): number[
   return lerpVec3(a as [number, number, number], b as [number, number, number], t);
 }
 
-function defaultTrackSample(property: ReturnType<typeof normalizedTrackProperty>): number[] {
+function defaultTrackSample(property: NormalizedTrackProperty): number[] {
   if (property === "rotation") return [0, 0, 0, 1];
   if (property === "scale") return [1, 1, 1];
   return [0, 0, 0];
 }
 
-function readTrackValue(track: AnimationTrack, keyIndex: number, stride: 3 | 4, property: ReturnType<typeof normalizedTrackProperty>): number[] {
+function readTrackValue(track: AnimationTrack, keyIndex: number, stride: 3 | 4, property: NormalizedTrackProperty): number[] {
   const offset = keyIndex * stride;
   const fallback = defaultTrackSample(property);
   const values = fallback.map((value, index) => track.values[offset + index] ?? value);

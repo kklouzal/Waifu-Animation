@@ -30,6 +30,7 @@ export type ThreeAnimationClipOptions = {
   id?: string;
   playback?: AnimationManifestEntry["playback"];
   resolveBone: ThreeBoneResolver;
+  targetRestQuaternion?: (humanBone: string, bone: Object3D) => ArrayLike<number> | null | undefined;
   logger?: Pick<Console, "warn">;
   minimumDuration?: number;
 };
@@ -276,6 +277,10 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
     }
 
     const property = normalizedTrackProperty(track.property);
+    if (!property) {
+      options.logger?.warn("unsupported animation track skipped", options.id ?? clip.id, boneName, track.property);
+      return [];
+    }
     const sampleWindow = sliceAnimationTrackWindow(track, playback.start, playback.end);
     if (sampleWindow.times.length < 2) return [];
     runtimeDuration = Math.max(runtimeDuration, sampleWindow.duration);
@@ -284,7 +289,7 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
       const { values, invalidSamples } = retargetQuaternionTrackValues(
         sampleWindow.values,
         track.sourceRestQuaternion,
-        bone.quaternion.toArray()
+        options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray()
       );
       if (invalidSamples > 0) {
         options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, invalidSamples);
@@ -836,7 +841,9 @@ function resolvePlaybackWindow(clip: AnimationClip, playback: AnimationManifestE
 }
 
 function trackHasValidShape(track: AnimationTrack): boolean {
-  const stride = trackStride(track.property);
+  const property = normalizedTrackProperty(track.property);
+  if (!property) return false;
+  const stride = trackStride(property);
   return track.times.length >= 2 && track.values.length === track.times.length * stride && track.values.every(Number.isFinite);
 }
 
