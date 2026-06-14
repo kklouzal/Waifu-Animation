@@ -1254,6 +1254,22 @@ const presenceApply = applyThreePresenceTargets({
 });
 assert.equal(presenceApply.applied, true);
 assert.ok(Math.abs(presenceBone.quaternion.w) < 0.99999);
+const presenceFallbackSpeedBone = new Object3D();
+const presenceFallbackSpeed = applyThreePresenceTargets({
+  resolveBone: (bone) => (bone === "head" ? presenceFallbackSpeedBone : null),
+  deltaSeconds: 1 / 30,
+  targets: [{ bone: "head", rotation: [0.1, 0.2, 0], influence: 1, speed: Number.NaN }]
+});
+assert.equal(presenceFallbackSpeed.applied, true, "Three presence application should fall back from non-finite target speeds");
+assert.ok(
+  [
+    presenceFallbackSpeedBone.quaternion.x,
+    presenceFallbackSpeedBone.quaternion.y,
+    presenceFallbackSpeedBone.quaternion.z,
+    presenceFallbackSpeedBone.quaternion.w
+  ].every(Number.isFinite),
+  "Three presence application should keep bone quaternions finite for non-finite target speeds"
+);
 assert.equal(
   applyThreePresenceTargets({
     resolveBone: () => null,
@@ -1694,6 +1710,19 @@ const clearedFootPlant = clearThreeFootPlantOffsets({
 });
 assert.equal(clearedFootPlant.cleared, true);
 assert.ok(Math.abs(pelvisBone.position.y) < 1e-6);
+const fallbackSpeedPelvis = new Object3D();
+fallbackSpeedPelvis.name = "hips";
+const fallbackSpeedFootPlant = applyThreeFootPlantResult(footPlant, {
+  resolveBone: (bone) => (bone === "hips" ? fallbackSpeedPelvis : null),
+  pelvis: "hips",
+  legs: [],
+  deltaSeconds: 1 / 30,
+  speed: Number.NaN,
+  applyPelvis: true,
+  applyLegIk: false
+});
+assert.equal(fallbackSpeedFootPlant.pelvisApplied, true, "Three foot plant application should fall back from non-finite speeds");
+assert.ok(fallbackSpeedFootPlant.pelvisOffsetLocal.every(Number.isFinite), "Three foot plant fallback offsets should remain finite");
 
 const visemes = new VisemeMixer({ maxTotal: 0.4 });
 visemes.setTarget({ aa: 0.4, ou: 0.4 });
@@ -1747,6 +1776,13 @@ const threeClip = createThreeAnimationClip(nodClip, {
 assert.equal(threeClip.name, "nod");
 assert.equal(threeClip.tracks.length, 1);
 assert.equal(threeClip.tracks[0]!.name, `${headBone.uuid}.quaternion`);
+const nonFiniteDurationClip = createThreeAnimationClip(
+  { ...nodClip, id: "non-finite-duration", duration: Number.NaN },
+  {
+    resolveBone: (humanBone) => (humanBone === "head" ? headBone : null)
+  }
+);
+assert.equal(Number.isFinite(nonFiniteDurationClip.duration), true, "Three clip creation should not emit non-finite durations");
 
 const duplicateRoot = new Object3D();
 const duplicateWrongBone = new Object3D();

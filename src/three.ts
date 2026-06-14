@@ -557,8 +557,10 @@ export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): T
   const issues: string[] = [];
   const targets: ThreePresenceAppliedTarget[] = [];
   if (options.enabled === false) return { applied: false, targets, issues };
+  const deltaSeconds = sanitizeThreeRuntimeTime(options.deltaSeconds);
   for (const target of options.targets) {
-    const influence = clamp01(target.influence);
+    const influence = sanitizeThreeRuntimeWeight(target.influence);
+    const speed = sanitizePositiveThreeRuntimeValue(target.speed ?? 8, 8);
     const appliedTarget: ThreePresenceAppliedTarget = { bone: target.bone, applied: false, influence };
     targets.push(appliedTarget);
     if (influence <= 0) {
@@ -571,7 +573,7 @@ export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): T
       issues.push(`${target.bone}: missing bone`);
       continue;
     }
-    appliedTarget.applied = applyLocalEulerTarget(bone, target.rotation, influence, options.deltaSeconds, target.speed ?? 8);
+    appliedTarget.applied = applyLocalEulerTarget(bone, target.rotation, influence, deltaSeconds, speed);
     if (!appliedTarget.applied) appliedTarget.skippedReason = "invalid-or-negligible-target";
   }
   return { applied: targets.some((target) => target.applied), targets, issues };
@@ -737,8 +739,9 @@ export function clearThreeFootPlantOffsets(options: ThreeFootPlantClearOptions):
 }
 
 export function applyThreeFootPlantResult(result: FootPlantResult, options: ThreeFootPlantApplyOptions): ThreeFootPlantApplyResult {
-  const influence = clamp01(options.influence ?? 1);
-  const amount = influence * (options.deltaSeconds === undefined ? 1 : dampAlpha(options.speed ?? 32, options.deltaSeconds));
+  const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
+  const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 32, 32);
+  const amount = influence * (options.deltaSeconds === undefined ? 1 : dampAlpha(speed, sanitizeThreeRuntimeTime(options.deltaSeconds)));
   const issues = [...result.issues];
   const applyPelvis = options.applyPelvis !== false;
   const applyLegIk = options.applyLegIk !== false;
@@ -784,7 +787,7 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
       continue;
     }
 
-    const legAmount = clamp01(amount * (binding.influence ?? 1));
+    const legAmount = sanitizeThreeRuntimeWeight(amount * sanitizeThreeRuntimeWeight(binding.influence ?? 1));
     if (legAmount <= 0) {
       applied.skippedReason = "zero-influence";
       continue;
@@ -830,13 +833,14 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
 }
 
 function resolvePlaybackWindow(clip: AnimationClip, playback: AnimationManifestEntry["playback"] | undefined, minimumDuration: number): { start: number; end: number } {
-  const duration = Math.max(0, clip.duration);
+  const duration = sanitizeThreeRuntimeTime(clip.duration);
+  const minDuration = sanitizePositiveThreeRuntimeValue(minimumDuration, 0.1);
   const start = clamp(playback?.start ?? 0, 0, duration);
   const requestedEnd = clamp(playback?.end ?? duration, 0, duration);
-  const end = Math.max(start + minimumDuration, requestedEnd);
+  const end = Math.max(start + minDuration, requestedEnd);
   return {
-    start: Math.min(start, Math.max(0, duration - minimumDuration)),
-    end: clamp(end, minimumDuration, duration)
+    start: Math.min(start, Math.max(0, duration - minDuration)),
+    end: clamp(end, minDuration, duration)
   };
 }
 
