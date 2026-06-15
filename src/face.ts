@@ -1,4 +1,4 @@
-import { type RandomSource, clamp01, createSeededRandom, dampAlpha, finiteNonNegative, randomRange } from "./math.js";
+import { type RandomSource, clamp01, createSeededRandom, dampAlpha, dampValue, finiteNonNegative, randomRange } from "./math.js";
 
 export const VISEME_NAMES = ["aa", "ih", "ou", "ee", "oh"] as const;
 export type VisemeName = (typeof VISEME_NAMES)[number];
@@ -177,7 +177,7 @@ export class FacialExpressionMixer {
     this.setTarget(input);
     const talking = input.talking ?? true;
     const target = talking ? this.targetMouth : 0;
-    this.mouthLevel += (target - this.mouthLevel) * dampAlpha(target > this.mouthLevel ? this.mouthAttack : this.mouthRelease, deltaSeconds);
+    this.mouthLevel = dampValue(this.mouthLevel, target, target > this.mouthLevel ? this.mouthAttack : this.mouthRelease, deltaSeconds);
     const visemes = this.visemes.update(deltaSeconds, talking);
     return {
       mouthLevel: this.mouthLevel,
