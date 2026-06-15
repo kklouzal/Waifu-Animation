@@ -305,19 +305,7 @@ assert.equal(
   "declared channels with distinct normalized properties should remain valid"
 );
 
-const validSourceRestQuaternionClip: AnimationClip = {
-  id: "valid-source-rest-quaternion",
-  duration: 1,
-  tracks: [
-    {
-      humanBone: "head",
-      property: "quaternion",
-      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
-      times: toFloat32Array([0]),
-      values: toFloat32Array([0, 0, 0, 1])
-    }
-  ]
-};
+const validSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("valid-source-rest-quaternion");
 assert.equal(validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted, true, "valid source rest metadata on quaternion tracks should remain accepted");
 const decodedSourceRestQuaternionClip = decodeAnimationBinary(encodeAnimationBinary(validSourceRestQuaternionClip), "valid-source-rest-quaternion");
 assert.deepEqual(
@@ -331,19 +319,7 @@ assert.throws(
   "binary encoding should reject malformed source rest quaternion metadata before writing a corrupt payload"
 );
 
-const invalidZeroSourceRestQuaternionClip: AnimationClip = {
-  id: "invalid-zero-source-rest-quaternion",
-  duration: 1,
-  tracks: [
-    {
-      humanBone: "head",
-      property: "quaternion",
-      sourceRestQuaternion: toFloat32Array([0, 0, 0, 0]),
-      times: toFloat32Array([0]),
-      values: toFloat32Array([0, 0, 0, 1])
-    }
-  ]
-};
+const invalidZeroSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("invalid-zero-source-rest-quaternion", { sourceRestQuaternion: [0, 0, 0, 0] });
 const invalidZeroSourceRestQuaternionReport = validateAnimationInputs(skeleton, invalidZeroSourceRestQuaternionClip);
 assert.equal(invalidZeroSourceRestQuaternionReport.accepted, false);
 assert.ok(
@@ -357,19 +333,7 @@ assert.ok(
   "validateAnimationInputs should reject zero-length source rest quaternion metadata"
 );
 
-const invalidNonUnitSourceRestQuaternionClip: AnimationClip = {
-  id: "invalid-non-unit-source-rest-quaternion",
-  duration: 1,
-  tracks: [
-    {
-      humanBone: "head",
-      property: "quaternion",
-      sourceRestQuaternion: toFloat32Array([0, 0, 0, 2]),
-      times: toFloat32Array([0]),
-      values: toFloat32Array([0, 0, 0, 1])
-    }
-  ]
-};
+const invalidNonUnitSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("invalid-non-unit-source-rest-quaternion", { sourceRestQuaternion: [0, 0, 0, 2] });
 const invalidNonUnitSourceRestQuaternionInspection = inspectClipAsset(
   {
     id: "invalid-non-unit-source-rest-quaternion",
@@ -395,20 +359,8 @@ const invalidSourceRestQuaternionShapeClip: AnimationClip = {
   id: "invalid-source-rest-quaternion-shape",
   duration: 1,
   tracks: [
-    {
-      humanBone: "head",
-      property: "quaternion",
-      sourceRestQuaternion: toFloat32Array([0, 0, 1]),
-      times: toFloat32Array([0]),
-      values: toFloat32Array([0, 0, 0, 1])
-    },
-    {
-      humanBone: "spine",
-      property: "rotation",
-      sourceRestQuaternion: toFloat32Array([0, Number.NaN, 0, 1]),
-      times: toFloat32Array([0]),
-      values: toFloat32Array([0, 0, 0, 1])
-    }
+    makeSourceRestQuaternionTrack({ sourceRestQuaternion: [0, 0, 1] }),
+    makeSourceRestQuaternionTrack({ humanBone: "spine", property: "rotation", sourceRestQuaternion: [0, Number.NaN, 0, 1] })
   ]
 };
 const invalidSourceRestQuaternionShapeReport = validateAnimationInputs(skeleton, invalidSourceRestQuaternionShapeClip);
@@ -434,19 +386,11 @@ assert.ok(
   "validateAnimationInputs should reject non-finite source rest quaternion components"
 );
 
-const invalidSourceRestQuaternionPropertyClip: AnimationClip = {
-  id: "invalid-source-rest-quaternion-property",
-  duration: 1,
-  tracks: [
-    {
-      joint: "head",
-      property: "translation",
-      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
-      times: toFloat32Array([0]),
-      values: toFloat32Array([0, 0, 0])
-    }
-  ]
-};
+const invalidSourceRestQuaternionPropertyClip: AnimationClip = makeSourceRestQuaternionClip("invalid-source-rest-quaternion-property", {
+  joint: "head",
+  property: "translation",
+  values: [0, 0, 0]
+});
 const invalidSourceRestQuaternionPropertyInspection = inspectClipAsset(
   {
     id: "invalid-source-rest-quaternion-property",
@@ -2136,6 +2080,25 @@ function assertFiniteEvaluation(evaluation: ReturnType<AnimationRuntime["evaluat
   for (const matrix of evaluation.modelPose) {
     assert.ok(Array.from(matrix).every(Number.isFinite));
   }
+}
+
+function makeSourceRestQuaternionClip(id: string, track: Partial<AnimationClip["tracks"][number]> = {}): AnimationClip {
+  return {
+    id,
+    duration: 1,
+    tracks: [makeSourceRestQuaternionTrack(track)]
+  };
+}
+
+function makeSourceRestQuaternionTrack(track: Partial<AnimationClip["tracks"][number]> = {}): AnimationClip["tracks"][number] {
+  const { humanBone = "head", joint, property = "quaternion", sourceRestQuaternion = [0, 0, 0, 1], times = [0], values = [0, 0, 0, 1] } = track;
+  return {
+    ...(joint === undefined ? { humanBone } : { joint }),
+    property,
+    sourceRestQuaternion: toFloat32Array(sourceRestQuaternion),
+    times: toFloat32Array(times),
+    values: toFloat32Array(values)
+  };
 }
 
 function makeRuntimeClipDiagnosticStub(options: {
