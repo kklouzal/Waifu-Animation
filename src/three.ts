@@ -886,7 +886,7 @@ function estimateShoulderWidth(leftUpper: Object3D | null | undefined, rightUppe
   rightUpper.updateMatrixWorld(true);
   const left = objectWorldVec3(leftUpper);
   const right = objectWorldVec3(rightUpper);
-  return clamp(lengthVec3([left[0] - right[0], left[1] - right[1], left[2] - right[2]]), 0.22, 0.72);
+  return clamp(lengthVec3(subVec3(left, right)), 0.22, 0.72);
 }
 
 function quatToThree(value: Quat): Quaternion {
