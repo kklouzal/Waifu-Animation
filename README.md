@@ -8,7 +8,7 @@ The architecture follows the Ozz Animation runtime model where it is useful for 
 - animation clips are sampled into local-space pose buffers;
 - ordinary blending, additive blending, partial masks, and priority are explicit;
 - local poses are converted to model-space matrices at a clear pipeline boundary;
-- IK, look-at, facial, viseme, scheduler, debug, and validation helpers are optional systems layered around the core pose pipeline.
+- IK, look-at, facial, viseme, scheduler, debug, and validation helpers are optional reusable systems layered around the core pose pipeline.
 
 This project does not embed Ozz C++ source. It mirrors Ozz concepts and math boundaries in TypeScript. Ozz Animation is MIT licensed; see `docs/ozz-reference.md` for attribution and design notes.
 
@@ -48,7 +48,7 @@ npm test
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
 - `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
-- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded animation clips, track policies, runtime clip lanes, action preparation, base-loop seam/transition policy helpers, overlay fade helpers, sanitized clip snapshots, and base/overlay/debug influence diagnostics.
+- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded authored animation clips, track policies, runtime clip lanes, action preparation, base-loop seam/transition policy helpers, overlay fade helpers, sanitized clip snapshots, reusable procedural application hooks, and base/overlay/debug influence diagnostics.
 - `debug`, `validation`, and `asset-validation`: pose metrics, invalid transform diagnostics, runtime snapshots, input checks, and manifest/clip asset validation.
 
 ## Pipeline
@@ -61,7 +61,7 @@ The canonical frame pipeline is:
 4. Apply partial-body and additive layers through masks.
 5. Normalize and validate local pose quaternions.
 6. Convert local pose to model-space matrices.
-7. Apply procedural look-at/aim and IK corrections through explicit hooks.
-8. Emit skeletal pose plus facial/viseme expression weights to the consumer.
+7. Optionally run procedural look-at/aim, foot-plant, and IK jobs through explicit library hooks for consumers that opt into procedural skeletal corrections.
+8. Emit skeletal pose plus facial/viseme expression weights and non-skeletal cue data to the consumer.
 
-Waifu remains responsible for VRM model loading, browser rendering, websocket state, audio playback, and visual capture. `Waifu-Animation` owns reusable math, manifests, validation, retargeting, Three clip binding, runtime clip lane setup, generic lane blend/action policy, and deterministic animation decisions.
+Waifu remains responsible for VRM model loading, browser rendering, websocket state, audio playback, and visual capture. Under the current Waifu app policy, authored animation clips played through Three `AnimationMixer` are the only runtime source of skeletal bone/joint rotations. `Waifu-Animation` still owns reusable math, manifests, validation, retargeting, Three clip binding, runtime clip lane setup, generic lane blend/action policy, deterministic animation decisions, non-skeletal look-at/face/viseme cues, and optional IK/look-at/foot-plant/procedural job APIs for other consumers or future Waifu policies.

@@ -22,10 +22,10 @@ Current coverage includes:
 - declarative track-name masks;
 - Three adapter clip binding and runtime lane construction;
 - look-at target distribution;
-- deterministic presence planning for cues, gaze targets, and bounded procedural bone targets;
+- deterministic presence planning for cues, gaze targets, non-skeletal look-at outputs, and bounded procedural bone targets exposed as reusable library data;
 - two-bone IK solve sanity, including diagonal target projection onto the upper-bone sphere;
 - normalized two-bone IK correction quaternions;
-- foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, finite leg IK output, and Three.js application/cleanup of pelvis plus leg correction quaternions with sanitized timing;
+- foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, finite leg IK output, and reusable Three.js application/cleanup of pelvis plus leg correction quaternions with sanitized timing;
 - viseme stack limiting;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger/timing sanity;
 - pose rotation metrics, including sign-equivalent quaternion handling.
@@ -78,11 +78,11 @@ Targeted presence-planner validation after moving deterministic cue/gaze/body ta
 - Result: passed with nine captures, recorded WebM, zero bad logs, zero motion issues, and bounded pose deltas from `0.0097` to `0.0352` across idle, speaking, thinking, emphasize, wave, listening, and shrug states.
 
 
-Targeted rendered foot-plant application validation after adding the reusable Three.js application hook:
+Historical targeted rendered foot-plant application validation after adding the reusable Three.js application hook:
 
 - Artifact directory: `/Warehouse/Waifu/cache/waifu-animation-foundation/2026-06-08/foot-plant-apply/animations`
-- Command: `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_ANIMATION_RUNTIME_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/foot-plant-apply/animations WAIFU_ANIMATION_APPLY_FOOT_PLANT=1 npm run visual:animations`
-- Result: passed with recorded WebM, final screenshot, 564 manifest clips, 555 unique clip assets, zero asset/runtime issues, and rendered foot-plant application telemetry for walk, jog, and stand-to-walk representatives. Each locomotion representative produced six planted samples, six active applied samples, six pelvis samples, and twelve leg/ankle correction samples. Max correction remained within the 0.22 m clamp (`0.182` max); minimum target reach remained at or above `0.974`. The remaining IK reach-clamp messages are bounded diagnostic notes, not failed runtime issues.
+- Command: package/Waifu visual gate using the then-available foot-plant application flag.
+- Result: passed with recorded WebM, final screenshot, 564 manifest clips, 555 unique clip assets, zero asset/runtime issues, and rendered foot-plant application telemetry for walk, jog, and stand-to-walk representatives. Each locomotion representative produced six planted samples, six active applied samples, six pelvis samples, and twelve leg/ankle correction samples. Max correction remained within the 0.22 m clamp (`0.182` max); minimum target reach remained at or above `0.974`. This remains evidence for the reusable package hook, not current Waifu skeletal application policy.
 
 Final broad visual validation after the foot-plant hook:
 
@@ -101,10 +101,10 @@ The generated Mocap Online library now records explicit root-motion policy metad
 
 ## Known Limits
 
-- The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. Waifu still applies package-produced procedural targets through Three/VRM bone writes in `src/client/main.ts`; final browser pose application has not fully moved onto package-owned local-pose buffers.
-- The package now exposes an Ozz-inspired foot-plant planning job, reusable two-bone IK correction quaternions, and an optional Three.js application hook. Waifu feeds studio-floor debug contacts into the job for representative locomotion clips and can enable rendered pelvis/leg corrections with `?footPlant=apply` or `WAIFU_ANIMATION_APPLY_FOOT_PLANT=1` in the visual animation gate.
-- The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, rendered foot-plant application telemetry for those locomotion debug clips, visemes, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, arbitrary rendered foot planting beyond those representatives, preserved root-motion application, prop attachments, or multi-avatar retargeting.
-- The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend through the package adapter. The package provides an Ozz-style local-pose runtime, but Waifu has not yet moved final browser pose application fully onto that buffer pipeline.
+- The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. Under the current Waifu app policy, Waifu does not apply package-produced procedural skeletal bone targets; authored clips played through Three `AnimationMixer` are the only runtime source of skeletal bone/joint rotations.
+- The package exposes an Ozz-inspired foot-plant planning job, reusable two-bone IK correction quaternions, and optional Three.js application hooks. Those remain reusable library capabilities, but current Waifu visual gates should not rely on app-side foot-plant application flags.
+- The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, non-skeletal look-at/face/viseme cues, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, arbitrary rendered foot planting, preserved root-motion application, prop attachments, or multi-avatar retargeting.
+- The current Waifu runtime still uses Three `AnimationMixer` as the renderer backend for authored skeletal clips through the package adapter. The package provides an Ozz-style local-pose runtime and reusable procedural skeletal jobs, but Waifu has not moved final browser pose application onto that buffer pipeline or opted into procedural skeletal application.
 
 
 ## 2026-06-08 Final Hardening Pass
@@ -112,7 +112,7 @@ The generated Mocap Online library now records explicit root-motion policy metad
 Changes validated in this pass:
 
 - Added Ozz-style thresholded override pose blending and runtime threshold configuration.
-- Added reusable Three `applyThreePresenceTargets` procedural target application and moved Waifu's procedural bone slerp through that package API.
+- Added reusable Three `applyThreePresenceTargets` procedural target application for consumers that opt into procedural skeletal targets. Current Waifu policy does not use it to drive skeletal bone/joint rotations.
 - Rebuilt package `dist/` and Waifu production client bundle.
 
 Commands run:
@@ -136,7 +136,6 @@ WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
   npm run visual:actions
 WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
   WAIFU_ANIMATION_RUNTIME_OUT_DIR=cache/waifu-animation-final-hardening/animations-current \
-  WAIFU_ANIMATION_APPLY_FOOT_PLANT=1 \
   npm run visual:animations
 WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
   WAIFU_VISEME_OUT_DIR=cache/waifu-animation-final-hardening/visemes-current \
@@ -148,8 +147,7 @@ Artifacts:
 - Render screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/render-check-current.png`
 - Action contact sheet: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/actions-current/contact.png`
 - Action video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/actions-current/page@17b0a07f739b0792e76caeae4ca55cf9.webm`
-- Animation/foot-plant video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/animations-current/page@16fd40741149087b1cccc1f070e86d7f.webm`
-- Animation/foot-plant final screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/animations-current/foot-plant-apply-final.png`
+- Animation video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/animations-current/page@16fd40741149087b1cccc1f070e86d7f.webm`
 - Viseme video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/visemes-current/page@360eea484cd5223c37d2f88b89c35951.webm`
 - Viseme final screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/visemes-current/final.png`
 
@@ -159,7 +157,7 @@ Results:
 - Waifu check/test/build passed.
 - Render gate passed with real avatar, animation-ready runtime, WebGL, post-processing, MSAA, and no bad logs.
 - Action visual gate passed: 9 captures, video recorded, bounded pose deltas (`0.0084`–`0.0307` after idle baseline), no motion issues, no bad logs.
-- Animation runtime gate passed: 564 manifest clips, 555 unique assets, no asset/runtime issues, foot-plant application enabled for representative locomotion clips, max correction about `0.1816` below the `0.22` clamp, applied leg/ankle correction count `12` for each locomotion representative.
+- Animation runtime gate passed: 564 manifest clips, 555 unique assets, and no asset/runtime issues. Historical runs also validated the reusable foot-plant application hook, but current Waifu skeletal policy is authored clips only.
 - Viseme gate passed: 90 samples, video recorded, no bad logs, mouth max `0.321`, target max `0.34`, all five viseme channels active.
 
-Note: an initial visual run accidentally targeted the already-running port `8080` server from an older deployment and failed to observe new foot-plant telemetry. The final evidence above targets the fresh `PORT=18100` server serving the rebuilt client bundle.
+Note: an initial visual run accidentally targeted the already-running port `8080` server from an older deployment. The final evidence above targets the fresh `PORT=18100` server serving the rebuilt client bundle.

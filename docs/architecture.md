@@ -25,7 +25,7 @@
 - Override blending now exposes an Ozz-style `DEFAULT_BLEND_THRESHOLD` (`0.1`) and `BlendPoseOptions.threshold`.  Per-joint accumulated override weight below the threshold blends back toward the skeleton rest pose, matching Ozz's bind/rest fallback intent and preventing tiny-weight layers from fully owning a joint during fades or partial masks.
 - `AnimationRuntime` accepts `AnimationRuntimeOptions.blendThreshold` and routes override evaluation through priority groups before additive layers and local-to-model conversion. Layers at the same priority use weighted blending; higher-priority groups blend over lower-priority results only for joints they own by weight and mask.
 - `AnimationRuntime.crossfade` creates or replaces an override target layer, fades matching same-priority override sources toward zero, leaves additive layers active, and relies on the existing priority/mask threshold evaluation for final pose composition.
-- The optional Three adapter now owns `applyThreePresenceTargets`, the reusable bridge that applies package-planned procedural presence bone targets to Three/VRM bones with finite-target checks, clamped influence, damped quaternion slerp, and missing-bone telemetry.  Waifu no longer carries its own procedural bone-target quaternion application helper.
+- The optional Three adapter owns `applyThreePresenceTargets`, a reusable bridge for consumers that opt into applying package-planned procedural presence bone targets to Three/VRM bones with finite-target checks, clamped influence, damped quaternion slerp, and missing-bone telemetry. Current Waifu policy does not use package-produced procedural targets for skeletal bone/joint rotations.
 
 ### 2026-06-14 final polish
 
@@ -44,7 +44,7 @@ The canonical model mirrors Ozz Animation's runtime flow:
 4. Apply additive layers only as deltas from a reference pose.
 5. Normalize quaternions and validate finite transforms.
 6. Convert local transforms to model-space matrices.
-7. Let procedural jobs, look-at, foot planting, and IK consume explicit target inputs and write bounded corrections.
+7. Let procedural jobs, look-at, foot planting, and IK consume explicit target inputs and return bounded corrections for consumers that opt into procedural skeletal application.
 8. Emit skeletal pose data and expression/viseme weights to the consumer.
 
 Runtime evaluation diagnostics are opt-in through `AnimationRuntime.evaluate({ diagnostics: true })`. When enabled, active sampled layer poses and the composed local pose are validated with layer/clip context before the final pose is normalized and converted to model space, so consumers can log repaired or invalid source data without paying that cost on every frame by default.
@@ -66,12 +66,12 @@ Waifu consumes this package for reusable concerns:
 - manifest include loading and clip asset inspection;
 - decoding `.waifuanim.bin` payloads and converting decoded clips to Three tracks;
 - retargeting quaternion tracks from source rest pose to active VRM rest pose;
-- constructing base, overlay, and debug runtime clip lanes for Three `AnimationMixer`;
+- constructing base, overlay, and debug runtime clip lanes for authored clips played through Three `AnimationMixer`;
 - reading sanitized Three runtime clip snapshots and base/overlay/debug influence diagnostics for app debug panels and procedural inputs;
 - zeroing and limiting viseme stacks;
 - smoothing mouth/viseme targets and composing blink, speech, mood, emotion, and thinking expression weights through `FacialExpressionMixer`;
-- deterministic presence scheduling, gaze target planning, and bounded procedural bone targets through `PresencePlanner`;
-- foot-plant planning data plus optional Three.js pelvis/leg/ankle correction application hooks;
+- deterministic presence scheduling, gaze target planning, non-skeletal look-at cues, and reusable bounded procedural target planning through `PresencePlanner`;
+- foot-plant planning data plus optional Three.js pelvis/leg/ankle correction application hooks as reusable library surfaces;
 - declarative root/body/finger track policies.
 
-Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime. The current baseline already keeps the Three adapter and animation plumbing in `Waifu-Animation`.
+Current Waifu runtime policy consumes authored skeletal animation through Three `AnimationMixer` plus non-skeletal look-at/face/viseme cues. Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime or opt into the package's reusable IK/look-at/foot-plant/procedural skeletal hooks.
