@@ -1,7 +1,7 @@
 import { decodeAnimationBinary } from "./binary.js";
 import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
 import { type AnimationManifest, type AnimationManifestEntry, inspectClipAsset, readRootMotionPolicy } from "./manifest.js";
-import { type Quat, dotQuat, normalizeQuat } from "./math.js";
+import { cloneNormalizedQuat, dotQuat } from "./math.js";
 import { type HumanoidBoneName, type Skeleton, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
 export type AnimationAssetValidationIssue = {
@@ -148,14 +148,10 @@ function vectorEndpointDelta(values: ArrayLike<number>, first: number, last: num
 }
 
 function rotationEndpointDelta(values: ArrayLike<number>, first: number, last: number): number {
-  const firstQuat = normalizeQuat(readQuat(values, first));
-  const lastQuat = normalizeQuat(readQuat(values, last));
+  const firstQuat = cloneNormalizedQuat(Array.prototype.slice.call(values, first, first + 4));
+  const lastQuat = cloneNormalizedQuat(Array.prototype.slice.call(values, last, last + 4));
   const sameHemisphereDot = Math.abs(dotQuat(firstQuat, lastQuat));
   return Math.sqrt(Math.max(0, 2 - 2 * Math.min(1, sameHemisphereDot)));
-}
-
-function readQuat(values: ArrayLike<number>, offset: number): Quat {
-  return [values[offset] ?? 0, values[offset + 1] ?? 0, values[offset + 2] ?? 0, values[offset + 3] ?? 1];
 }
 
 function jointCoverage(clip: AnimationClip, skeleton?: Skeleton): string[] {
