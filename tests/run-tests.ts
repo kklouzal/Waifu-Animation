@@ -1319,6 +1319,63 @@ assert.ok(
   "runtime diagnostics should report invalid active rotation source tracks"
 );
 
+const repairedRotationRuntime = new AnimationRuntime(skeleton);
+const repairedRotationClip: AnimationClip = {
+  id: "repaired-runtime-rotation",
+  duration: 1,
+  tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 0]) }]
+};
+repairedRotationRuntime.setLayer("repaired-runtime-rotation-source", repairedRotationClip, { weight: 1, targetWeight: 1 });
+const repairedRotationEvaluation = repairedRotationRuntime.evaluate({ diagnostics: true });
+assert.ok(
+  repairedRotationEvaluation.diagnostics!.some(
+    (issue) =>
+      issue.stage === "sample" &&
+      issue.layerId === "repaired-runtime-rotation-source" &&
+      issue.clipId === "repaired-runtime-rotation" &&
+      issue.track === 0 &&
+      issue.sample === 0 &&
+      issue.joint === "head" &&
+      issue.index === 2 &&
+      issue.message === "rotation track quaternion was repaired to a normalizable fallback"
+  ),
+  "runtime diagnostics should report rotation samples repaired during sampling"
+);
+assert.ok(repairedRotationEvaluation.localPose[2]!.rotation.every(Number.isFinite));
+assert.ok(Math.abs(Math.hypot(...repairedRotationEvaluation.localPose[2]!.rotation) - 1) < 1e-5);
+
+const repairedSourceRestRuntime = new AnimationRuntime(skeleton);
+const repairedSourceRestClip: AnimationClip = {
+  id: "repaired-runtime-source-rest",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1]),
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 0])
+    }
+  ]
+};
+repairedSourceRestRuntime.setLayer("repaired-runtime-source-rest-source", repairedSourceRestClip, { weight: 1, targetWeight: 1 });
+const repairedSourceRestEvaluation = repairedSourceRestRuntime.evaluate({ diagnostics: true });
+assert.ok(
+  repairedSourceRestEvaluation.diagnostics!.some(
+    (issue) =>
+      issue.stage === "sample" &&
+      issue.layerId === "repaired-runtime-source-rest-source" &&
+      issue.clipId === "repaired-runtime-source-rest" &&
+      issue.track === 0 &&
+      issue.joint === "head" &&
+      issue.index === 2 &&
+      issue.message === "sourceRestQuaternion was repaired to a normalizable fallback"
+  ),
+  "runtime diagnostics should report malformed source-rest metadata repaired during sampling"
+);
+assert.ok(repairedSourceRestEvaluation.localPose[2]!.rotation.every(Number.isFinite));
+assert.ok(Math.abs(Math.hypot(...repairedSourceRestEvaluation.localPose[2]!.rotation) - 1) < 1e-5);
+
 
 const presenceBone = new Object3D();
 presenceBone.name = "head";

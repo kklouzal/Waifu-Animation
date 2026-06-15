@@ -1,5 +1,5 @@
 import { type Mat4, dampAlpha } from "./math.js";
-import { type AnimationClip, type ClipValidationIssue, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
+import { type AnimationClip, type ClipValidationIssue, type SampleRepairDiagnostic, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
 import {
   type JointMask,
   type Pose,
@@ -60,6 +60,7 @@ export type RuntimeEvaluationDiagnostic = PoseValidationIssue & {
   layerId?: string;
   clipId?: string;
   track?: number;
+  sample?: number;
 };
 
 export type RuntimeEvaluation = {
@@ -174,9 +175,14 @@ export class AnimationRuntime {
     const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];
     const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
     for (const layer of active) {
-      const sampled = sampleClipToPose(this.skeleton, layer.clip, layer.time, { loop: layer.loop, restPose: this.restPose });
+      const sampleDiagnostics = diagnostics ? [] as SampleRepairDiagnostic[] : undefined;
+      const sampleOptions = sampleDiagnostics
+        ? { loop: layer.loop, restPose: this.restPose, diagnostics: sampleDiagnostics }
+        : { loop: layer.loop, restPose: this.restPose };
+      const sampled = sampleClipToPose(this.skeleton, layer.clip, layer.time, sampleOptions);
       if (diagnostics) {
         pushClipDiagnostics(diagnostics, validateClip(layer.clip, this.skeleton), layer, this.skeleton);
+        pushSampleRepairDiagnostics(diagnostics, sampleDiagnostics ?? [], layer);
         pushPoseDiagnostics(diagnostics, validatePose(this.skeleton, sampled), {
           stage: "sample",
           layerId: layer.id,
@@ -268,6 +274,21 @@ function pushClipDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues:
       ...(issue.track !== undefined ? { track: issue.track } : {}),
       joint: issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>",
       index,
+      message: issue.message
+    });
+  }
+}
+
+function pushSampleRepairDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues: SampleRepairDiagnostic[], layer: AnimationLayer): void {
+  for (const issue of issues) {
+    diagnostics.push({
+      stage: "sample",
+      layerId: layer.id,
+      clipId: layer.clip.id,
+      ...(issue.track !== undefined ? { track: issue.track } : {}),
+      ...(issue.sample !== undefined ? { sample: issue.sample } : {}),
+      joint: issue.joint ?? "<clip>",
+      index: issue.index ?? -1,
       message: issue.message
     });
   }

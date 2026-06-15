@@ -32,7 +32,7 @@ Current coverage includes:
 
 ## Runtime Evaluation Diagnostics
 
-`AnimationRuntime.evaluate()` keeps the realtime path lean by default and returns only the evaluated local/model poses plus active layer metadata. Consumers that need Ozz-style validation around a frame can call `evaluate({ diagnostics: true })` to receive sampled-layer and final local-pose diagnostics with layer id, clip id, joint/index, and validation messages while still getting a normalized finite output pose.
+`AnimationRuntime.evaluate()` keeps the realtime path lean by default and returns only the evaluated local/model poses plus active layer metadata. Consumers that need Ozz-style validation around a frame can call `evaluate({ diagnostics: true })` to receive sampled-layer and final local-pose diagnostics with layer id, clip id, joint/index, track/sample where applicable, and validation messages while still getting a normalized finite output pose. Sample-stage diagnostics also include rotation sample and source-rest quaternion repair events from the tolerant sampler path.
 
 ## Waifu Integration Gates
 

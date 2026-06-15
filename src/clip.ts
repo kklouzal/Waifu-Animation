@@ -27,13 +27,19 @@ export type AnimationClip = {
 export type ClipValidationIssue = {
   track?: number;
   joint?: string;
+  index?: number;
   property?: string;
   message: string;
+};
+
+export type SampleRepairDiagnostic = ClipValidationIssue & {
+  sample?: number;
 };
 
 export type SampleOptions = {
   loop?: boolean;
   restPose?: readonly Transform[];
+  diagnostics?: SampleRepairDiagnostic[];
 };
 
 const SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
@@ -216,24 +222,39 @@ export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSe
   const restPose = options.restPose ?? createRestPose(skeleton);
   const output = clonePose(restPose);
   const time = sampleTime(clip, timeSeconds, options.loop ?? clip.loop ?? false);
-  for (const track of clip.tracks) {
+  for (let trackIndex = 0; trackIndex < clip.tracks.length; trackIndex += 1) {
+    const track = clip.tracks[trackIndex]!;
     const jointIndex = resolveTrackJointIndex(skeleton, track);
     if (jointIndex < 0) continue;
     const property = normalizedTrackProperty(track.property);
     if (!property) throw new Error(`unsupported animation track property ${String(track.property)}`);
-    const sampled = sampleTrack(track, time);
+    const diagnosticContext = { track: trackIndex, joint: skeleton.joints[jointIndex]?.name ?? String(track.joint ?? track.humanBone ?? ""), index: jointIndex };
+    const sampled = options.diagnostics
+      ? sampleTrack(track, time, { diagnostics: options.diagnostics, diagnosticContext })
+      : sampleTrack(track, time, { diagnosticContext });
     const transform = cloneTransform(output[jointIndex]);
     if (property === "translation") transform.translation = sampled as [number, number, number];
     if (property === "scale") transform.scale = sampled as [number, number, number];
-    if (property === "rotation") transform.rotation = retargetSampledRotation(track, restPose[jointIndex]?.rotation, sampled as Quat);
+    if (property === "rotation") transform.rotation = retargetSampledRotation(track, restPose[jointIndex]?.rotation, sampled as Quat, options.diagnostics, diagnosticContext);
     output[jointIndex] = transform;
   }
   return output;
 }
 
-function retargetSampledRotation(track: AnimationTrack, targetRest: Quat | undefined, sampled: Quat): Quat {
+function retargetSampledRotation(
+  track: AnimationTrack,
+  targetRest: Quat | undefined,
+  sampled: Quat,
+  diagnostics?: SampleRepairDiagnostic[],
+  diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">
+): Quat {
   const sourceRest = track.sourceRestQuaternion;
-  if (!sourceRest || sourceRest.length !== 4 || !targetRest) return sampled;
+  if (!sourceRest || !targetRest) return sampled;
+  if (sourceRest.length !== 4) {
+    diagnostics?.push({ ...diagnosticContext, property: track.property, message: "sourceRestQuaternion was ignored because it does not contain exactly 4 values" });
+    return sampled;
+  }
+  pushSourceRestRepairDiagnostic(diagnostics, diagnosticContext, track, sourceRest);
   return retargetQuaternionSample([sourceRest[0]!, sourceRest[1]!, sourceRest[2]!, sourceRest[3]!], targetRest, sampled);
 }
 
@@ -245,14 +266,14 @@ export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boole
   return clamp(timeSeconds, 0, Math.max(0, clip.duration));
 }
 
-export function sampleTrack(track: AnimationTrack, timeSeconds: number): number[] {
+export function sampleTrack(track: AnimationTrack, timeSeconds: number, options: { diagnostics?: SampleRepairDiagnostic[]; diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index"> } = {}): number[] {
   const property = normalizedTrackProperty(track.property);
   if (!property) throw new Error(`unsupported animation track property ${String(track.property)}`);
   const stride = trackStride(property);
   if (track.times.length === 0) return defaultTrackSample(property);
-  if (timeSeconds <= track.times[0]!) return readTrackValue(track, 0, stride, property);
+  if (timeSeconds <= track.times[0]!) return readTrackValue(track, 0, stride, property, options.diagnostics, options.diagnosticContext);
   const last = track.times.length - 1;
-  if (timeSeconds >= track.times[last]!) return readTrackValue(track, last, stride, property);
+  if (timeSeconds >= track.times[last]!) return readTrackValue(track, last, stride, property, options.diagnostics, options.diagnosticContext);
   let low = 1;
   let high = track.times.length - 1;
   while (low < high) {
@@ -265,8 +286,8 @@ export function sampleTrack(track: AnimationTrack, timeSeconds: number): number[
   const start = track.times[lower]!;
   const end = track.times[upper]!;
   const t = end > start ? (timeSeconds - start) / (end - start) : 0;
-  const a = readTrackValue(track, lower, stride, property);
-  const b = readTrackValue(track, upper, stride, property);
+  const a = readTrackValue(track, lower, stride, property, options.diagnostics, options.diagnosticContext);
+  const b = readTrackValue(track, upper, stride, property, options.diagnostics, options.diagnosticContext);
   if (stride === 4) return slerpQuat(a as Quat, b as Quat, t);
   return lerpVec3(a as [number, number, number], b as [number, number, number], t);
 }
@@ -277,9 +298,51 @@ function defaultTrackSample(property: NormalizedTrackProperty): number[] {
   return [0, 0, 0];
 }
 
-function readTrackValue(track: AnimationTrack, keyIndex: number, stride: 3 | 4, property: NormalizedTrackProperty): number[] {
+function readTrackValue(
+  track: AnimationTrack,
+  keyIndex: number,
+  stride: 3 | 4,
+  property: NormalizedTrackProperty,
+  diagnostics?: SampleRepairDiagnostic[],
+  diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">
+): number[] {
   const offset = keyIndex * stride;
   const fallback = defaultTrackSample(property);
   const values = fallback.map((value, index) => track.values[offset + index] ?? value);
+  if (stride === 4) pushRotationSampleRepairDiagnostic(diagnostics, diagnosticContext, track, values as Quat, keyIndex);
   return stride === 4 ? normalizeQuat(values as Quat) : values;
+}
+
+function pushRotationSampleRepairDiagnostic(
+  diagnostics: SampleRepairDiagnostic[] | undefined,
+  diagnosticContext: Pick<SampleRepairDiagnostic, "track" | "joint" | "index"> | undefined,
+  track: AnimationTrack,
+  value: Quat,
+  sample: number
+): void {
+  if (!diagnostics) return;
+  const message = quaternionRepairMessage(value, "rotation track quaternion");
+  if (!message) return;
+  diagnostics.push({ ...diagnosticContext, property: track.property, sample, message });
+}
+
+function pushSourceRestRepairDiagnostic(
+  diagnostics: SampleRepairDiagnostic[] | undefined,
+  diagnosticContext: Pick<SampleRepairDiagnostic, "track" | "joint" | "index"> | undefined,
+  track: AnimationTrack,
+  sourceRest: Float32Array
+): void {
+  if (!diagnostics) return;
+  const message = quaternionRepairMessage([sourceRest[0]!, sourceRest[1]!, sourceRest[2]!, sourceRest[3]!], "sourceRestQuaternion");
+  if (!message) return;
+  diagnostics.push({ ...diagnosticContext, property: track.property, message });
+}
+
+function quaternionRepairMessage(value: Quat, label: string): string | null {
+  if (!value.every(Number.isFinite)) return `${label} values were repaired to finite defaults`;
+  const length = Math.hypot(value[0], value[1], value[2], value[3]);
+  if (!Number.isFinite(length) || length <= EPSILON) return `${label} was repaired to a normalizable fallback`;
+  const lengthSquared = length * length;
+  if (Math.abs(lengthSquared - 1) > ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE) return `${label} was normalized during sampling`;
+  return null;
 }
