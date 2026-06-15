@@ -13,7 +13,7 @@ import {
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
-import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, finiteNonNegative, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
+import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, euclideanModulo, finiteNonNegative, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
   BASE_PROCEDURAL_TRACK_POLICY,
@@ -546,11 +546,6 @@ function sanitizePositiveThreeRuntimeValue(value: number, fallback: number): num
 
 function sanitizeThreeRuntimeSwing(value: number | undefined, phase: number): number {
   return clamp(Number.isFinite(value ?? Number.NaN) ? value! : Math.sin(phase * Math.PI * 2), -1, 1);
-}
-
-function euclideanModulo(value: number, divisor: number): number {
-  if (divisor <= 0) return 0;
-  return ((value % divisor) + divisor) % divisor;
 }
 
 function dampWeight(current: number, target: number, speed: number, deltaSeconds: number): number {

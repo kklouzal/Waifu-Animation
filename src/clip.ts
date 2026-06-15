@@ -1,4 +1,4 @@
-import { type Quat, type Transform, EPSILON, cloneTransform, clamp, ensureShortestQuat, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Quat, type Transform, EPSILON, cloneTransform, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, clonePose } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
@@ -261,7 +261,7 @@ function retargetSampledRotation(
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {
   if (!Number.isFinite(timeSeconds)) return 0;
   if (loop && clip.duration > 0) {
-    return ((timeSeconds % clip.duration) + clip.duration) % clip.duration;
+    return euclideanModulo(timeSeconds, clip.duration);
   }
   return clamp(timeSeconds, 0, Math.max(0, clip.duration));
 }

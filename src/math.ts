@@ -28,6 +28,11 @@ export function clamp01(value: number): number {
   return clamp(value, 0, 1);
 }
 
+export function euclideanModulo(value: number, divisor: number): number {
+  if (divisor <= 0) return 0;
+  return ((value % divisor) + divisor) % divisor;
+}
+
 export function finiteNonNegative(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
