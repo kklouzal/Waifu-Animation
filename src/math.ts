@@ -57,6 +57,10 @@ export function dampAlpha(speed: number, deltaSeconds: number): number {
   return 1 - Math.exp(-speed * deltaSeconds);
 }
 
+export function dampValue(current: number, target: number, speed: number, deltaSeconds: number): number {
+  return current + (target - current) * dampAlpha(speed, deltaSeconds);
+}
+
 export function hashSeed(seed: string | number): number {
   const text = String(seed);
   let hash = 2166136261;

@@ -1,4 +1,4 @@
-import { type RandomSource, type Vec3, clamp, clamp01, createSeededRandom, dampAlpha, finiteNonNegative, normalizeVec3, randomRange, smoothPulse } from "./math.js";
+import { type RandomSource, type Vec3, clamp, clamp01, createSeededRandom, dampValue, finiteNonNegative, normalizeVec3, randomRange, smoothPulse } from "./math.js";
 
 export type LookAtDistribution = {
   eyes: { yaw: number; pitch: number; weight: number };
@@ -215,10 +215,6 @@ function normalizeAffect(value: PresenceAffect | undefined): Required<PresenceAf
   };
 }
 
-function damp(current: number, target: number, speed: number, deltaSeconds: number): number {
-  return current + (target - current) * dampAlpha(speed, deltaSeconds);
-}
-
 function mixTarget(rest: number, gesture: number, amount: number): number {
   return rest + (gesture - rest) * clamp01(amount);
 }
@@ -322,7 +318,7 @@ export class PresencePlanner {
     }
     for (const kind of CUE_KINDS) {
       const speed = kind === "beat" ? 14 : kind === "nod" ? 12 : kind === "smile" ? 8 : kind === "shrug" ? 7 : 5;
-      this.cueAmounts[kind] = clamp01(damp(this.cueAmounts[kind], targets[kind], speed, deltaSeconds));
+      this.cueAmounts[kind] = clamp01(dampValue(this.cueAmounts[kind], targets[kind], speed, deltaSeconds));
     }
 
     const gazeCue = this.cues.find(
@@ -349,10 +345,10 @@ export class PresencePlanner {
       this.nextSaccadeAt = nowMs + 520 + this.random() * (behavior.state === "thinking" ? 1050 : 2100);
     }
 
-    this.idleShiftX = damp(this.idleShiftX, 0, 0.7, deltaSeconds);
-    this.idleShiftZ = damp(this.idleShiftZ, 0, 0.7, deltaSeconds);
-    this.attentionOffsetX = damp(this.attentionOffsetX, 0, 1.6, deltaSeconds);
-    this.attentionOffsetY = damp(this.attentionOffsetY, 0, 1.6, deltaSeconds);
+    this.idleShiftX = dampValue(this.idleShiftX, 0, 0.7, deltaSeconds);
+    this.idleShiftZ = dampValue(this.idleShiftZ, 0, 0.7, deltaSeconds);
+    this.attentionOffsetX = dampValue(this.attentionOffsetX, 0, 1.6, deltaSeconds);
+    this.attentionOffsetY = dampValue(this.attentionOffsetY, 0, 1.6, deltaSeconds);
 
     if ((behavior.state === "listening" || behavior.state === "idle") && nowMs >= this.nextBackchannelAt) {
       this.scheduleBackchannel(nowMs, affect);

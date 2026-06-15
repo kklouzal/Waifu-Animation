@@ -13,7 +13,7 @@ import {
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
-import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, euclideanModulo, finiteNonNegative, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
+import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, dampValue, euclideanModulo, finiteNonNegative, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
   BASE_PROCEDURAL_TRACK_POLICY,
@@ -456,7 +456,7 @@ export function calculateThreeOverlayFade(options: ThreeOverlayFadeOptions): Thr
   const fadeInSpeed = sanitizePositiveThreeRuntimeValue(options.fadeInSpeed ?? 6.5, 6.5);
   const fadeOutSpeed = sanitizePositiveThreeRuntimeValue(options.fadeOutSpeed ?? 5.5, 5.5);
   const blendSpeed = targetWeight < currentWeight ? fadeOutSpeed : fadeInSpeed;
-  const nextWeight = dampWeight(currentWeight, targetWeight, blendSpeed, options.deltaSeconds);
+  const nextWeight = dampValue(currentWeight, targetWeight, blendSpeed, options.deltaSeconds);
   return {
     fadeOutWindow,
     fadingOut,
@@ -546,10 +546,6 @@ function sanitizePositiveThreeRuntimeValue(value: number, fallback: number): num
 
 function sanitizeThreeRuntimeSwing(value: number | undefined, phase: number): number {
   return clamp(Number.isFinite(value ?? Number.NaN) ? value! : Math.sin(phase * Math.PI * 2), -1, 1);
-}
-
-function dampWeight(current: number, target: number, speed: number, deltaSeconds: number): number {
-  return current + (target - current) * dampAlpha(speed, deltaSeconds);
 }
 
 function dampedInfluenceAmount(influence: number, speed: number, deltaSeconds: number | undefined): number {
