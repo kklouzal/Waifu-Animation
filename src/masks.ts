@@ -30,14 +30,18 @@ function matchesSourceRule(track: AnimationTrack, rule: SourceTrackRule): boolea
   return matchesRule(sourceTrackName(track), rule);
 }
 
-export function trackNameAllowed(name: string, policy: TrackMaskPolicy): boolean {
-  if (policy.include && policy.include.length > 0 && !policy.include.some((rule) => matchesRule(name, rule))) {
+function policyAllows<TRule>(policy: { include?: TRule[]; exclude?: TRule[] }, matches: (rule: TRule) => boolean): boolean {
+  if (policy.include && policy.include.length > 0 && !policy.include.some(matches)) {
     return false;
   }
-  if (policy.exclude?.some((rule) => matchesRule(name, rule))) {
+  if (policy.exclude?.some(matches)) {
     return false;
   }
   return true;
+}
+
+export function trackNameAllowed(name: string, policy: TrackMaskPolicy): boolean {
+  return policyAllows(policy, (rule) => matchesRule(name, rule));
 }
 
 export function filterTracksByNamePolicy<T extends TrackLike>(tracks: readonly T[], policy: TrackMaskPolicy): T[] {
@@ -45,13 +49,7 @@ export function filterTracksByNamePolicy<T extends TrackLike>(tracks: readonly T
 }
 
 export function sourceTrackAllowed(track: AnimationTrack, policy: SourceTrackMaskPolicy): boolean {
-  if (policy.include && policy.include.length > 0 && !policy.include.some((rule) => matchesSourceRule(track, rule))) {
-    return false;
-  }
-  if (policy.exclude?.some((rule) => matchesSourceRule(track, rule))) {
-    return false;
-  }
-  return true;
+  return policyAllows(policy, (rule) => matchesSourceRule(track, rule));
 }
 
 export function filterSourceTracksByPolicy(tracks: readonly AnimationTrack[], policy: SourceTrackMaskPolicy): AnimationTrack[] {
