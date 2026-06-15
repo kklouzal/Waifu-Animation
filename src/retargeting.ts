@@ -16,8 +16,8 @@ export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sou
   const srcRest = normalizeQuat(sourceRest);
   const dstRest = normalizeQuat(targetRest);
   const srcSample = normalizeQuat(sourceSample, srcRest);
-  const sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
-  return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
+  const sourceDelta = multiplyQuat(srcSample, invertQuat(srcRest));
+  return normalizeQuat(multiplyQuat(sourceDelta, dstRest));
 }
 
 export function retargetQuaternionTrackValues(values: readonly number[], sourceRest: ArrayLike<number> | undefined, targetRest: ArrayLike<number>): RetargetedQuaternionTrack {

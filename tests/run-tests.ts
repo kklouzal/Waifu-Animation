@@ -1567,7 +1567,7 @@ assert.ok(Math.abs(Math.hypot(...retargeted) - 1) < 1e-5);
 
 const sourceRestX = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const localSourceDeltaY = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
-const sourceSampleWithLocalDelta = multiplyQuat(sourceRestX, localSourceDeltaY);
+const sourceSampleWithLocalDelta = multiplyQuat(localSourceDeltaY, sourceRestX);
 const targetRestZ = quatFromAxisAngle([0, 0, 1], Math.PI / 3);
 const retargetedZeroSample = retargetQuaternionSample(sourceRestX, targetRestZ, [0, 0, 0, 0]);
 assert.ok(
@@ -1586,7 +1586,7 @@ assert.ok(
     Math.abs(retargetedNonUnitSample[3] - retargetedUnitSample[3]) < 1e-5,
   "retargeting should repair non-unit source samples without changing their rotation"
 );
-const expectedEquivalentRestDelta = multiplyQuat(invertQuat(sourceRestX), sourceSampleWithLocalDelta);
+const expectedEquivalentRestDelta = multiplyQuat(sourceSampleWithLocalDelta, invertQuat(sourceRestX));
 const retargetedToEquivalentRest = retargetQuaternionSample(sourceRestX, sourceRestX, sourceSampleWithLocalDelta);
 assert.ok(
   Math.abs(retargetedToEquivalentRest[0] - sourceSampleWithLocalDelta[0]) < 1e-5 &&
@@ -1613,7 +1613,7 @@ assert.deepEqual(
 const mismatchedBasisSourceRest = quatFromAxisAngle([0, 0, 1], Math.PI / 2);
 const mismatchedBasisTargetRest = [0, 0, 0, 1] as const;
 const mismatchedBasisDelta = quatFromAxisAngle([1, 0, 0], Math.PI / 3);
-const mismatchedBasisSample = multiplyQuat(mismatchedBasisSourceRest, mismatchedBasisDelta);
+const mismatchedBasisSample = multiplyQuat(mismatchedBasisDelta, mismatchedBasisSourceRest);
 const mismatchedBasisBones = createSingleLimbBones(mismatchedBasisTargetRest);
 const mismatchedBasisClip = createThreeAnimationClip(
   {
@@ -1639,8 +1639,8 @@ const mismatchedBasisExpectedRotation = retargetQuaternionSample(mismatchedBasis
 const mismatchedBasisExpected = rotateVec3ByQuat(mismatchedBasisExpectedRotation, [0, 1, 0]);
 const mismatchedBasisConjugatedPath = rotateVec3ByQuat(
   multiplyQuat(
-    multiplyQuat(mismatchedBasisSourceRest, multiplyQuat(invertQuat(mismatchedBasisSourceRest), mismatchedBasisSample)),
-    invertQuat(mismatchedBasisSourceRest)
+    invertQuat(mismatchedBasisSourceRest),
+    multiplyQuat(mismatchedBasisSample, mismatchedBasisSourceRest)
   ),
   [0, 1, 0]
 );
@@ -1676,16 +1676,65 @@ sampleThreeClipOnce(motusLegBones.root, motusLegClip);
 const motusLegActual = readChildDirection(motusLegBones.upper, motusLegBones.lower);
 const motusLegExpectedRotation = retargetQuaternionSample(motusRightUpperLegRest, motusTargetRest, motusRightUpperLegSample);
 const motusLegExpected = rotateVec3ByQuat(motusLegExpectedRotation, [0, -1, 0]);
-const motusLegConjugatedRotation = multiplyQuat(
-  multiplyQuat(motusRightUpperLegRest, multiplyQuat(invertQuat(motusRightUpperLegRest), motusRightUpperLegSample)),
-  invertQuat(motusRightUpperLegRest)
-);
+const motusLegConjugatedRotation = multiplyQuat(invertQuat(motusRightUpperLegRest), motusRightUpperLegSample);
 const motusLegConjugated = rotateVec3ByQuat(motusLegConjugatedRotation, [0, -1, 0]);
 assert.ok(
   !vectorNearlyEqual(motusLegExpected, motusLegConjugated, 1e-3),
   "right-leg fixture should catch conjugating Motus Man pre-rotations into the target leg"
 );
 assert.ok(vectorNearlyEqual(motusLegActual, motusLegExpected, 1e-5), "right leg should preserve forward local stride instead of twisting inward");
+
+const mirroredLegSourceRestLeft = quatFromAxisAngle([0, 1, 0], Math.PI / 2);
+const mirroredLegSourceRestRight = quatFromAxisAngle([0, 1, 0], -Math.PI / 2);
+const mirroredLegFlexion = quatFromAxisAngle([1, 0, 0], Math.PI / 4);
+const mirroredLegRoot = new Object3D();
+mirroredLegRoot.name = "mirroredLegRoot";
+const mirroredLegBones = {
+  left: createSingleLimbBones([0, 0, 0, 1], "leftUpperLeg", "leftLowerLeg", [0, -1, 0]),
+  right: createSingleLimbBones([0, 0, 0, 1], "rightUpperLeg", "rightLowerLeg", [0, -1, 0])
+};
+mirroredLegRoot.add(mirroredLegBones.left.upper);
+mirroredLegRoot.add(mirroredLegBones.right.upper);
+const mirroredLegClip = createThreeAnimationClip(
+  {
+    id: "mirrored-leg-pre-rotation-flexion",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "leftUpperLeg",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(mirroredLegSourceRestLeft),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([...mirroredLegSourceRestLeft, ...multiplyQuat(mirroredLegFlexion, mirroredLegSourceRestLeft)])
+      },
+      {
+        humanBone: "rightUpperLeg",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(mirroredLegSourceRestRight),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([...mirroredLegSourceRestRight, ...multiplyQuat(mirroredLegFlexion, mirroredLegSourceRestRight)])
+      }
+    ]
+  },
+  {
+    resolveBone: (bone) => {
+      if (bone === "leftUpperLeg") return mirroredLegBones.left.upper;
+      if (bone === "rightUpperLeg") return mirroredLegBones.right.upper;
+      return null;
+    },
+    targetRestQuaternion: () => [0, 0, 0, 1]
+  }
+);
+sampleThreeClipOnce(mirroredLegRoot, mirroredLegClip);
+const mirroredLegActualLeft = readChildDirection(mirroredLegBones.left.upper, mirroredLegBones.left.lower);
+const mirroredLegActualRight = readChildDirection(mirroredLegBones.right.upper, mirroredLegBones.right.lower);
+const mirroredLegExpected = rotateVec3ByQuat(mirroredLegFlexion, [0, -1, 0]);
+const oldOrderMirroredLeft = rotateVec3ByQuat(multiplyQuat(invertQuat(mirroredLegSourceRestLeft), multiplyQuat(mirroredLegFlexion, mirroredLegSourceRestLeft)), [0, -1, 0]);
+const oldOrderMirroredRight = rotateVec3ByQuat(multiplyQuat(invertQuat(mirroredLegSourceRestRight), multiplyQuat(mirroredLegFlexion, mirroredLegSourceRestRight)), [0, -1, 0]);
+assert.ok(oldOrderMirroredLeft[0]! > 0.65 && oldOrderMirroredRight[0]! < -0.65, "old retarget order would split mirrored leg flexion inward across the centerline");
+assert.ok(mirroredLegActualLeft[2]! < -0.65 && Math.abs(mirroredLegActualLeft[0]!) < 1e-5, "left leg flexion should bend backward instead of inward");
+assert.ok(vectorNearlyEqual(mirroredLegActualLeft, mirroredLegExpected, 1e-5), "left leg rendered direction should preserve source flexion axis");
+assert.ok(vectorNearlyEqual(mirroredLegActualRight, mirroredLegExpected, 1e-5), "right leg rendered direction should preserve source flexion axis");
 
 const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const mirroredLimbSourceRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
@@ -1703,14 +1752,14 @@ const mirroredLimbClip = createThreeAnimationClip(
         property: "quaternion",
         sourceRestQuaternion: Float32Array.from(mirroredLimbSourceRestLeft),
         times: toFloat32Array([0, 1]),
-        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestLeft, ...multiplyQuat(mirroredLimbSourceRestLeft, mirroredLimbDelta)])
+        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestLeft, ...multiplyQuat(mirroredLimbDelta, mirroredLimbSourceRestLeft)])
       },
       {
         humanBone: "rightUpperArm",
         property: "quaternion",
         sourceRestQuaternion: Float32Array.from(mirroredLimbSourceRestRight),
         times: toFloat32Array([0, 1]),
-        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestRight, ...multiplyQuat(mirroredLimbSourceRestRight, mirroredLimbDelta)])
+        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestRight, ...multiplyQuat(mirroredLimbDelta, mirroredLimbSourceRestRight)])
       }
     ]
   },
@@ -1728,8 +1777,8 @@ const mirroredLimbActual = {
   right: readChildDirection(mirroredLimbBones.rightUpperArm, mirroredLimbBones.rightLowerArm)
 };
 const mirroredLimbExpected = {
-  left: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestLeft, mirroredLimbDelta), [0, 1, 0]),
-  right: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestRight, mirroredLimbDelta), [0, 1, 0])
+  left: rotateVec3ByQuat(multiplyQuat(mirroredLimbDelta, mirroredLimbTargetRestLeft), [0, 1, 0]),
+  right: rotateVec3ByQuat(multiplyQuat(mirroredLimbDelta, mirroredLimbTargetRestRight), [0, 1, 0])
 };
 assert.ok(vectorNearlyEqual(mirroredLimbActual.left, mirroredLimbExpected.left, 1e-5), "left limb rendered direction should preserve target-local rotation axis");
 assert.ok(vectorNearlyEqual(mirroredLimbActual.right, mirroredLimbExpected.right, 1e-5), "right limb rendered direction should preserve target-local rotation axis");
