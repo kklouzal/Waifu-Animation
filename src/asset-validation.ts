@@ -1,6 +1,6 @@
 import { decodeAnimationBinary } from "./binary.js";
 import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, resolveTrackJointIndex, validateClip } from "./clip.js";
-import { type AnimationManifest, type AnimationManifestEntry, inspectClipAsset, readRootMotionPolicy } from "./manifest.js";
+import { type AnimationManifest, type AnimationManifestEntry, type AssetValidationStatus, inspectClipAsset, readRootMotionPolicy } from "./manifest.js";
 import { cloneNormalizedQuat, dotQuat } from "./math.js";
 import { type Skeleton } from "./skeleton.js";
 
@@ -17,7 +17,7 @@ export type AnimationAssetValidationEntry = {
   label: string;
   url: string;
   accepted: boolean;
-  status: "accepted" | "rejected" | "quarantined";
+  status: AssetValidationStatus;
   duration: number;
   loop: boolean;
   category: string;
