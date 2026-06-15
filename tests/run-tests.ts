@@ -45,6 +45,7 @@ import {
   LOCOMOTION_BASE_SOURCE_TRACK_POLICY,
   inspectAnimationAsset,
   inspectClipAsset,
+  identityTransform,
   localToModelPose,
   normalizeQuat,
   normalizeTransform,
@@ -124,6 +125,7 @@ const clonedTransform = cloneTransform({
 assert.deepEqual(clonedTransform.translation, [-3, 0, 4]);
 assert.deepEqual(clonedTransform.rotation, [0, 0, 0, 1]);
 assert.deepEqual(clonedTransform.scale, [1, 2, 1]);
+assert.deepEqual(identityTransform(), cloneTransform(undefined));
 const repairedRestSkeleton = createSkeleton([{ name: "root", rest: { translation: [Number.NaN, 5, Infinity], scale: [Number.NaN, 3, -Infinity] } }]);
 assert.deepEqual(repairedRestSkeleton.restPose[0]!.translation, [0, 5, 0]);
 assert.deepEqual(repairedRestSkeleton.restPose[0]!.scale, [1, 3, 1]);

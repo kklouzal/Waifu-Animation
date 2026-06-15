@@ -251,7 +251,7 @@ export function rotateVec3ByQuat(rotation: Quat, value: Vec3): Vec3 {
 }
 
 export function identityTransform(): Transform {
-  return { translation: cloneVec3(ZERO_VEC3), rotation: cloneQuat(IDENTITY_QUAT), scale: cloneVec3(ONE_VEC3) };
+  return cloneTransform(undefined);
 }
 
 export function cloneTransform(value: Partial<Transform> | undefined): Transform {
