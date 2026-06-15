@@ -91,10 +91,8 @@ export function inspectAnimationAsset(entry: AnimationManifestEntry, clip: Anima
     status,
     duration: clip.duration,
     loop: Boolean(entry.loop ?? clip.loop),
-    category: readString(entry.source?.category) ?? classifyCategory(entry, clip),
-    posture: readString(entry.source?.posture) ?? classifyPosture(entry),
+    ...assetReportMetadata(entry, clip),
     compatibleStates: entry.states ?? [],
-    rootMotionPolicy: readRootMotionPolicyLabel(entry, clip),
     jointCoverage: jointCoverage(clip, skeleton),
     trackCount: clip.tracks.length,
     issues
@@ -198,10 +196,8 @@ function buildRejectedEntry(entry: AnimationManifestEntry, issues: AnimationAsse
     status: "rejected",
     duration: 0,
     loop: Boolean(entry.loop),
-    category: readString(entry.source?.category) ?? classifyCategory(entry),
-    posture: readString(entry.source?.posture) ?? classifyPosture(entry),
+    ...assetReportMetadata(entry),
     compatibleStates: entry.states ?? [],
-    rootMotionPolicy: readRootMotionPolicyLabel(entry),
     jointCoverage: [],
     trackCount: 0,
     issues
@@ -227,6 +223,14 @@ function classifyPosture(entry: AnimationManifestEntry): string {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function assetReportMetadata(entry: AnimationManifestEntry, clip?: AnimationClip): Pick<AnimationAssetValidationEntry, "category" | "posture" | "rootMotionPolicy"> {
+  return {
+    category: readString(entry.source?.category) ?? classifyCategory(entry, clip),
+    posture: readString(entry.source?.posture) ?? classifyPosture(entry),
+    rootMotionPolicy: readRootMotionPolicyLabel(entry, clip)
+  };
 }
 
 function readRootMotionPolicyLabel(entry: AnimationManifestEntry, clip?: AnimationClip): string {
