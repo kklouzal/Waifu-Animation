@@ -734,6 +734,27 @@ assert.throws(
   /unsupported animation track property visibility/,
   "unsupported mapped track properties should not be silently ignored during pose sampling"
 );
+const unsupportedPropertyRuntime = new AnimationRuntime(skeleton);
+unsupportedPropertyRuntime.setLayer("external-invalid", unsupportedPropertyClip, { weight: 1, targetWeight: 1 });
+const unsupportedPropertyRuntimeEvaluation = unsupportedPropertyRuntime.evaluate();
+assertFiniteEvaluation(unsupportedPropertyRuntimeEvaluation);
+assert.equal(unsupportedPropertyRuntimeEvaluation.diagnostics, undefined, "runtime diagnostics should stay opt-in for unsupported external tracks");
+const unsupportedPropertyRuntimeDiagnostics = unsupportedPropertyRuntime.evaluate({ diagnostics: true });
+assertFiniteEvaluation(unsupportedPropertyRuntimeDiagnostics);
+assert.ok(
+  unsupportedPropertyRuntimeDiagnostics.diagnostics!.some(
+    (issue) =>
+      issue.stage === "sample" &&
+      issue.layerId === "external-invalid" &&
+      issue.clipId === "unsupported-property" &&
+      issue.track === 0 &&
+      issue.property === "visibility" &&
+      issue.joint === "hips" &&
+      issue.index === 0 &&
+      issue.message === "track property is unsupported"
+  ),
+  "runtime diagnostics should report unsupported external track properties with layer/clip/track context"
+);
 
 const models = localToModelPose(skeleton, sampled);
 assert.equal(models.length, skeleton.joints.length);

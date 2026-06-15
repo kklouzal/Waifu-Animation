@@ -40,6 +40,8 @@ export type SampleOptions = {
   loop?: boolean;
   restPose?: readonly Transform[];
   diagnostics?: SampleRepairDiagnostic[];
+  /** Skip structurally unsupported external channels after validation has reported them. */
+  skipUnsupportedTracks?: boolean;
 };
 
 const SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
@@ -227,7 +229,10 @@ export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSe
     const jointIndex = resolveTrackJointIndex(skeleton, track);
     if (jointIndex < 0) continue;
     const property = normalizedTrackProperty(track.property);
-    if (!property) throw new Error(`unsupported animation track property ${String(track.property)}`);
+    if (!property) {
+      if (options.skipUnsupportedTracks) continue;
+      throw new Error(`unsupported animation track property ${String(track.property)}`);
+    }
     const diagnosticContext = { track: trackIndex, joint: skeleton.joints[jointIndex]?.name ?? String(track.joint ?? track.humanBone ?? ""), index: jointIndex };
     const sampled = options.diagnostics
       ? sampleTrack(track, time, { diagnostics: options.diagnostics, diagnosticContext })

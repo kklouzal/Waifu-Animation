@@ -61,6 +61,7 @@ export type RuntimeEvaluationDiagnostic = PoseValidationIssue & {
   clipId?: string;
   track?: number;
   sample?: number;
+  property?: string;
 };
 
 export type RuntimeEvaluation = {
@@ -176,12 +177,12 @@ export class AnimationRuntime {
     const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
     for (const layer of active) {
       const sampleDiagnostics = diagnostics ? [] as SampleRepairDiagnostic[] : undefined;
+      if (diagnostics) pushClipDiagnostics(diagnostics, validateClip(layer.clip, this.skeleton), layer, this.skeleton);
       const sampleOptions = sampleDiagnostics
-        ? { loop: layer.loop, restPose: this.restPose, diagnostics: sampleDiagnostics }
-        : { loop: layer.loop, restPose: this.restPose };
+        ? { loop: layer.loop, restPose: this.restPose, diagnostics: sampleDiagnostics, skipUnsupportedTracks: true }
+        : { loop: layer.loop, restPose: this.restPose, skipUnsupportedTracks: true };
       const sampled = sampleClipToPose(this.skeleton, layer.clip, layer.time, sampleOptions);
       if (diagnostics) {
-        pushClipDiagnostics(diagnostics, validateClip(layer.clip, this.skeleton), layer, this.skeleton);
         pushSampleRepairDiagnostics(diagnostics, sampleDiagnostics ?? [], layer);
         pushPoseDiagnostics(diagnostics, validatePose(this.skeleton, sampled), {
           stage: "sample",
@@ -264,6 +265,7 @@ function pushClipDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues:
       layerId: layer.id,
       clipId: layer.clip.id,
       ...(issue.track !== undefined ? { track: issue.track } : {}),
+      ...(issue.property !== undefined ? { property: issue.property } : {}),
       joint: issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>",
       index,
       message: issue.message
