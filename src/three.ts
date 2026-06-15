@@ -408,7 +408,7 @@ export function prepareThreeRuntimeAction<TEntry extends AnimationManifestEntry>
   options: PrepareThreeRuntimeActionOptions = {}
 ): number {
   const weight = sanitizeThreeRuntimeWeight(options.weight ?? 0);
-  const timeScale = sanitizePositiveThreeRuntimeValue(options.timeScale ?? 1, 1);
+  const timeScale = finiteNonNegative(options.timeScale ?? 1, 1);
   const startTime = clip.lane === "base" ? calculateThreeRuntimeStartTime(clip.duration, options) : 0;
   clip.action.reset();
   clip.action.enabled = true;
@@ -424,7 +424,7 @@ export function prepareThreeRuntimeAction<TEntry extends AnimationManifestEntry>
 
 export function calculateThreeBaseLoopSeamWindow(duration: number, options: ThreeBaseLoopSeamWindowOptions = {}): number {
   const safeDuration = sanitizeThreeRuntimeTime(duration);
-  return clamp(safeDuration * sanitizePositiveThreeRuntimeValue(options.fraction ?? 0.18, 0.18), options.min ?? 0.32, options.max ?? 0.72);
+  return clamp(safeDuration * finiteNonNegative(options.fraction ?? 0.18, 0.18), options.min ?? 0.32, options.max ?? 0.72);
 }
 
 export function calculateThreeBaseLoopTransitionWeights(options: ThreeBaseLoopTransitionOptions): ThreeBaseLoopTransitionWeights {
@@ -444,17 +444,17 @@ export function calculateThreeOverlayFade(options: ThreeOverlayFadeOptions): Thr
   const duration = sanitizeThreeRuntimeTime(options.duration);
   const time = sanitizeThreeRuntimeTime(options.time);
   const fadeOutWindow = clamp(
-    duration * sanitizePositiveThreeRuntimeValue(options.windowFraction ?? 0.22, 0.22),
+    duration * finiteNonNegative(options.windowFraction ?? 0.22, 0.22),
     options.minWindow ?? 0.18,
     options.maxWindow ?? 0.42
   );
-  const completionEpsilon = sanitizePositiveThreeRuntimeValue(options.completionEpsilon ?? 0.02, 0.02);
+  const completionEpsilon = finiteNonNegative(options.completionEpsilon ?? 0.02, 0.02);
   const fadingOut = time >= Math.max(0, duration - fadeOutWindow);
   const complete = time >= Math.max(0, duration - completionEpsilon);
   const targetWeight = fadingOut ? 0 : sanitizeThreeRuntimeWeight(options.targetWeight);
   const currentWeight = sanitizeThreeRuntimeWeight(options.currentWeight);
-  const fadeInSpeed = sanitizePositiveThreeRuntimeValue(options.fadeInSpeed ?? 6.5, 6.5);
-  const fadeOutSpeed = sanitizePositiveThreeRuntimeValue(options.fadeOutSpeed ?? 5.5, 5.5);
+  const fadeInSpeed = finiteNonNegative(options.fadeInSpeed ?? 6.5, 6.5);
+  const fadeOutSpeed = finiteNonNegative(options.fadeOutSpeed ?? 5.5, 5.5);
   const blendSpeed = targetWeight < currentWeight ? fadeOutSpeed : fadeInSpeed;
   const nextWeight = dampValue(currentWeight, targetWeight, blendSpeed, options.deltaSeconds);
   return {
@@ -540,10 +540,6 @@ function sanitizeThreeRuntimeCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
-function sanitizePositiveThreeRuntimeValue(value: number, fallback: number): number {
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
 function sanitizeThreeRuntimeSwing(value: number | undefined, phase: number): number {
   return clamp(Number.isFinite(value ?? Number.NaN) ? value! : Math.sin(phase * Math.PI * 2), -1, 1);
 }
@@ -559,7 +555,7 @@ export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): T
   const deltaSeconds = sanitizeThreeRuntimeTime(options.deltaSeconds);
   for (const target of options.targets) {
     const influence = sanitizeThreeRuntimeWeight(target.influence);
-    const speed = sanitizePositiveThreeRuntimeValue(target.speed ?? 8, 8);
+    const speed = finiteNonNegative(target.speed ?? 8, 8);
     const appliedTarget: ThreePresenceAppliedTarget = { bone: target.bone, applied: false, influence };
     targets.push(appliedTarget);
     if (influence <= 0) {
@@ -584,7 +580,7 @@ export function createThreeLocomotionUpperBodyTargets(options: ThreeLocomotionUp
   const phase = sanitizeThreeRuntimePhase(options.phase ?? 0);
   const swing = sanitizeThreeRuntimeSwing(options.swing, phase);
   const counterSwing = -swing;
-  const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 18, 18);
+  const speed = finiteNonNegative(options.speed ?? 18, 18);
 
   return [
     { bone: "leftShoulder", rotation: [0.015, -0.018, 0.026 + swing * 0.014], influence: influence * 0.72, speed },
@@ -638,7 +634,7 @@ export function applyThreeLocomotionUpperBodyPosture(options: ThreeLocomotionUpp
 function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPostureOptions): ThreeLocomotionArmTarget[] {
   if (options.enabled === false) return [];
   const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
-  const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 18, 18);
+  const speed = finiteNonNegative(options.speed ?? 18, 18);
   const amount = dampedInfluenceAmount(influence, speed * 1.25, options.deltaSeconds);
   if (amount <= 0) {
     return [
@@ -739,7 +735,7 @@ export function clearThreeFootPlantOffsets(options: ThreeFootPlantClearOptions):
 
 export function applyThreeFootPlantResult(result: FootPlantResult, options: ThreeFootPlantApplyOptions): ThreeFootPlantApplyResult {
   const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
-  const speed = sanitizePositiveThreeRuntimeValue(options.speed ?? 32, 32);
+  const speed = finiteNonNegative(options.speed ?? 32, 32);
   const amount = dampedInfluenceAmount(influence, speed, options.deltaSeconds);
   const issues = [...result.issues];
   const applyPelvis = options.applyPelvis !== false;
@@ -833,7 +829,7 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
 
 function resolvePlaybackWindow(clip: AnimationClip, playback: AnimationManifestEntry["playback"] | undefined, minimumDuration: number): { start: number; end: number } {
   const duration = sanitizeThreeRuntimeTime(clip.duration);
-  const minDuration = sanitizePositiveThreeRuntimeValue(minimumDuration, 0.1);
+  const minDuration = finiteNonNegative(minimumDuration, 0.1);
   const start = clamp(playback?.start ?? 0, 0, duration);
   const requestedEnd = clamp(playback?.end ?? duration, 0, duration);
   const end = Math.max(start + minDuration, requestedEnd);
