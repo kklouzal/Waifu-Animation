@@ -13,7 +13,7 @@ import {
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
-import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
+import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, finiteNonNegative, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
   BASE_PROCEDURAL_TRACK_POLICY,
@@ -525,7 +525,7 @@ function readThreeActionWeight(action: AnimationAction): number {
 }
 
 function sanitizeThreeRuntimeTime(value: number): number {
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
+  return finiteNonNegative(value, 0);
 }
 
 function sanitizeThreeRuntimeWeight(value: number): number {
