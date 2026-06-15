@@ -1583,7 +1583,7 @@ const presenceA = new PresencePlanner("presence-test", 0);
 const presenceB = new PresencePlanner("presence-test", 0);
 presenceA.onBehaviorChange({ state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 }, { attentiveness: 0.8 }, 100);
 presenceB.onBehaviorChange({ state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 }, { attentiveness: 0.8 }, 100);
-const presenceFrameA = presenceA.update({
+const deterministicPresenceInput = {
   nowMs: 260,
   elapsedSeconds: 1.25,
   deltaSeconds: 1 / 30,
@@ -1592,17 +1592,9 @@ const presenceFrameA = presenceA.update({
   targetMouth: 0.1,
   clipBaseInfluence: 0.8,
   clipOverlayInfluence: 0.1
-});
-const presenceFrameB = presenceB.update({
-  nowMs: 260,
-  elapsedSeconds: 1.25,
-  deltaSeconds: 1 / 30,
-  behavior: { state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 },
-  affect: { arousal: 0.45, curiosity: 0.6, attentiveness: 0.8 },
-  targetMouth: 0.1,
-  clipBaseInfluence: 0.8,
-  clipOverlayInfluence: 0.1
-});
+};
+const presenceFrameA = presenceA.update(deterministicPresenceInput);
+const presenceFrameB = presenceB.update(deterministicPresenceInput);
 assert.deepEqual(presenceFrameA.lookAtTarget, presenceFrameB.lookAtTarget);
 assert.ok(presenceFrameA.cueAmounts.glance > 0);
 assert.ok(presenceFrameA.boneTargets.some((target) => target.bone === "head" && target.influence > 0));
