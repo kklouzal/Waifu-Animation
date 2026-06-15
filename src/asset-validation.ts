@@ -1,6 +1,13 @@
 import { decodeAnimationBinary } from "./binary.js";
 import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, resolveTrackJointIndex, validateClip } from "./clip.js";
-import { type AnimationManifest, type AnimationManifestEntry, type AssetValidationStatus, inspectClipAsset, readRootMotionPolicy } from "./manifest.js";
+import {
+  type AnimationManifest,
+  type AnimationManifestEntry,
+  type AssetValidationStatus,
+  inspectClipAsset,
+  isInvalidAssetValidationStatus,
+  readRootMotionPolicy
+} from "./manifest.js";
 import { cloneNormalizedQuat, dotQuat } from "./math.js";
 import { type Skeleton } from "./skeleton.js";
 
@@ -82,7 +89,12 @@ export function inspectAnimationAsset(entry: AnimationManifestEntry, clip: Anima
   const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(entry.id, issue));
   const issues = dedupeIssues([...clipIssues, ...manifestInspection, ...inspectSemanticAsset(entry, clip, skeleton)]);
   const requestedStatus = entry.validation?.status;
-  const status = requestedStatus === "rejected" || requestedStatus === "quarantined" ? requestedStatus : issues.some((issue) => issue.severity === "error") ? "rejected" : "accepted";
+  const status =
+    requestedStatus === "rejected" || requestedStatus === "quarantined" || isInvalidAssetValidationStatus(requestedStatus)
+      ? "rejected"
+      : issues.some((issue) => issue.severity === "error")
+        ? "rejected"
+        : "accepted";
   return {
     id: entry.id,
     label: entry.label,

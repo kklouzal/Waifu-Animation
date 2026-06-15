@@ -62,6 +62,9 @@ export function validateManifest(manifest: AnimationManifest): string[] {
     if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) issues.push(`${entry.id} has unsupported format ${entry.format}`);
     if (ids.has(entry.id)) issues.push(`duplicate clip id ${entry.id}`);
     ids.add(entry.id);
+    if (isInvalidAssetValidationStatus(entry.validation?.status)) {
+      issues.push(`${entry.id || "<unknown>"} has invalid validation status ${String(entry.validation?.status)}`);
+    }
     if (entry.validation?.status === "accepted" && entry.validation.reason) {
       issues.push(`${entry.id} is accepted but still has rejection reason`);
     }
@@ -108,8 +111,9 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
       issues.push({ message: `invalid playback window ${start}..${end}` });
     }
   }
-  if (entry.validation?.status === "rejected" || entry.validation?.status === "quarantined") {
-    issues.push({ message: entry.validation.reason ?? `manifest marks clip ${entry.validation.status}` });
+  const statusIssue = manifestValidationStatusIssue(entry);
+  if (statusIssue) {
+    issues.push({ message: statusIssue });
   }
   return {
     id: entry.id,
@@ -119,6 +123,21 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
     duration: clip.duration,
     issues
   };
+}
+
+export function isAssetValidationStatus(value: unknown): value is AssetValidationStatus {
+  return value === "accepted" || value === "rejected" || value === "quarantined";
+}
+
+export function isInvalidAssetValidationStatus(value: unknown): boolean {
+  return value !== undefined && !isAssetValidationStatus(value);
+}
+
+export function manifestValidationStatusIssue(entry: AnimationManifestEntry): string | null {
+  const status = entry.validation?.status;
+  if (status === "rejected" || status === "quarantined") return entry.validation?.reason ?? `manifest marks clip ${status}`;
+  if (isInvalidAssetValidationStatus(status)) return `invalid validation status ${String(status)}`;
+  return null;
 }
 
 function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): boolean {
@@ -154,11 +173,12 @@ function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {
 }
 
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
-  return manifest.clips.filter((entry) => entry.validation?.status !== "rejected" && entry.validation?.status !== "quarantined");
+  return manifest.clips.filter((entry) => !manifestValidationStatusIssue(entry));
 }
 
 export function rejectedAnimationReport(manifest: AnimationManifest): Array<{ id: string; label?: string; reason: string }> {
   return manifest.clips
-    .filter((entry) => entry.validation?.status === "rejected" || entry.validation?.status === "quarantined")
-    .map((entry) => ({ id: entry.id, label: entry.label, reason: entry.validation?.reason ?? "not accepted" }));
+    .map((entry) => ({ entry, reason: manifestValidationStatusIssue(entry) }))
+    .filter((item): item is { entry: AnimationManifestEntry; reason: string } => item.reason !== null)
+    .map(({ entry, reason }) => ({ id: entry.id, label: entry.label, reason }));
 }

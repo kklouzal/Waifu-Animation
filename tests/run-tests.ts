@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AnimationMixer, LoopOnce, Object3D, Vector3 } from "three";
 import {
   AnimationRuntime,
+  type AnimationManifest,
   type AnimationClip,
   BlinkScheduler,
   FacialExpressionMixer,
@@ -64,7 +65,10 @@ import {
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   toFloat32Array,
+  rejectedAnimationReport,
+  usableManifestClips,
   validateClip,
+  validateManifest,
   validateSkeleton,
   validateAnimationInputs,
   zeroVisemes
@@ -244,6 +248,80 @@ assert.ok(
 );
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
+
+const malformedValidationStatusManifest = {
+  version: 1,
+  clips: [
+    { id: "valid", label: "Valid", url: "/valid.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    { id: "typo-status", label: "Typo Status", url: "/typo-status.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "acceptted" } },
+    { id: "numeric-status", label: "Numeric Status", url: "/numeric-status.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: 1 } },
+    {
+      id: "quarantined",
+      label: "Quarantined",
+      url: "/quarantined.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      validation: { status: "quarantined", reason: "manual hold" }
+    },
+    { id: "rejected", label: "Rejected", url: "/rejected.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "rejected" } },
+    { id: "accepted", label: "Accepted", url: "/accepted.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "accepted" } }
+  ]
+} as unknown as AnimationManifest;
+const malformedValidationStatusIssues = validateManifest(malformedValidationStatusManifest);
+assert.ok(
+  malformedValidationStatusIssues.includes("typo-status has invalid validation status acceptted"),
+  "validateManifest should report typo validation.status values from runtime JSON"
+);
+assert.ok(
+  malformedValidationStatusIssues.includes("numeric-status has invalid validation status 1"),
+  "validateManifest should report non-string validation.status values from runtime JSON"
+);
+assert.deepEqual(
+  usableManifestClips(malformedValidationStatusManifest).map((entry) => entry.id),
+  ["valid", "accepted"],
+  "usableManifestClips should exclude malformed, rejected, and quarantined validation statuses"
+);
+assert.deepEqual(
+  rejectedAnimationReport(malformedValidationStatusManifest).map((entry) => [entry.id, entry.reason]),
+  [
+    ["typo-status", "invalid validation status acceptted"],
+    ["numeric-status", "invalid validation status 1"],
+    ["quarantined", "manual hold"],
+    ["rejected", "manifest marks clip rejected"]
+  ],
+  "rejectedAnimationReport should surface malformed validation status through the existing rejected logging path"
+);
+const invalidValidationStatusClipInspection = inspectClipAsset(
+  {
+    id: "typo-status",
+    label: "Typo Status",
+    url: "/typo-status.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    validation: { status: "acceptted" } as unknown as { status: "accepted" }
+  },
+  nodClip
+);
+assert.equal(invalidValidationStatusClipInspection.accepted, false);
+assert.ok(
+  invalidValidationStatusClipInspection.issues.some((issue) => issue.message === "invalid validation status acceptted"),
+  "inspectClipAsset should reject malformed validation.status metadata"
+);
+const invalidValidationStatusAssetInspection = inspectAnimationAsset(
+  {
+    id: "typo-status",
+    label: "Typo Status",
+    url: "/typo-status.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    validation: { status: "acceptted" } as unknown as { status: "accepted" }
+  },
+  nodClip,
+  skeleton
+);
+assert.equal(invalidValidationStatusAssetInspection.status, "rejected");
+assert.equal(invalidValidationStatusAssetInspection.accepted, false);
+assert.ok(
+  invalidValidationStatusAssetInspection.issues.some((issue) => issue.message === "invalid validation status acceptted"),
+  "inspectAnimationAsset should reject malformed validation.status metadata"
+);
 
 const duplicateResolvedChannelClip: AnimationClip = {
   id: "duplicate-resolved-channel",
