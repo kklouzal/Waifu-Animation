@@ -1426,13 +1426,7 @@ const mismatchedBasisClip = createThreeAnimationClip(
     resolveBone: (bone) => (bone === "leftUpperArm" ? mismatchedBasisBones.upper : null)
   }
 );
-const mismatchedBasisMixer = new AnimationMixer(mismatchedBasisBones.root);
-const mismatchedBasisAction = mismatchedBasisMixer.clipAction(mismatchedBasisClip);
-mismatchedBasisAction.setLoop(LoopOnce, 1);
-mismatchedBasisAction.clampWhenFinished = true;
-mismatchedBasisAction.play();
-mismatchedBasisMixer.setTime(1);
-mismatchedBasisBones.root.updateMatrixWorld(true);
+sampleThreeClipOnce(mismatchedBasisBones.root, mismatchedBasisClip);
 const mismatchedBasisActual = readChildDirection(mismatchedBasisBones.upper, mismatchedBasisBones.lower);
 const mismatchedBasisExpectedRotation = retargetQuaternionSample(mismatchedBasisSourceRest, [...mismatchedBasisTargetRest], mismatchedBasisSample);
 const mismatchedBasisExpected = rotateVec3ByQuat(mismatchedBasisExpectedRotation, [0, 1, 0]);
@@ -1471,13 +1465,7 @@ const motusLegClip = createThreeAnimationClip(
     resolveBone: (bone) => (bone === "rightUpperLeg" ? motusLegBones.upper : null)
   }
 );
-const motusLegMixer = new AnimationMixer(motusLegBones.root);
-const motusLegAction = motusLegMixer.clipAction(motusLegClip);
-motusLegAction.setLoop(LoopOnce, 1);
-motusLegAction.clampWhenFinished = true;
-motusLegAction.play();
-motusLegMixer.setTime(1);
-motusLegBones.root.updateMatrixWorld(true);
+sampleThreeClipOnce(motusLegBones.root, motusLegClip);
 const motusLegActual = readChildDirection(motusLegBones.upper, motusLegBones.lower);
 const motusLegExpectedRotation = retargetQuaternionSample(motusRightUpperLegRest, motusTargetRest, motusRightUpperLegSample);
 const motusLegExpected = rotateVec3ByQuat(motusLegExpectedRotation, [0, -1, 0]);
@@ -1527,13 +1515,7 @@ const mirroredLimbClip = createThreeAnimationClip(
     }
   }
 );
-const mirroredLimbMixer = new AnimationMixer(mirroredLimbBones.root);
-const mirroredLimbAction = mirroredLimbMixer.clipAction(mirroredLimbClip);
-mirroredLimbAction.setLoop(LoopOnce, 1);
-mirroredLimbAction.clampWhenFinished = true;
-mirroredLimbAction.play();
-mirroredLimbMixer.setTime(1);
-mirroredLimbBones.root.updateMatrixWorld(true);
+sampleThreeClipOnce(mirroredLimbBones.root, mirroredLimbClip);
 const mirroredLimbActual = {
   left: readChildDirection(mirroredLimbBones.leftUpperArm, mirroredLimbBones.leftLowerArm),
   right: readChildDirection(mirroredLimbBones.rightUpperArm, mirroredLimbBones.rightLowerArm)
@@ -2237,6 +2219,16 @@ function createSingleLimbBones(targetRest: readonly number[], upperName = "leftU
 
   root.updateMatrixWorld(true);
   return { root, upper, lower };
+}
+
+function sampleThreeClipOnce(root: Object3D, clip: ReturnType<typeof createThreeAnimationClip>, time = 1): void {
+  const mixer = new AnimationMixer(root);
+  const action = mixer.clipAction(clip);
+  action.setLoop(LoopOnce, 1);
+  action.clampWhenFinished = true;
+  action.play();
+  mixer.setTime(time);
+  root.updateMatrixWorld(true);
 }
 
 function readChildDirection(parent: Object3D, child: Object3D): [number, number, number] {
