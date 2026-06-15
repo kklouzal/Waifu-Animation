@@ -4,6 +4,7 @@ import {
   applyTransformDelta,
   cloneTransform,
   dotQuat,
+  finiteNonNegative,
   isFiniteTransform,
   normalizeQuat,
   normalizeTransform,
@@ -31,7 +32,7 @@ export type PoseLayer = { pose: readonly Transform[]; weight: number; mask?: Joi
 export const DEFAULT_BLEND_THRESHOLD = 0.1;
 
 export function sanitizeBlendThreshold(value: number | undefined, fallback = DEFAULT_BLEND_THRESHOLD): number {
-  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
+  return finiteNonNegative(value, fallback);
 }
 
 export type PoseValidationIssue = {
@@ -63,7 +64,7 @@ export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): Po
 }
 
 function sanitizeMaskWeight(weight: number): number {
-  return Number.isFinite(weight) ? Math.max(0, weight) : 0;
+  return finiteNonNegative(weight, 0);
 }
 
 export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: Record<string, number> = {}): JointMask {
@@ -80,7 +81,7 @@ function readMaskWeight(mask: JointMask | undefined, joint: number): number {
   if (!mask) return 1;
   if (joint < 0 || joint >= mask.length) return 0;
   const value = mask[joint]!;
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
+  return finiteNonNegative(value, 0);
 }
 
 export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: BlendPoseOptions = {}): Pose {
@@ -94,7 +95,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
   let hasAnyLayer = false;
 
   for (const layer of layers) {
-    const layerWeight = Number.isFinite(layer.weight) ? Math.max(0, layer.weight) : 0;
+    const layerWeight = finiteNonNegative(layer.weight, 0);
     if (layerWeight <= 0) continue;
     hasAnyLayer = true;
     for (let joint = 0; joint < jointCount; joint += 1) {
