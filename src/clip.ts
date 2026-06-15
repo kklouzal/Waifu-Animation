@@ -1,4 +1,4 @@
-import { type Quat, type Transform, EPSILON, cloneTransform, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Quat, type Transform, EPSILON, cloneQuat, cloneTransform, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, clonePose } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
@@ -255,7 +255,7 @@ function retargetSampledRotation(
     return sampled;
   }
   pushSourceRestRepairDiagnostic(diagnostics, diagnosticContext, track, sourceRest);
-  return retargetQuaternionSample([sourceRest[0]!, sourceRest[1]!, sourceRest[2]!, sourceRest[3]!], targetRest, sampled);
+  return retargetQuaternionSample(cloneQuat(sourceRest), targetRest, sampled);
 }
 
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {
@@ -333,7 +333,7 @@ function pushSourceRestRepairDiagnostic(
   sourceRest: Float32Array
 ): void {
   if (!diagnostics) return;
-  const message = quaternionRepairMessage([sourceRest[0]!, sourceRest[1]!, sourceRest[2]!, sourceRest[3]!], "sourceRestQuaternion");
+  const message = quaternionRepairMessage(cloneQuat(sourceRest), "sourceRestQuaternion");
   if (!message) return;
   diagnostics.push({ ...diagnosticContext, property: track.property, message });
 }
