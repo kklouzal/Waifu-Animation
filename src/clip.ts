@@ -1,4 +1,4 @@
-import { type Quat, type Transform, EPSILON, ONE_VEC3, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Quat, type Transform, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, clonePose } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
@@ -255,7 +255,7 @@ function retargetSampledRotation(
     return sampled;
   }
   pushSourceRestRepairDiagnostic(diagnostics, diagnosticContext, track, sourceRest);
-  return retargetQuaternionSample(cloneQuat(sourceRest), targetRest, sampled);
+  return retargetQuaternionSample(cloneNormalizedQuat(sourceRest), targetRest, sampled);
 }
 
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {
