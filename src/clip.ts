@@ -1,4 +1,4 @@
-import { type Quat, type Transform, EPSILON, cloneQuat, cloneTransform, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Quat, type Transform, EPSILON, ONE_VEC3, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, clonePose } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
@@ -293,9 +293,9 @@ export function sampleTrack(track: AnimationTrack, timeSeconds: number, options:
 }
 
 function defaultTrackSample(property: NormalizedTrackProperty): number[] {
-  if (property === "rotation") return [0, 0, 0, 1];
-  if (property === "scale") return [1, 1, 1];
-  return [0, 0, 0];
+  if (property === "rotation") return cloneQuat(undefined);
+  if (property === "scale") return cloneVec3(ONE_VEC3);
+  return cloneVec3(undefined);
 }
 
 function readTrackValue(
