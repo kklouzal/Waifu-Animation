@@ -1,4 +1,4 @@
-import { type Mat4, dampAlpha, finiteNonNegative } from "./math.js";
+import { type Mat4, dampAlpha, finiteNonNegative, finiteSigned } from "./math.js";
 import { type AnimationClip, type ClipValidationIssue, type SampleRepairDiagnostic, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
 import {
   type JointMask,
@@ -225,10 +225,6 @@ export class AnimationRuntime {
     if (diagnostics) evaluation.diagnostics = diagnostics;
     return evaluation;
   }
-}
-
-function finiteSigned(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) ? value : fallback;
 }
 
 function sanitizeLayerWeight(blendMode: LayerBlendMode, value: number | undefined, fallback: number): number {

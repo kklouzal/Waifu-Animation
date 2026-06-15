@@ -32,6 +32,10 @@ export function finiteNonNegative(value: number | undefined, fallback: number): 
   return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
+export function finiteSigned(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) ? value : fallback;
+}
+
 export function smoothPulse(progress: number): number {
   if (progress < 0 || progress > 1) return 0;
   return Math.sin(progress * Math.PI);

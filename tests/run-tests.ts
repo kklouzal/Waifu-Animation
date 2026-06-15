@@ -5,6 +5,7 @@ import {
   type AnimationClip,
   BlinkScheduler,
   FacialExpressionMixer,
+  finiteSigned,
   limitVisemeStack,
   PresencePlanner,
   WAIFU_ANIMATION_BINARY_FORMAT,
@@ -90,6 +91,8 @@ const nodClip: AnimationClip = {
 };
 
 assert.equal(clamp01(2), 1);
+assert.equal(finiteSigned(-0.75, 1), -0.75);
+assert.equal(finiteSigned(Number.NaN, 1), 1);
 assert.deepEqual(normalizeVec3([Number.NaN, 0, 0], [1, 0, 0]), [1, 0, 0]);
 assert.deepEqual(normalizeVec3([Number.NaN, 0, 0], [2, 0, 0]), [1, 0, 0]);
 assert.deepEqual(normalizeVec3([Infinity, 0, 0], [0, 1, 0]), [0, 1, 0]);
