@@ -529,7 +529,7 @@ function sanitizeThreeRuntimeTime(value: number): number {
 }
 
 function sanitizeThreeRuntimeWeight(value: number): number {
-  return clamp01(Number.isFinite(value) ? value : 0);
+  return clamp01(value);
 }
 
 function sanitizeThreeRuntimePhase(value: number): number {
