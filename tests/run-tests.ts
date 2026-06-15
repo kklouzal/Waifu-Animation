@@ -70,6 +70,7 @@ import {
   validateClip,
   validateManifest,
   validateSkeleton,
+  validatePose,
   validateAnimationInputs,
   zeroVisemes
 } from "../src/index.js";
@@ -912,6 +913,58 @@ const overweightMaskedBlend = blendPoses(
   { threshold: 0.01 }
 );
 assert.ok(Math.abs(overweightMaskedBlend[2]!.translation[0] - 40 / 3) < 1e-6, "positive mask weights above 1 should remain supported");
+
+const nonZeroFallbackPose = clonePose(skeleton.restPose);
+nonZeroFallbackPose[0]!.translation = [3, 2, 1];
+nonZeroFallbackPose[1]!.translation = [4, 5, 6];
+nonZeroFallbackPose[1]!.rotation = normalizeQuat([0, 0.4, 0, 0.9]);
+nonZeroFallbackPose[1]!.scale = [1.5, 1.25, 0.75];
+const invalidLayerPose = clonePose(skeleton.restPose);
+invalidLayerPose[1]!.translation = [Number.NaN, 100, 100];
+invalidLayerPose[1]!.rotation = [0, 0, 0, 0];
+invalidLayerPose[1]!.scale = [Number.POSITIVE_INFINITY, 0.2, 0.3];
+assert.ok(
+  validatePose(skeleton, invalidLayerPose).some((issue) => issue.index === 1 && issue.message === "transform is not finite or quaternion is invalid"),
+  "validatePose should still report malformed layer transforms"
+);
+const invalidBlend = blendPoses(skeleton, [{ pose: invalidLayerPose, weight: 1 }], { threshold: 0.01, fallbackPose: nonZeroFallbackPose });
+assert.ok(
+  invalidBlend[1]!.translation.every((value, index) => Math.abs(value - nonZeroFallbackPose[1]!.translation[index]!) < 1e-6),
+  "invalid layer transforms should not wipe non-zero fallback translations"
+);
+assert.ok(
+  invalidBlend[1]!.scale.every((value, index) => Math.abs(value - nonZeroFallbackPose[1]!.scale[index]!) < 1e-6),
+  "invalid layer transforms should not wipe non-zero fallback scales"
+);
+assert.ok(Math.abs(invalidBlend[1]!.rotation[1] - nonZeroFallbackPose[1]!.rotation[1]) < 1e-12, "invalid layer transforms should keep fallback rotations");
+assert.ok(
+  [invalidBlend[1]!.translation, invalidBlend[1]!.rotation, invalidBlend[1]!.scale].flat().every(Number.isFinite),
+  "invalid layer transforms should still produce finite output"
+);
+assert.ok(Math.abs(Math.hypot(...invalidBlend[1]!.rotation) - 1) < 1e-12, "invalid layer output rotations should stay normalized");
+
+const validSameJointPose = clonePose(skeleton.restPose);
+validSameJointPose[1]!.translation = [10, 5, 0];
+validSameJointPose[1]!.rotation = normalizeQuat([0.2, 0, 0, 0.98]);
+validSameJointPose[1]!.scale = [2, 3, 4];
+const mixedValidityBlend = blendPoses(
+  skeleton,
+  [
+    { pose: invalidLayerPose, weight: 3 },
+    { pose: validSameJointPose, weight: 1 }
+  ],
+  { threshold: 0.01, fallbackPose: nonZeroFallbackPose }
+);
+assert.deepEqual(mixedValidityBlend[1]!.translation, validSameJointPose[1]!.translation, "valid same-joint layers should still own joints ignored from malformed layers");
+assert.deepEqual(mixedValidityBlend[1]!.scale, validSameJointPose[1]!.scale, "valid same-joint layers should still blend scale normally");
+assert.ok(Math.abs(mixedValidityBlend[1]!.rotation[0] - validSameJointPose[1]!.rotation[0]) < 1e-12, "valid same-joint layers should still blend rotations normally");
+for (const transform of mixedValidityBlend) {
+  assert.ok(
+    transform.translation.every(Number.isFinite) && transform.rotation.every(Number.isFinite) && transform.scale.every(Number.isFinite),
+    "malformed override layers should not produce non-finite transforms"
+  );
+  assert.ok(Math.abs(Math.hypot(...transform.rotation) - 1) < 1e-12, "malformed override layers should not produce denormalized rotations");
+}
 
 const malformedAdditiveDelta = clonePose(skeleton.restPose);
 malformedAdditiveDelta[0]!.translation = [Number.NaN, 0, 0];

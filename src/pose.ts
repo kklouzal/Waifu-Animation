@@ -98,6 +98,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     for (let joint = 0; joint < jointCount; joint += 1) {
       const poseTransform = layer.pose[joint];
       if (!poseTransform) continue;
+      if (!isFiniteTransform(poseTransform)) continue;
       const maskWeight = readMaskWeight(layer.mask, joint);
       const weight = layerWeight * maskWeight;
       if (weight <= 0) continue;
