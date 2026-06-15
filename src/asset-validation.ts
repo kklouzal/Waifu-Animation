@@ -1,8 +1,8 @@
 import { decodeAnimationBinary } from "./binary.js";
-import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
+import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, resolveTrackJointIndex, validateClip } from "./clip.js";
 import { type AnimationManifest, type AnimationManifestEntry, inspectClipAsset, readRootMotionPolicy } from "./manifest.js";
 import { cloneNormalizedQuat, dotQuat } from "./math.js";
-import { type HumanoidBoneName, type Skeleton, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
+import { type Skeleton } from "./skeleton.js";
 
 export type AnimationAssetValidationIssue = {
   id: string;
@@ -163,7 +163,7 @@ function jointCoverage(clip: AnimationClip, skeleton?: Skeleton): string[] {
       joints.add(String(name));
       continue;
     }
-    const index = track.joint ? resolveJointIndex(skeleton, track.joint) : resolveHumanoidIndex(skeleton, track.humanBone as HumanoidBoneName);
+    const index = resolveTrackJointIndex(skeleton, track);
     if (index >= 0) joints.add(skeleton.joints[index]!.humanoid ?? skeleton.joints[index]!.name);
   }
   return Array.from(joints).sort();
