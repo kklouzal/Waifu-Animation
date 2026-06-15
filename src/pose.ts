@@ -30,6 +30,10 @@ export type PoseLayer = { pose: readonly Transform[]; weight: number; mask?: Joi
 
 export const DEFAULT_BLEND_THRESHOLD = 0.1;
 
+export function sanitizeBlendThreshold(value: number | undefined, fallback = DEFAULT_BLEND_THRESHOLD): number {
+  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
 export type PoseValidationIssue = {
   joint: string;
   index: number;
@@ -104,7 +108,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     }
   }
 
-  const threshold = Math.max(0, options.threshold ?? DEFAULT_BLEND_THRESHOLD);
+  const threshold = sanitizeBlendThreshold(options.threshold);
   for (let joint = 0; joint < jointCount; joint += 1) {
     const accumulated = totalWeights[joint]!;
     const fallbackTransform = readFallbackTransform(skeleton, fallbackPose, joint);

@@ -1,7 +1,6 @@
 import { type Mat4, dampAlpha } from "./math.js";
 import { type AnimationClip, type ClipValidationIssue, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
 import {
-  DEFAULT_BLEND_THRESHOLD,
   type JointMask,
   type Pose,
   type PoseValidationIssue,
@@ -10,6 +9,7 @@ import {
   blendPoses,
   clonePose,
   normalizePose,
+  sanitizeBlendThreshold,
   validatePose
 } from "./pose.js";
 import { type Skeleton, createRestPose, localToModelPose } from "./skeleton.js";
@@ -78,7 +78,7 @@ export class AnimationRuntime {
   constructor(skeleton: Skeleton, options: AnimationRuntimeOptions = {}) {
     this.skeleton = skeleton;
     this.restPose = createRestPose(skeleton);
-    this.blendThreshold = options.blendThreshold ?? DEFAULT_BLEND_THRESHOLD;
+    this.blendThreshold = sanitizeBlendThreshold(options.blendThreshold);
   }
 
   setLayer(id: string, clip: AnimationClip, options: AnimationLayerOptions = {}): AnimationLayer {

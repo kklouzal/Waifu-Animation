@@ -901,6 +901,14 @@ const tinyWeightBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_B
 assert.ok(tinyWeightBlend[2]!.rotation[0] > 0);
 assert.ok(tinyWeightBlend[2]!.rotation[0] < sampled[2]!.rotation[0]);
 
+const nanThresholdBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }], { threshold: Number.NaN });
+assert.ok(nanThresholdBlend[2]!.rotation[0] > 0, "NaN thresholds should not discard finite weak layer influence");
+assert.ok(nanThresholdBlend[2]!.rotation[0] < sampled[2]!.rotation[0], "NaN thresholds should preserve rest-pose fallback for tiny weights");
+
+const infiniteThresholdBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }], { threshold: Number.POSITIVE_INFINITY });
+assert.ok(infiniteThresholdBlend[2]!.rotation[0] > 0, "infinite thresholds should not discard finite weak layer influence");
+assert.ok(infiniteThresholdBlend[2]!.rotation[0] < sampled[2]!.rotation[0], "infinite thresholds should preserve rest-pose fallback for tiny weights");
+
 const weightedPoseA = sampleClipToPose(
   skeleton,
   {
@@ -967,6 +975,18 @@ runtimeWeakPriority.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, t
 runtimeWeakPriority.setLayer("weak-head", highPriorityHeadClip, { weight: 0.05, targetWeight: 0.05, priority: 10, mask });
 const weakPriorityPose = runtimeWeakPriority.evaluate().localPose;
 assert.ok(Math.abs(weakPriorityPose[2]!.translation[0] - 15) < 1e-6, "weak higher-priority layers should blend over the lower-priority fallback until threshold is reached");
+
+const runtimeNaNThreshold = new AnimationRuntime(skeleton, { blendThreshold: Number.NaN });
+runtimeNaNThreshold.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0, mask });
+runtimeNaNThreshold.setLayer("weak-head", highPriorityHeadClip, { weight: 0.05, targetWeight: 0.05, priority: 10, mask });
+const nanThresholdRuntimePose = runtimeNaNThreshold.evaluate().localPose;
+assert.ok(Math.abs(nanThresholdRuntimePose[2]!.translation[0] - 15) < 1e-6, "runtime NaN blend thresholds should preserve weak-layer fallback behavior");
+
+const runtimeInfiniteThreshold = new AnimationRuntime(skeleton, { blendThreshold: Number.POSITIVE_INFINITY });
+runtimeInfiniteThreshold.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0, mask });
+runtimeInfiniteThreshold.setLayer("weak-head", highPriorityHeadClip, { weight: 0.05, targetWeight: 0.05, priority: 10, mask });
+const infiniteThresholdRuntimePose = runtimeInfiniteThreshold.evaluate().localPose;
+assert.ok(Math.abs(infiniteThresholdRuntimePose[2]!.translation[0] - 15) < 1e-6, "runtime infinite blend thresholds should preserve weak-layer fallback behavior");
 
 const crossfadeOldClip: AnimationClip = {
   id: "crossfade-old",
