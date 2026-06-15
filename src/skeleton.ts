@@ -1,6 +1,7 @@
 import {
   type Mat4,
   type Transform,
+  cloneTransformList,
   cloneTransform,
   composeMat4,
   identityTransform,
@@ -227,7 +228,7 @@ function vectorsEqual(a: readonly number[], b: readonly number[]): boolean {
 }
 
 export function createRestPose(skeleton: Skeleton): Transform[] {
-  return skeleton.restPose.map((transform) => cloneTransform(transform));
+  return cloneTransformList(skeleton.restPose);
 }
 
 export function resolveJointIndex(skeleton: Skeleton, nameOrHumanoid: string): number {

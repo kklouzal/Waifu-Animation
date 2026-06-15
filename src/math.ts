@@ -262,6 +262,10 @@ export function cloneTransform(value: Partial<Transform> | undefined): Transform
   };
 }
 
+export function cloneTransformList(transforms: readonly Transform[]): Transform[] {
+  return transforms.map((transform) => cloneTransform(transform));
+}
+
 export function normalizeTransform(value: Transform): Transform {
   return {
     translation: cloneFiniteVec3(value.translation, ZERO_VEC3),

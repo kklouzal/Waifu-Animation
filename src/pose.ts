@@ -2,6 +2,7 @@ import {
   type Quat,
   type Transform,
   applyTransformDelta,
+  cloneTransformList,
   cloneTransform,
   dotQuat,
   finiteNonNegative,
@@ -42,7 +43,7 @@ export type PoseValidationIssue = {
 };
 
 export function clonePose(pose: readonly Transform[]): Pose {
-  return pose.map((transform) => cloneTransform(transform));
+  return cloneTransformList(pose);
 }
 
 export function normalizePose(pose: readonly Transform[]): Pose {
