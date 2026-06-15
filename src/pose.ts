@@ -136,7 +136,8 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
 }
 
 function readFallbackTransform(skeleton: Skeleton, fallbackPose: readonly Transform[], joint: number): Transform {
-  return fallbackPose[joint] ?? skeleton.restPose[joint]!;
+  const fallbackTransform = fallbackPose[joint];
+  return fallbackTransform && isFiniteTransform(fallbackTransform) ? fallbackTransform : skeleton.restPose[joint]!;
 }
 
 function accumulateTransform(rotationSum: Quat, translationSum: [number, number, number], scaleSum: [number, number, number], transform: Transform, weight: number): void {

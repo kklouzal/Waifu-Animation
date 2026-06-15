@@ -902,6 +902,19 @@ assert.equal(shortFallbackBlend[0]!.translation[0], 9, "valid fallback joints sh
 assert.deepEqual(shortFallbackBlend[1]!.translation, skeleton.restPose[1]!.translation, "short fallback poses should use skeleton rest pose for missing joints");
 assert.deepEqual(shortFallbackBlend[2]!.translation, skeleton.restPose[2]!.translation, "short fallback poses should use skeleton rest pose for missing threshold fallback");
 
+const invalidFallbackPose = clonePose(skeleton.restPose);
+invalidFallbackPose[0]!.translation = [Number.NaN, 9, 9];
+invalidFallbackPose[0]!.rotation = [0, 0, 0, 0];
+invalidFallbackPose[0]!.scale = [Number.POSITIVE_INFINITY, 2, 3];
+invalidFallbackPose[1]!.translation = [8, 0, 0];
+const invalidFallbackBlend = blendPoses(skeleton, [], { threshold: 0.01, fallbackPose: invalidFallbackPose });
+assert.deepEqual(
+  invalidFallbackBlend[0]!,
+  skeleton.restPose[0]!,
+  "invalid fallback transforms should fall back per joint to skeleton rest pose"
+);
+assert.equal(invalidFallbackBlend[1]!.translation[0], 8, "valid fallback joints should still be used when neighboring fallback joints are invalid");
+
 const overweightMask = new Float32Array(skeleton.joints.length);
 overweightMask[2] = 2;
 const overweightMaskedBlend = blendPoses(
@@ -1005,6 +1018,26 @@ assert.ok(tinyWeightBlend[2]!.rotation[0] < sampled[2]!.rotation[0]);
 const nanThresholdBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }], { threshold: Number.NaN });
 assert.ok(nanThresholdBlend[2]!.rotation[0] > 0, "NaN thresholds should not discard finite weak layer influence");
 assert.ok(nanThresholdBlend[2]!.rotation[0] < sampled[2]!.rotation[0], "NaN thresholds should preserve rest-pose fallback for tiny weights");
+
+const weakFallbackPose = clonePose(skeleton.restPose);
+weakFallbackPose[2]!.translation = [Number.NaN, 7, 7];
+weakFallbackPose[2]!.rotation = [0, 0, 0, 0];
+weakFallbackPose[2]!.scale = [Number.NaN, 2, 3];
+const weakLayerPose = clonePose(skeleton.restPose);
+weakLayerPose[2]!.translation = [10, 0, 0];
+const weakInvalidFallbackBlend = blendPoses(skeleton, [{ pose: weakLayerPose, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }], {
+  fallbackPose: weakFallbackPose
+});
+assert.ok(
+  Math.abs(weakInvalidFallbackBlend[2]!.translation[0] - 5) < 1e-6,
+  "invalid fallback transforms should not contaminate weak-layer threshold blending"
+);
+assert.ok(
+  weakInvalidFallbackBlend[2]!.translation.every(Number.isFinite) &&
+    weakInvalidFallbackBlend[2]!.rotation.every(Number.isFinite) &&
+    weakInvalidFallbackBlend[2]!.scale.every(Number.isFinite),
+  "weak-layer blending with an invalid fallback transform should stay finite"
+);
 
 const infiniteThresholdBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }], { threshold: Number.POSITIVE_INFINITY });
 assert.ok(infiniteThresholdBlend[2]!.rotation[0] > 0, "infinite thresholds should not discard finite weak layer influence");
