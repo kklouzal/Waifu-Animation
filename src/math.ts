@@ -150,6 +150,10 @@ export function cloneQuat(value: ArrayLike<number> | undefined, fallback: Quat =
   return [value?.[0] ?? fallback[0], value?.[1] ?? fallback[1], value?.[2] ?? fallback[2], value?.[3] ?? fallback[3]];
 }
 
+export function cloneNormalizedQuat(value: ArrayLike<number> | undefined, fallback: Quat = IDENTITY_QUAT): Quat {
+  return normalizeQuat(cloneQuat(value, fallback));
+}
+
 function normalizeFiniteFallbackQuat(fallback: Quat): Quat {
   if (!fallback.every(isFiniteNumber)) return cloneQuat(IDENTITY_QUAT);
   const length = Math.hypot(fallback[0], fallback[1], fallback[2], fallback[3]);
