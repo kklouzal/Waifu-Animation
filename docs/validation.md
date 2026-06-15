@@ -101,7 +101,7 @@ The generated Mocap Online library now records explicit root-motion policy metad
 
 ## Known Limits
 
-- The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. Under the current Waifu app policy described in `docs/architecture.md`, authored clips played through Three `AnimationMixer` are the only runtime source of skeletal bone/joint rotations.
+- The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. See `docs/architecture.md` for the current Waifu skeletal runtime policy this validation assumes.
 - The package exposes an Ozz-inspired foot-plant planning job, reusable two-bone IK correction quaternions, and optional Three.js application hooks. Those remain reusable library capabilities, but current Waifu visual gates should not rely on app-side foot-plant application flags.
 - The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, non-skeletal look-at/face/viseme cues, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, arbitrary rendered foot planting, preserved root-motion application, prop attachments, or multi-avatar retargeting.
 
@@ -111,7 +111,7 @@ The generated Mocap Online library now records explicit root-motion policy metad
 Changes validated in this pass:
 
 - Added Ozz-style thresholded override pose blending and runtime threshold configuration.
-- Added reusable Three `applyThreePresenceTargets` procedural target application for consumers that opt into procedural skeletal targets. Current Waifu policy does not use it to drive skeletal bone/joint rotations.
+- Added reusable Three `applyThreePresenceTargets` procedural target application for consumers that opt into procedural skeletal targets; see Known Limits for current Waifu usage policy.
 - Rebuilt package `dist/` and Waifu production client bundle.
 
 Commands run:
