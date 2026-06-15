@@ -1527,9 +1527,7 @@ const mirroredLimbExpected = {
 assert.ok(vectorNearlyEqual(mirroredLimbActual.left, mirroredLimbExpected.left, 1e-5), "left limb rendered direction should preserve target-local rotation axis");
 assert.ok(vectorNearlyEqual(mirroredLimbActual.right, mirroredLimbExpected.right, 1e-5), "right limb rendered direction should preserve target-local rotation axis");
 
-const authoredRotationBone = new Object3D();
-authoredRotationBone.name = "head";
-authoredRotationBone.quaternion.set(0.3, 0, 0, 0.953939).normalize();
+const authoredRotationBone = createNamedBone("head", normalizeQuat([0.3, 0, 0, 0.953939]));
 const authoredRotationClip = createThreeAnimationClip(
   {
     id: "authored-local-rotation",
@@ -1549,9 +1547,7 @@ const authoredTrackValues = Array.from(authoredRotationClip.tracks[0]!.values as
 assert.deepEqual(authoredTrackValues.slice(0, 4), [0, 0, 0, 1], "authored target-local rotations must not be pre-multiplied by target rest");
 assert.ok(authoredTrackValues[5]! > 0.19, "authored target-local rotations should preserve sampled components");
 
-const posedDuringAsyncLoadBone = new Object3D();
-posedDuringAsyncLoadBone.name = "leftUpperLeg";
-posedDuringAsyncLoadBone.quaternion.fromArray(quatFromAxisAngle([0, 0, 1], Math.PI / 2));
+const posedDuringAsyncLoadBone = createNamedBone("leftUpperLeg", quatFromAxisAngle([0, 0, 1], Math.PI / 2));
 const explicitRestClip = createThreeAnimationClip(
   {
     id: "explicit-target-rest",
@@ -2219,6 +2215,13 @@ function createSingleLimbBones(targetRest: readonly number[], upperName = "leftU
 
   root.updateMatrixWorld(true);
   return { root, upper, lower };
+}
+
+function createNamedBone(name: string, rotation: readonly number[]): Object3D {
+  const bone = new Object3D();
+  bone.name = name;
+  bone.quaternion.fromArray(rotation);
+  return bone;
 }
 
 function sampleThreeClipOnce(root: Object3D, clip: ReturnType<typeof createThreeAnimationClip>, time = 1): void {
