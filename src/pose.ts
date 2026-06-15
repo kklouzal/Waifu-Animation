@@ -64,16 +64,12 @@ export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): Po
   return issues;
 }
 
-function sanitizeMaskWeight(weight: number): number {
-  return finiteNonNegative(weight, 0);
-}
-
 export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: Record<string, number> = {}): JointMask {
   const mask = new Float32Array(skeleton.joints.length);
-  mask.fill(sanitizeMaskWeight(defaultWeight));
+  mask.fill(finiteNonNegative(defaultWeight, 0));
   for (const [jointName, weight] of Object.entries(entries)) {
     const index = skeleton.nameToIndex.get(jointName) ?? skeleton.humanoid.get(jointName as never);
-    if (index !== undefined) mask[index] = sanitizeMaskWeight(weight);
+    if (index !== undefined) mask[index] = finiteNonNegative(weight, 0);
   }
   return mask;
 }
