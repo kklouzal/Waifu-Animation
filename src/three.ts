@@ -946,7 +946,7 @@ function applyLocalEulerTarget(bone: Object3D, euler: Vec3, influence: number, d
   if (!Number.isFinite(tmpTargetWorld.x) || !Number.isFinite(tmpTargetWorld.y) || !Number.isFinite(tmpTargetWorld.z) || !Number.isFinite(tmpTargetWorld.w)) {
     return false;
   }
-  const alpha = clamp01(influence * (deltaSeconds === undefined ? 1 : dampAlpha(speed, deltaSeconds)));
+  const alpha = dampedInfluenceAmount(influence, speed, deltaSeconds);
   if (alpha <= 0) return false;
   tmpCurrentWorld.copy(bone.quaternion);
   bone.quaternion.slerpQuaternions(tmpCurrentWorld, tmpTargetWorld, alpha).normalize();
