@@ -1,4 +1,4 @@
-import { type RandomSource, type Vec3, clamp, clamp01, createSeededRandom, dampAlpha, normalizeVec3, randomRange, smoothPulse } from "./math.js";
+import { type RandomSource, type Vec3, clamp, clamp01, createSeededRandom, dampAlpha, finiteNonNegative, normalizeVec3, randomRange, smoothPulse } from "./math.js";
 
 export type LookAtDistribution = {
   eyes: { yaw: number; pitch: number; weight: number };
@@ -217,10 +217,6 @@ function normalizeAffect(value: PresenceAffect | undefined): Required<PresenceAf
 
 function damp(current: number, target: number, speed: number, deltaSeconds: number): number {
   return current + (target - current) * dampAlpha(speed, deltaSeconds);
-}
-
-function finiteNonNegative(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
 function mixTarget(rest: number, gesture: number, amount: number): number {

@@ -1,4 +1,4 @@
-import { type RandomSource, clamp01, createSeededRandom, dampAlpha, randomRange } from "./math.js";
+import { type RandomSource, clamp01, createSeededRandom, dampAlpha, finiteNonNegative, randomRange } from "./math.js";
 
 export const VISEME_NAMES = ["aa", "ih", "ou", "ee", "oh"] as const;
 export type VisemeName = (typeof VISEME_NAMES)[number];
@@ -221,8 +221,4 @@ export function mixExpressions(layers: Array<{ values: Record<string, number>; w
     }
   }
   return output;
-}
-
-function finiteNonNegative(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }

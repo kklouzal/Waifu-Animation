@@ -5,6 +5,7 @@ import {
   clamp,
   clamp01,
   dotVec3,
+  finiteNonNegative,
   lengthVec3,
   lerpVec3,
   normalizeVec3,
@@ -262,8 +263,4 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     legs,
     issues
   };
-}
-
-function finiteNonNegative(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
