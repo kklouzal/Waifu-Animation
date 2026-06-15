@@ -976,6 +976,28 @@ assert.equal(additiveLayer?.blendMode, "additive", "override crossfade should no
 assert.ok(Math.abs(additiveLayer!.targetWeight - 1) < 1e-6);
 assert.ok(Math.abs(additiveCrossfadePose.localPose[2]!.translation[0] - 11) < 1e-4);
 
+const runtimeCrossfadeToAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+runtimeCrossfadeToAdditive.setLayer("base", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 2 });
+runtimeCrossfadeToAdditive.crossfade("additive", additiveNudgeClip, { priority: 2, fadeSpeed: 1, blendMode: "additive" });
+runtimeCrossfadeToAdditive.update(Math.log(2));
+const midAdditiveTargetCrossfade = runtimeCrossfadeToAdditive.evaluate();
+const baseDuringAdditiveTarget = midAdditiveTargetCrossfade.activeLayers.find((layer) => layer.id === "base");
+const additiveTargetDuringFade = midAdditiveTargetCrossfade.activeLayers.find((layer) => layer.id === "additive");
+assert.ok(baseDuringAdditiveTarget, "additive crossfade should leave same-priority override base layers active");
+assert.equal(baseDuringAdditiveTarget!.targetWeight, 1, "additive crossfade should not retarget same-priority override base layers");
+assert.equal(baseDuringAdditiveTarget!.weight, 1, "additive crossfade should not fade same-priority override base influence");
+assert.ok(additiveTargetDuringFade, "additive crossfade target should become active while fading in");
+assert.equal(additiveTargetDuringFade!.blendMode, "additive");
+assert.ok(Math.abs(additiveTargetDuringFade!.weight - 0.5) < 1e-6, "additive crossfade target should fade in independently");
+assert.ok(Math.abs(midAdditiveTargetCrossfade.localPose[2]!.translation[0] - 2.5) < 1e-6, "additive crossfade target should compose on top of the base pose while fading");
+runtimeCrossfadeToAdditive.update(20);
+const finishedAdditiveTargetCrossfade = runtimeCrossfadeToAdditive.evaluate();
+const baseAfterAdditiveTarget = finishedAdditiveTargetCrossfade.activeLayers.find((layer) => layer.id === "base");
+const additiveTargetAfterFade = finishedAdditiveTargetCrossfade.activeLayers.find((layer) => layer.id === "additive");
+assert.equal(baseAfterAdditiveTarget?.targetWeight, 1, "additive crossfade should keep base target weight after completion");
+assert.ok(Math.abs(additiveTargetAfterFade!.weight - 1) < 1e-4, "additive crossfade target should finish fading in");
+assert.ok(Math.abs(finishedAdditiveTargetCrossfade.localPose[2]!.translation[0] - 3) < 1e-4, "additive crossfade target should compose fully on top of the base pose");
+
 const runtimeSubtractiveAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
 runtimeSubtractiveAdditive.setLayer("base", crossfadeNewClip, { weight: 1, targetWeight: 1 });
 runtimeSubtractiveAdditive.setLayer("subtract", additiveNudgeClip, { weight: -2, targetWeight: -2, blendMode: "additive" });

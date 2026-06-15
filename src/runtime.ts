@@ -123,7 +123,7 @@ export class AnimationRuntime {
     };
     this.layers.set(id, layer);
 
-    if (options.fadeOutExisting !== false) {
+    if (blendMode === "override" && options.fadeOutExisting !== false) {
       const fromIds = options.fromIds ? new Set(options.fromIds) : undefined;
       const excludeIds = new Set([id, ...(options.excludeIds ?? [])]);
       for (const source of this.layers.values()) {
