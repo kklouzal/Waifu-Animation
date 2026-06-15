@@ -13,7 +13,7 @@ import {
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
-import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, dampValue, euclideanModulo, finiteNonNegative, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
+import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, dampValue, euclideanModulo, finiteNonNegative, isFiniteNumber, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
   BASE_PROCEDURAL_TRACK_POLICY,
@@ -928,7 +928,7 @@ function applyWorldQuaternionDelta(bone: Object3D, deltaWorld: Quaternion, influ
 }
 
 function applyLocalEulerTarget(bone: Object3D, euler: Vec3, influence: number, deltaSeconds: number, speed: number): boolean {
-  if (influence <= 0 || !euler.every(Number.isFinite)) return false;
+  if (influence <= 0 || !euler.every(isFiniteNumber)) return false;
   tmpTargetWorld.setFromEuler(tmpEuler.set(euler[0], euler[1], euler[2], "XYZ")).normalize();
   if (!Number.isFinite(tmpTargetWorld.x) || !Number.isFinite(tmpTargetWorld.y) || !Number.isFinite(tmpTargetWorld.z) || !Number.isFinite(tmpTargetWorld.w)) {
     return false;
