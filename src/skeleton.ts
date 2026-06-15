@@ -4,10 +4,8 @@ import {
   cloneTransformList,
   cloneTransform,
   composeMat4,
-  identityTransform,
   isFiniteTransform,
   multiplyMat4,
-  normalizeTransform
 } from "./math.js";
 
 export const NO_PARENT = -1;
@@ -126,7 +124,7 @@ export function createSkeleton(definitions: JointDefinition[]): Skeleton {
     return {
       name: joint.name,
       parentIndex,
-      rest: normalizeTransform(cloneTransform(joint.rest ?? identityTransform())),
+      rest: cloneTransform(joint.rest),
       ...(joint.humanoid ? { humanoid: joint.humanoid } : {})
     };
   });
