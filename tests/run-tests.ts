@@ -1301,14 +1301,9 @@ assert.equal(invalidRuntime.evaluate().diagnostics, undefined, "runtime diagnost
 const invalidEvaluation = invalidRuntime.evaluate({ diagnostics: true });
 assert.ok(invalidEvaluation.diagnostics!.some((issue) => issue.stage === "sample" && issue.layerId === "invalid-source" && issue.clipId === "invalid-translation-scale"));
 assert.ok(invalidEvaluation.diagnostics!.some((issue) => issue.stage === "final" && issue.joint === "spine"));
+assertFiniteEvaluation(invalidEvaluation);
 for (const transform of invalidEvaluation.localPose) {
-  assert.ok(transform.translation.every(Number.isFinite));
-  assert.ok(transform.rotation.every(Number.isFinite));
   assert.ok(Math.abs(Math.hypot(...transform.rotation) - 1) < 1e-5);
-  assert.ok(transform.scale.every(Number.isFinite));
-}
-for (const matrix of invalidEvaluation.modelPose) {
-  assert.ok(Array.from(matrix).every(Number.isFinite));
 }
 
 const invalidRotationRuntime = new AnimationRuntime(skeleton);
