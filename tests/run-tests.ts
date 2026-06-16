@@ -1149,12 +1149,12 @@ assert.ok(Math.abs(infiniteThresholdRuntimePose[2]!.translation[0] - 15) < 1e-6,
 const crossfadeOldClip: AnimationClip = {
   id: "crossfade-old",
   duration: 1,
-  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([2, 0, 0]) }]
+  tracks: [makeTransformTrack("head", "translation", [2, 0, 0])]
 };
 const crossfadeNewClip: AnimationClip = {
   id: "crossfade-new",
   duration: 1,
-  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([10, 0, 0]) }]
+  tracks: [makeTransformTrack("head", "translation", [10, 0, 0])]
 };
 const runtimeCrossfade = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
 runtimeCrossfade.setLayer("old", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 4 });
@@ -1172,7 +1172,7 @@ assert.ok(Math.abs(finishedCrossfade.localPose[2]!.translation[0] - 10) < 1e-4, 
 const additiveNudgeClip: AnimationClip = {
   id: "additive-nudge",
   duration: 1,
-  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([1, 0, 0]) }]
+  tracks: [makeTransformTrack("head", "translation", [1, 0, 0])]
 };
 const runtimeCrossfadeAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
 runtimeCrossfadeAdditive.setLayer("old", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 2 });
@@ -1264,44 +1264,26 @@ assert.deepEqual(
   "base procedural policy should leave arms to procedural posture instead of source-loop rest poses"
 );
 
-const baseAuthoredClip: AnimationClip = {
-  id: "base-authored-upper",
-  duration: 1,
-  loop: true,
-  tracks: [
-    { humanBone: "hips", property: "position", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) },
-    { humanBone: "spine", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftShoulder", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "rightUpperArm", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftHand", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "rightIndexProximal", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftUpperLeg", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) }
-  ]
-};
+const baseAuthoredClip = makeAuthoredLoopClip("base-authored-upper", ["hips.position", "spine", "leftShoulder", "rightUpperArm", "leftHand", "rightIndexProximal", "leftUpperLeg"]);
 assert.deepEqual(
   applySourceTrackPolicy(baseAuthoredClip, BASE_PROCEDURAL_SOURCE_TRACK_POLICY).tracks.map((track) => track.humanBone ?? track.joint),
   ["hips", "spine", "leftUpperLeg"],
   "base source policy should strip authored arm and finger tracks before Three track names become UUID based"
 );
 
-const locomotionAuthoredClip: AnimationClip = {
-  id: "locomotion-authored-upper",
-  duration: 1,
-  loop: true,
-  tracks: [
-    { humanBone: "hips", property: "position", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) },
-    { humanBone: "spine", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftShoulder", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftUpperArm", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "rightLowerArm", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "rightHand", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftIndexProximal", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "rightThumbDistal", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftUpperLeg", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "leftLowerLeg", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) },
-    { humanBone: "rightFoot", property: "quaternion", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) }
-  ]
-};
+const locomotionAuthoredClip = makeAuthoredLoopClip("locomotion-authored-upper", [
+  "hips.position",
+  "spine",
+  "leftShoulder",
+  "leftUpperArm",
+  "rightLowerArm",
+  "rightHand",
+  "leftIndexProximal",
+  "rightThumbDistal",
+  "leftUpperLeg",
+  "leftLowerLeg",
+  "rightFoot"
+]);
 const locomotionBaseClip = applySourceTrackPolicy(locomotionAuthoredClip, LOCOMOTION_BASE_SOURCE_TRACK_POLICY);
 assert.deepEqual(
   locomotionBaseClip.tracks.map((track) => track.humanBone ?? track.joint),
@@ -1386,19 +1368,9 @@ for (const name of locomotionUpperBodyTargets.map((target) => target.bone)) {
 const locomotionPostureHips = new Object3D();
 locomotionPostureHips.name = "hips";
 locomotionPostureBones.set("hips", locomotionPostureHips);
-locomotionPostureBones.get("leftUpperArm")!.position.set(0.24, 1.38, 0);
-locomotionPostureBones.get("leftLowerArm")!.position.set(0.53, 0.98, 0);
-locomotionPostureBones.get("leftHand")!.position.set(0.72, 0.58, 0);
-locomotionPostureBones.get("rightUpperArm")!.position.set(-0.24, 1.38, 0);
-locomotionPostureBones.get("rightLowerArm")!.position.set(-0.53, 0.98, 0);
-locomotionPostureBones.get("rightHand")!.position.set(-0.72, 0.58, 0);
 locomotionPostureRoot.add(locomotionPostureHips);
-locomotionPostureRoot.add(locomotionPostureBones.get("leftUpperArm")!);
-locomotionPostureBones.get("leftUpperArm")!.add(locomotionPostureBones.get("leftLowerArm")!);
-locomotionPostureBones.get("leftLowerArm")!.add(locomotionPostureBones.get("leftHand")!);
-locomotionPostureRoot.add(locomotionPostureBones.get("rightUpperArm")!);
-locomotionPostureBones.get("rightUpperArm")!.add(locomotionPostureBones.get("rightLowerArm")!);
-locomotionPostureBones.get("rightLowerArm")!.add(locomotionPostureBones.get("rightHand")!);
+attachArmChain(locomotionPostureRoot, locomotionPostureBones, "left", 1);
+attachArmChain(locomotionPostureRoot, locomotionPostureBones, "right", -1);
 const locomotionPostureResult = applyThreeLocomotionUpperBodyPosture({
   resolveBone: (bone) => locomotionPostureBones.get(bone),
   deltaSeconds: 1,
@@ -2408,6 +2380,36 @@ function makeSourceRestQuaternionTrack(track: Partial<AnimationClip["tracks"][nu
     times: toFloat32Array(times),
     values: toFloat32Array(values)
   };
+}
+
+function makeTransformTrack(humanBone: string, property: "position" | "translation" | "quaternion", values: number[], times = [0]): AnimationClip["tracks"][number] {
+  return { humanBone, property, times: toFloat32Array(times), values: toFloat32Array(values) };
+}
+
+function makeAuthoredLoopClip(id: string, tracks: readonly string[]): AnimationClip {
+  return {
+    id,
+    duration: 1,
+    loop: true,
+    tracks: tracks.map((track) => {
+      const [humanBone, property = "quaternion"] = track.split(".") as [string, "position" | "quaternion" | undefined];
+      return property === "position"
+        ? makeTransformTrack(humanBone, "position", [0, 0, 0, 0, 0, 1], [0, 1])
+        : makeTransformTrack(humanBone, "quaternion", [0, 0, 0, 1, 0, 0, 0, 1], [0, 1]);
+    })
+  };
+}
+
+function attachArmChain(root: Object3D, bones: Map<string, Object3D>, side: "left" | "right", sign: 1 | -1): void {
+  const upper = bones.get(`${side}UpperArm`)!;
+  const lower = bones.get(`${side}LowerArm`)!;
+  const hand = bones.get(`${side}Hand`)!;
+  upper.position.set(sign * 0.24, 1.38, 0);
+  lower.position.set(sign * 0.53, 0.98, 0);
+  hand.position.set(sign * 0.72, 0.58, 0);
+  root.add(upper);
+  upper.add(lower);
+  lower.add(hand);
 }
 
 function makeRuntimeClipDiagnosticStub(options: {
