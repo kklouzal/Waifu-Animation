@@ -47,9 +47,31 @@ export function retargetQuaternionTrackValues(
 }
 
 function remapHumanoidSourceDelta(sourceDelta: Quat, sourceRest: Quat, humanBone: string | undefined): Quat {
-  if (!humanBone || !isRolledLowerLegSource(sourceRest, humanBone)) return sourceDelta;
-  // Motus/FBX lower-leg tracks arrive with knee hinge motion on the rolled source Z axis.
-  return normalizeQuat([sourceDelta[2], sourceDelta[1], sourceDelta[0], sourceDelta[3]]);
+  if (!humanBone) return sourceDelta;
+  if (isRolledUpperArmSource(sourceRest, humanBone)) {
+    // Motus/FBX upper-arm deltas arrive in a source-local basis that leaves VRM normalized arms horizontal.
+    return humanBone === "leftUpperArm"
+      ? normalizeQuat([-sourceDelta[1], sourceDelta[2], sourceDelta[0], sourceDelta[3]])
+      : normalizeQuat([-sourceDelta[1], -sourceDelta[2], -sourceDelta[0], sourceDelta[3]]);
+  }
+  if (isRolledLeftLowerArmSource(sourceRest, humanBone)) {
+    // Motus/FBX left forearm uses the opposite bend sign after upper-arm basis remapping.
+    return normalizeQuat([sourceDelta[0], sourceDelta[1], -sourceDelta[2], sourceDelta[3]]);
+  }
+  if (isRolledLowerLegSource(sourceRest, humanBone)) {
+    // Motus/FBX lower-leg tracks arrive with knee hinge motion on the rolled source Z axis.
+    return normalizeQuat([sourceDelta[2], sourceDelta[1], sourceDelta[0], sourceDelta[3]]);
+  }
+  return sourceDelta;
+}
+
+function isRolledLeftLowerArmSource(sourceRest: Quat, humanBone: string): boolean {
+  return humanBone === "leftLowerArm" && Math.abs(sourceRest[0]) < 0.05 && Math.abs(sourceRest[1]) < 0.05 && Math.abs(sourceRest[2]) < 0.05 && sourceRest[3] > 0.95;
+}
+
+function isRolledUpperArmSource(sourceRest: Quat, humanBone: string): boolean {
+  if (humanBone !== "leftUpperArm" && humanBone !== "rightUpperArm") return false;
+  return Math.abs(sourceRest[1]) > 0.05 && Math.abs(sourceRest[2]) > 0.15 && sourceRest[3] > 0.85;
 }
 
 function isRolledLowerLegSource(sourceRest: Quat, humanBone: string): boolean {

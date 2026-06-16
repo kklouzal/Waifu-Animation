@@ -67,6 +67,10 @@ export const ROOT_TRANSLATION_EXCLUDE_POLICY: TrackMaskPolicy = {
   exclude: [/(hips|Hips)\.position$/]
 };
 
+export const ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY: SourceTrackMaskPolicy = {
+  exclude: [(track) => (track.humanBone ?? track.joint) === "hips" && /^(translation|position)$/i.test(track.property)]
+};
+
 export const BASE_PROCEDURAL_TRACK_POLICY: TrackMaskPolicy = {
   exclude: [/(shoulder|upperArm|lowerArm|hand|thumb|index|middle|ring|little)/i]
 };
@@ -83,5 +87,5 @@ export const OVERLAY_UPPER_BODY_TRACK_POLICY: TrackMaskPolicy = {
 };
 
 export const LOCOMOTION_BASE_SOURCE_TRACK_POLICY: SourceTrackMaskPolicy = {
-  exclude: [...BASE_PROCEDURAL_SOURCE_TRACK_POLICY.exclude!]
+  exclude: [/^(left|right)(Thumb|Index|Middle|Ring|Little)/]
 };

@@ -44,6 +44,7 @@ import {
   BASE_PROCEDURAL_TRACK_POLICY,
   BASE_PROCEDURAL_SOURCE_TRACK_POLICY,
   LOCOMOTION_BASE_SOURCE_TRACK_POLICY,
+  ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY,
   inspectAnimationAsset,
   inspectClipAsset,
   identityTransform,
@@ -67,6 +68,7 @@ import {
   toFloat32Array,
   rejectedAnimationReport,
   usableManifestClips,
+  validateAnimationManifestAssets,
   validateClip,
   validateManifest,
   validateSkeleton,
@@ -323,6 +325,44 @@ assert.ok(
   invalidValidationStatusAssetInspection.issues.some((issue) => issue.message === "invalid validation status acceptted"),
   "inspectAnimationAsset should reject malformed validation.status metadata"
 );
+const quarantinedAssetInspection = inspectAnimationAsset(
+  {
+    id: "quarantined",
+    label: "Quarantined",
+    url: "/quarantined.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    validation: { status: "quarantined", reason: "manual hold" }
+  },
+  nodClip,
+  skeleton
+);
+assert.equal(quarantinedAssetInspection.status, "quarantined");
+assert.equal(quarantinedAssetInspection.accepted, false);
+assert.ok(
+  quarantinedAssetInspection.issues.some((issue) => issue.message === "manual hold"),
+  "inspectAnimationAsset should preserve manifest quarantine reasons as validation issues"
+);
+const quarantinedAssetValidationReport = await validateAnimationManifestAssets(
+  {
+    version: 1,
+    clips: [
+      {
+        id: "quarantined",
+        label: "Quarantined",
+        url: "/quarantined.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        validation: { status: "quarantined", reason: "manual hold" }
+      }
+    ]
+  },
+  async () => encodeAnimationBinary(nodClip),
+  { skeleton, now: new Date("2026-01-01T00:00:00.000Z") }
+);
+assert.equal(quarantinedAssetValidationReport.accepted, 0);
+assert.equal(quarantinedAssetValidationReport.rejected, 0);
+assert.equal(quarantinedAssetValidationReport.quarantined, 1);
+assert.equal(quarantinedAssetValidationReport.entries[0]!.status, "quarantined");
+assert.equal(quarantinedAssetValidationReport.entries[0]!.accepted, false);
 
 const duplicateResolvedChannelClip: AnimationClip = {
   id: "duplicate-resolved-channel",
@@ -1281,8 +1321,22 @@ const locomotionAuthoredClip: AnimationClip = {
 const locomotionBaseClip = applySourceTrackPolicy(locomotionAuthoredClip, LOCOMOTION_BASE_SOURCE_TRACK_POLICY);
 assert.deepEqual(
   locomotionBaseClip.tracks.map((track) => track.humanBone ?? track.joint),
-  ["hips", "spine", "leftUpperLeg", "leftLowerLeg", "rightFoot"],
-  "locomotion base policy should strip authored arm, shoulder, hand, and finger tracks while keeping root/spine/legs/feet"
+  ["hips", "spine", "leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand", "leftUpperLeg", "leftLowerLeg", "rightFoot"],
+  "locomotion base policy should keep authored full-body tracks while stripping finger detail"
+);
+assert.deepEqual(
+  applySourceTrackPolicy(locomotionBaseClip, ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY).tracks.map((track) => `${track.humanBone ?? track.joint}.${track.property}`),
+  [
+    "spine.quaternion",
+    "leftShoulder.quaternion",
+    "leftUpperArm.quaternion",
+    "rightLowerArm.quaternion",
+    "rightHand.quaternion",
+    "leftUpperLeg.quaternion",
+    "leftLowerLeg.quaternion",
+    "rightFoot.quaternion"
+  ],
+  "source root translation policy should remove hips translation before runtime tracks are renamed to UUIDs"
 );
 assert.equal(locomotionAuthoredClip.tracks.length, 11, "source track policy should not mutate the original clip");
 
@@ -1299,15 +1353,22 @@ const locomotionThreeClip = createThreeAnimationClip(locomotionBaseClip, {
 });
 assert.deepEqual(
   locomotionThreeClip.tracks.map((track) => track.name.split(".").at(-1)),
-  ["position", "quaternion", "quaternion", "quaternion", "quaternion"],
+  ["position", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion"],
   "runtime clip creation should consume source-filtered locomotion tracks"
 );
 assert.equal(
   locomotionThreeClip.tracks.some((track) =>
-    ["leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand", "leftIndexProximal", "rightThumbDistal"].some((name) => track.name.includes(locomotionRuntimeBones.get(name)!.uuid))
+    ["leftIndexProximal", "rightThumbDistal"].some((name) => track.name.includes(locomotionRuntimeBones.get(name)!.uuid))
   ),
   false,
-  "runtime locomotion clip should not contain authored upper-body tracks after policy filtering"
+  "runtime locomotion clip should not contain authored finger tracks after policy filtering"
+);
+assert.equal(
+  locomotionThreeClip.tracks.some((track) =>
+    ["leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand"].some((name) => track.name.includes(locomotionRuntimeBones.get(name)!.uuid))
+  ),
+  true,
+  "runtime locomotion clip should retain authored shoulder, arm, and hand tracks"
 );
 
 const locomotionUpperBodyTargets = createThreeLocomotionUpperBodyTargets({ influence: 1.5, phase: 0.25, speed: 20 });

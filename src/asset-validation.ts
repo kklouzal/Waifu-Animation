@@ -89,12 +89,14 @@ export function inspectAnimationAsset(entry: AnimationManifestEntry, clip: Anima
   const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(entry.id, issue));
   const issues = dedupeIssues([...clipIssues, ...manifestInspection, ...inspectSemanticAsset(entry, clip, skeleton)]);
   const requestedStatus = entry.validation?.status;
-  const status =
-    requestedStatus === "rejected" || requestedStatus === "quarantined" || isInvalidAssetValidationStatus(requestedStatus)
-      ? "rejected"
-      : issues.some((issue) => issue.severity === "error")
-        ? "rejected"
-        : "accepted";
+  let status: AssetValidationStatus;
+  if (requestedStatus === "quarantined") {
+    status = "quarantined";
+  } else if (requestedStatus === "rejected" || isInvalidAssetValidationStatus(requestedStatus) || issues.some((issue) => issue.severity === "error")) {
+    status = "rejected";
+  } else {
+    status = "accepted";
+  }
   return {
     id: entry.id,
     label: entry.label,
