@@ -108,9 +108,10 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   if (isRootMotionNamed(entry, clip)) {
     if (!rootMotionPolicy) {
       issues.push({ message: "root-motion clip must declare source.rootMotion.policy" });
-    } else if (rootMotionPolicy === "preserved" && !hasRootCarrierTranslationTrack) {
-      issues.push({ message: "root-motion policy is preserved but clip has no root carrier translation track" });
     }
+  }
+  if (rootMotionPolicy === "preserved" && !hasRootCarrierTranslationTrack) {
+    issues.push({ message: "root-motion policy is preserved but clip has no root carrier translation track" });
   }
   if (rootMotionPolicy === "stripped-to-in-place") {
     const movingRootCarrierTrack = clip.tracks.find(rootCarrierTranslationTrackHasMotion);
