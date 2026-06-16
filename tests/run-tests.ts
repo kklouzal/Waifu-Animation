@@ -98,6 +98,22 @@ const nodClip: AnimationClip = {
   ]
 };
 
+const invalidValidationStatusManifestEntry = {
+  id: "typo-status",
+  label: "Typo Status",
+  url: "/typo-status.waifuanim.bin",
+  format: WAIFU_ANIMATION_BINARY_FORMAT,
+  validation: { status: "acceptted" } as unknown as { status: "accepted" }
+};
+
+const quarantinedManifestEntry = {
+  id: "quarantined",
+  label: "Quarantined",
+  url: "/quarantined.waifuanim.bin",
+  format: WAIFU_ANIMATION_BINARY_FORMAT,
+  validation: { status: "quarantined", reason: "manual hold" }
+};
+
 assert.equal(clamp01(2), 1);
 assert.equal(finiteSigned(-0.75, 1), -0.75);
 assert.equal(finiteSigned(Number.NaN, 1), 1);
@@ -256,15 +272,9 @@ const malformedValidationStatusManifest = {
   version: 1,
   clips: [
     { id: "valid", label: "Valid", url: "/valid.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
-    { id: "typo-status", label: "Typo Status", url: "/typo-status.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "acceptted" } },
+    invalidValidationStatusManifestEntry,
     { id: "numeric-status", label: "Numeric Status", url: "/numeric-status.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: 1 } },
-    {
-      id: "quarantined",
-      label: "Quarantined",
-      url: "/quarantined.waifuanim.bin",
-      format: WAIFU_ANIMATION_BINARY_FORMAT,
-      validation: { status: "quarantined", reason: "manual hold" }
-    },
+    quarantinedManifestEntry,
     { id: "rejected", label: "Rejected", url: "/rejected.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "rejected" } },
     { id: "accepted", label: "Accepted", url: "/accepted.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "accepted" } }
   ]
@@ -294,13 +304,7 @@ assert.deepEqual(
   "rejectedAnimationReport should surface malformed validation status through the existing rejected logging path"
 );
 const invalidValidationStatusClipInspection = inspectClipAsset(
-  {
-    id: "typo-status",
-    label: "Typo Status",
-    url: "/typo-status.waifuanim.bin",
-    format: WAIFU_ANIMATION_BINARY_FORMAT,
-    validation: { status: "acceptted" } as unknown as { status: "accepted" }
-  },
+  invalidValidationStatusManifestEntry,
   nodClip
 );
 assert.equal(invalidValidationStatusClipInspection.accepted, false);
@@ -309,13 +313,7 @@ assert.ok(
   "inspectClipAsset should reject malformed validation.status metadata"
 );
 const invalidValidationStatusAssetInspection = inspectAnimationAsset(
-  {
-    id: "typo-status",
-    label: "Typo Status",
-    url: "/typo-status.waifuanim.bin",
-    format: WAIFU_ANIMATION_BINARY_FORMAT,
-    validation: { status: "acceptted" } as unknown as { status: "accepted" }
-  },
+  invalidValidationStatusManifestEntry,
   nodClip,
   skeleton
 );
@@ -326,13 +324,7 @@ assert.ok(
   "inspectAnimationAsset should reject malformed validation.status metadata"
 );
 const quarantinedAssetInspection = inspectAnimationAsset(
-  {
-    id: "quarantined",
-    label: "Quarantined",
-    url: "/quarantined.waifuanim.bin",
-    format: WAIFU_ANIMATION_BINARY_FORMAT,
-    validation: { status: "quarantined", reason: "manual hold" }
-  },
+  quarantinedManifestEntry,
   nodClip,
   skeleton
 );
@@ -345,15 +337,7 @@ assert.ok(
 const quarantinedAssetValidationReport = await validateAnimationManifestAssets(
   {
     version: 1,
-    clips: [
-      {
-        id: "quarantined",
-        label: "Quarantined",
-        url: "/quarantined.waifuanim.bin",
-        format: WAIFU_ANIMATION_BINARY_FORMAT,
-        validation: { status: "quarantined", reason: "manual hold" }
-      }
-    ]
+    clips: [quarantinedManifestEntry]
   },
   async () => encodeAnimationBinary(nodClip),
   { skeleton, now: new Date("2026-01-01T00:00:00.000Z") }
