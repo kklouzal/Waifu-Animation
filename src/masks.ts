@@ -17,6 +17,11 @@ export type SourceTrackMaskPolicy = {
   exclude?: SourceTrackRule[];
 };
 
+const ARM_TRACK_RULE = /(shoulder|upperArm|lowerArm|hand)/i;
+const FINGER_TRACK_RULE = /(thumb|index|middle|ring|little)/i;
+const ARM_SOURCE_TRACK_RULE = /^(left|right)(Shoulder|UpperArm|LowerArm|Hand)/;
+const FINGER_SOURCE_TRACK_RULE = /^(left|right)(Thumb|Index|Middle|Ring|Little)/;
+
 function matchesRule(name: string, rule: TrackNameRule): boolean {
   return typeof rule === "string" ? name.includes(rule) : rule.test(name);
 }
@@ -72,20 +77,17 @@ export const ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY: SourceTrackMaskPolicy = {
 };
 
 export const BASE_PROCEDURAL_TRACK_POLICY: TrackMaskPolicy = {
-  exclude: [/(shoulder|upperArm|lowerArm|hand|thumb|index|middle|ring|little)/i]
+  exclude: [ARM_TRACK_RULE, FINGER_TRACK_RULE]
 };
 
 export const BASE_PROCEDURAL_SOURCE_TRACK_POLICY: SourceTrackMaskPolicy = {
-  exclude: [
-    /^(left|right)(Shoulder|UpperArm|LowerArm|Hand)/,
-    /^(left|right)(Thumb|Index|Middle|Ring|Little)/
-  ]
+  exclude: [ARM_SOURCE_TRACK_RULE, FINGER_SOURCE_TRACK_RULE]
 };
 
 export const OVERLAY_UPPER_BODY_TRACK_POLICY: TrackMaskPolicy = {
-  exclude: [/(upperLeg|lowerLeg|foot|toes|thumb|index|middle|ring|little)/i]
+  exclude: [/(upperLeg|lowerLeg|foot|toes)/i, FINGER_TRACK_RULE]
 };
 
 export const LOCOMOTION_BASE_SOURCE_TRACK_POLICY: SourceTrackMaskPolicy = {
-  exclude: [/^(left|right)(Thumb|Index|Middle|Ring|Little)/]
+  exclude: [FINGER_SOURCE_TRACK_RULE]
 };
