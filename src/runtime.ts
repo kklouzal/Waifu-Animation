@@ -260,30 +260,32 @@ function pushClipDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues:
   for (const issue of issues) {
     const track = issue.track !== undefined ? layer.clip.tracks[issue.track] : undefined;
     const index = track ? resolveTrackJointIndex(skeleton, track) : -1;
-    diagnostics.push({
-      stage: "sample",
-      layerId: layer.id,
-      clipId: layer.clip.id,
-      ...(issue.track !== undefined ? { track: issue.track } : {}),
-      ...(issue.property !== undefined ? { property: issue.property } : {}),
-      joint: issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>",
-      index,
-      message: issue.message
-    });
+    diagnostics.push(createSampleDiagnostic(layer, issue, issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>", index, { includeProperty: true }));
   }
 }
 
 function pushSampleRepairDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues: SampleRepairDiagnostic[], layer: AnimationLayer): void {
   for (const issue of issues) {
-    diagnostics.push({
-      stage: "sample",
-      layerId: layer.id,
-      clipId: layer.clip.id,
-      ...(issue.track !== undefined ? { track: issue.track } : {}),
-      ...(issue.sample !== undefined ? { sample: issue.sample } : {}),
-      joint: issue.joint ?? "<clip>",
-      index: issue.index ?? -1,
-      message: issue.message
-    });
+    diagnostics.push(createSampleDiagnostic(layer, issue, issue.joint ?? "<clip>", issue.index ?? -1, { includeSample: true }));
   }
+}
+
+function createSampleDiagnostic(
+  layer: AnimationLayer,
+  issue: ClipValidationIssue | SampleRepairDiagnostic,
+  joint: string,
+  index: number,
+  options: { includeProperty?: boolean; includeSample?: boolean } = {}
+): RuntimeEvaluationDiagnostic {
+  return {
+    stage: "sample",
+    layerId: layer.id,
+    clipId: layer.clip.id,
+    ...(issue.track !== undefined ? { track: issue.track } : {}),
+    ...(options.includeProperty && issue.property !== undefined ? { property: issue.property } : {}),
+    ...(options.includeSample && "sample" in issue && issue.sample !== undefined ? { sample: issue.sample } : {}),
+    joint,
+    index,
+    message: issue.message
+  };
 }
