@@ -64,6 +64,11 @@ export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): Po
   return issues;
 }
 
+export function readPoseTransformOrRest(skeleton: Skeleton, pose: readonly Transform[], joint: number): Transform {
+  const transform = pose[joint];
+  return transform && isFiniteTransform(transform) ? transform : skeleton.restPose[joint]!;
+}
+
 export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: Record<string, number> = {}): JointMask {
   const mask = new Float32Array(skeleton.joints.length);
   mask.fill(finiteNonNegative(defaultWeight, 0));
@@ -110,7 +115,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
   const threshold = sanitizeBlendThreshold(options.threshold);
   for (let joint = 0; joint < jointCount; joint += 1) {
     const accumulated = totalWeights[joint]!;
-    const fallbackTransform = readFallbackTransform(skeleton, fallbackPose, joint);
+    const fallbackTransform = readPoseTransformOrRest(skeleton, fallbackPose, joint);
     if (threshold > 0 && (!hasAnyLayer || accumulated < threshold)) {
       const restWeight = !hasAnyLayer ? 1 : threshold - accumulated;
       if (restWeight > 0) {
@@ -133,11 +138,6 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
   }
 
   return output;
-}
-
-function readFallbackTransform(skeleton: Skeleton, fallbackPose: readonly Transform[], joint: number): Transform {
-  const fallbackTransform = fallbackPose[joint];
-  return fallbackTransform && isFiniteTransform(fallbackTransform) ? fallbackTransform : skeleton.restPose[joint]!;
 }
 
 function accumulateTransform(rotationSum: Quat, translationSum: [number, number, number], scaleSum: [number, number, number], transform: Transform, weight: number): void {

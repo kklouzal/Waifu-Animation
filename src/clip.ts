@@ -1,5 +1,5 @@
 import { type Quat, type Transform, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
-import { type Pose, clonePose } from "./pose.js";
+import { type Pose, readPoseTransformOrRest } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
@@ -233,7 +233,7 @@ export function sanitizeQuaternionTrackValues(values: ArrayLike<number>): Float3
 
 export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSeconds: number, options: SampleOptions = {}): Pose {
   const restPose = options.restPose ?? createRestPose(skeleton);
-  const output = clonePose(restPose);
+  const output = Array.from({ length: skeleton.joints.length }, (_, joint) => cloneTransform(readPoseTransformOrRest(skeleton, restPose, joint)));
   const time = sampleTime(clip, timeSeconds, options.loop ?? clip.loop ?? false);
   for (let trackIndex = 0; trackIndex < clip.tracks.length; trackIndex += 1) {
     const track = clip.tracks[trackIndex]!;
@@ -248,10 +248,11 @@ export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSe
     const sampled = options.diagnostics
       ? sampleTrack(track, time, { diagnostics: options.diagnostics, diagnosticContext })
       : sampleTrack(track, time, { diagnosticContext });
+    const restTransform = readPoseTransformOrRest(skeleton, restPose, jointIndex);
     const transform = cloneTransform(output[jointIndex]);
     if (property === "translation") transform.translation = sampled as [number, number, number];
     if (property === "scale") transform.scale = sampled as [number, number, number];
-    if (property === "rotation") transform.rotation = retargetSampledRotation(track, restPose[jointIndex]?.rotation, sampled as Quat, options.diagnostics, diagnosticContext);
+    if (property === "rotation") transform.rotation = retargetSampledRotation(track, restTransform.rotation, sampled as Quat, options.diagnostics, diagnosticContext);
     output[jointIndex] = transform;
   }
   return output;

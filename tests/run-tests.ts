@@ -813,6 +813,16 @@ assert.deepEqual(malformedFallbackPose[0]!.translation, [0, 0, 0], "missing tran
 assert.deepEqual(malformedFallbackPose[1]!.rotation, [0, 0, 0, 1], "missing rotation samples should fall back to identity rotation");
 assert.deepEqual(malformedFallbackPose[2]!.scale, [1, 1, 1], "missing scale samples should fall back to identity scale");
 assert.deepEqual(malformedFallbackPose[3]!.scale, [1, 1, 1], "empty scale tracks should fall back to identity scale");
+const shortSamplingRestPose = sampleClipToPose(skeleton, { ...malformedFallbackClip, tracks: [malformedFallbackClip.tracks[2]!] }, 0, { restPose: [] });
+assert.deepEqual(shortSamplingRestPose[2]!.translation, skeleton.restPose[2]!.translation, "short sampling rest poses should fall back missing base joints to skeleton rest pose");
+const invalidSamplingRestPose = clonePose(skeleton.restPose);
+invalidSamplingRestPose[2]!.translation = [Number.NaN, 7, 7];
+invalidSamplingRestPose[2]!.rotation = [0, 0, 0, 0];
+invalidSamplingRestPose[2]!.scale = [Number.POSITIVE_INFINITY, 2, 3];
+const invalidSamplingRestFallback = sampleClipToPose(skeleton, { ...malformedFallbackClip, tracks: [malformedFallbackClip.tracks[2]!] }, 0, {
+  restPose: invalidSamplingRestPose
+});
+assert.deepEqual(invalidSamplingRestFallback[2]!.translation, skeleton.restPose[2]!.translation, "invalid sampling rest transforms should fall back per joint to skeleton rest pose");
 
 const unsupportedPropertyClip = {
   id: "unsupported-property",
