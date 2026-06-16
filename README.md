@@ -38,6 +38,7 @@ npm test
 
 - `math`: deterministic random helpers, transform math, quaternion interpolation, matrix composition.
 - `skeleton`: Ozz-style skeleton representation, humanoid mapping, local-to-model conversion.
+- `attachments`: renderer-agnostic Ozz-style joint attachment transform helpers.
 - `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
 - `pose`: rest pose creation, blending, additive layers, masks, pose validation.
 - `runtime`: deterministic layer stack, crossfades, priorities, final local/model pose evaluation.

@@ -18,6 +18,7 @@ Current coverage includes:
 - manifest validation status hardening, including malformed runtime JSON status rejection and rejected-report surfacing;
 - local clip sampling;
 - local-to-model pose conversion;
+- Ozz-style attachment transform composition from joint model matrices plus offsets, including target resolution and invalid input handling;
 - weighted pose blending with masks;
 - runtime layer evaluation, subtractive additive runtime weights, opt-in evaluation diagnostics, and override crossfade orchestration;
 - declarative track-name masks;

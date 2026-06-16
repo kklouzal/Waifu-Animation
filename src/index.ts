@@ -1,5 +1,6 @@
 export * from "./math.js";
 export * from "./skeleton.js";
+export * from "./attachments.js";
 export * from "./pose.js";
 export * from "./clip.js";
 export * from "./binary.js";

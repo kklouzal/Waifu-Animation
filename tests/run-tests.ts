@@ -23,6 +23,9 @@ import {
   blendPoses,
   breathingWeight,
   clamp01,
+  composeMat4,
+  computeAttachmentTransform,
+  computeSkeletonAttachmentTransform,
   createThreeLocomotionUpperBodyTargets,
   createJointMask,
   DEFAULT_BLEND_THRESHOLD,
@@ -49,6 +52,7 @@ import {
   inspectClipAsset,
   identityTransform,
   localToModelPose,
+  multiplyMat4,
   normalizeQuat,
   normalizeTransform,
   normalizeVec3,
@@ -66,6 +70,7 @@ import {
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   toFloat32Array,
+  transformPoint,
   rejectedAnimationReport,
   usableManifestClips,
   validateAnimationManifestAssets,
@@ -872,6 +877,84 @@ assert.ok(
 const models = localToModelPose(skeleton, sampled);
 assert.equal(models.length, skeleton.joints.length);
 assert.equal(models[0]![13], 1);
+
+const attachmentOffset = composeMat4({ translation: [0.25, 0.5, -0.75], rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4), scale: [1, 2, 1] });
+const expectedAttachment = multiplyMat4(models[2]!, attachmentOffset);
+assertMat4NearlyEqual(
+  computeAttachmentTransform({ modelPose: models, jointIndex: 2, offset: attachmentOffset }),
+  expectedAttachment,
+  1e-6,
+  "attachment transform should concatenate joint model matrix then offset matrix"
+);
+assertMat4NearlyEqual(
+  computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "head", offset: attachmentOffset }),
+  expectedAttachment,
+  1e-6,
+  "attachment transform should resolve joints by name"
+);
+assertMat4NearlyEqual(
+  computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "head", offset: attachmentOffset }),
+  computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "head", offset: attachmentOffset }),
+  0,
+  "attachment transform should be deterministic for repeated evaluation"
+);
+const humanoidAttachment = computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "leftUpperArm", offset: { translation: [0, 0.25, 0] } });
+assertMat4NearlyEqual(
+  humanoidAttachment,
+  computeAttachmentTransform({ modelPose: models, jointIndex: 3, offset: { translation: [0, 0.25, 0] } }),
+  1e-6,
+  "attachment transform should resolve humanoid aliases through the skeleton map"
+);
+const rotatedAttachmentSkeleton = createSkeleton([
+  { name: "root", rest: { rotation: quatFromAxisAngle([0, 0, 1], Math.PI / 2) } },
+  { name: "rightHandJoint", parentName: "root", humanoid: "rightHand" }
+]);
+const rotatedAttachmentModels = localToModelPose(rotatedAttachmentSkeleton, rotatedAttachmentSkeleton.restPose);
+assert.ok(
+  vectorNearlyEqual(
+    transformPoint(computeSkeletonAttachmentTransform({ skeleton: rotatedAttachmentSkeleton, modelPose: rotatedAttachmentModels, joint: "rightHand", offset: { translation: [1, 0, 0] } }), [0, 0, 0]),
+    [0, 1, 0],
+    1e-6
+  ),
+  "attachment translation offsets should rotate with the parent/joint model matrix"
+);
+assert.throws(
+  () => computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "missingJoint" }),
+  /attachment joint missingJoint was not found/,
+  "missing attachment joints should be explicit failures"
+);
+assert.throws(
+  () => computeAttachmentTransform({ modelPose: models, jointIndex: 99 }),
+  /attachment joint index 99 is out of range/,
+  "out-of-range attachment joint indices should be explicit failures"
+);
+const nonFiniteJointModels = [...models];
+nonFiniteJointModels[2] = new Float32Array(models[2]!);
+nonFiniteJointModels[2]![12] = Number.NaN;
+assert.throws(
+  () => computeAttachmentTransform({ modelPose: nonFiniteJointModels, jointIndex: 2 }),
+  /attachment joint 2 model matrix values must be finite/,
+  "non-finite joint model matrices should not produce plausible attachment output"
+);
+const sanitizedOffsetAttachment = computeAttachmentTransform({
+  modelPose: [composeMat4(identityTransform())],
+  jointIndex: 0,
+  offset: {
+    translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
+    rotation: [0, Number.NaN, 0, 1],
+    scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
+  }
+});
+assertMat4NearlyEqual(
+  sanitizedOffsetAttachment,
+  composeMat4(cloneTransform({
+    translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
+    rotation: [0, Number.NaN, 0, 1],
+    scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
+  })),
+  0,
+  "attachment transform offsets should sanitize Partial<Transform> inputs through cloneTransform"
+);
 
 const mask = createJointMask(skeleton, 0, { head: 1 });
 const blended = blendPoses(skeleton, [
@@ -2592,6 +2675,14 @@ function vectorNearlyEqual(actual: readonly number[], expected: readonly number[
     Math.abs(actual[1]! - expected[1]!) <= tolerance &&
     Math.abs(actual[2]! - expected[2]!) <= tolerance
   );
+}
+
+function assertMat4NearlyEqual(actual: readonly number[], expected: readonly number[], tolerance: number, message: string): void {
+  assert.equal(actual.length, 16, `${message}: actual matrix length`);
+  assert.equal(expected.length, 16, `${message}: expected matrix length`);
+  for (let index = 0; index < 16; index += 1) {
+    assert.ok(Math.abs(actual[index]! - expected[index]!) <= tolerance, `${message}: matrix value ${index} expected ${expected[index]} got ${actual[index]}`);
+  }
 }
 
 function quaternionNearlyEqual(actual: readonly number[], expected: readonly number[], tolerance: number): boolean {

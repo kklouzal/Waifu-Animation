@@ -6,6 +6,7 @@
 
 - `math`: vectors, quaternions, transforms, matrices, deterministic random helpers, damping, interpolation, and quaternion vector-alignment helpers.
 - `skeleton`: parent-index skeletons, humanoid mappings, rest poses, and local-to-model conversion.
+- `attachments`: Ozz-style joint attachment transform composition for props, targets, and other renderer-agnostic consumers.
 - `clip`: decoded binary clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
 - `binary`: versioned `.waifuanim.bin` encoding and decoding for animation keyframe payloads.
 - `pose`: pose cloning, normalized blending, additive deltas, joint masks, and pose validation.
