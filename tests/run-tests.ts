@@ -35,6 +35,7 @@ import {
   calculateThreeRuntimeInfluence,
   decodeAnimationBinary,
   encodeAnimationBinary,
+  NO_PARENT,
   readActiveThreeRuntimeClipSnapshots,
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
@@ -158,6 +159,47 @@ assert.deepEqual(identityTransform(), cloneTransform(undefined));
 const repairedRestSkeleton = createSkeleton([{ name: "root", rest: { translation: [Number.NaN, 5, Infinity], scale: [Number.NaN, 3, -Infinity] } }]);
 assert.deepEqual(repairedRestSkeleton.restPose[0]!.translation, [0, 5, 0]);
 assert.deepEqual(repairedRestSkeleton.restPose[0]!.scale, [1, 3, 1]);
+const explicitRootSkeleton = createSkeleton([
+  { name: "hips", parentIndex: NO_PARENT },
+  { name: "spine", parentIndex: 0 },
+  { name: "detached", parentIndex: NO_PARENT }
+]);
+assert.equal(explicitRootSkeleton.joints[0]!.parentIndex, NO_PARENT);
+assert.equal(explicitRootSkeleton.joints[2]!.parentIndex, NO_PARENT);
+assert.throws(
+  () => createSkeleton([{ name: "root", parentIndex: Number.NaN }]),
+  /joint root parent index must be an integer/,
+  "createSkeleton should reject NaN parent indices"
+);
+assert.throws(
+  () =>
+    createSkeleton([
+      { name: "root" },
+      { name: "child", parentIndex: 0.5 }
+    ]),
+  /joint child parent index must be an integer/,
+  "createSkeleton should reject non-integer parent indices"
+);
+assert.throws(
+  () => createSkeleton([{ name: "root", parentIndex: NO_PARENT - 1 }]),
+  /joint root parent index is invalid/,
+  "createSkeleton should reject parent indices below NO_PARENT"
+);
+assert.throws(
+  () => createSkeleton([{ name: "root", parentIndex: 0 }]),
+  /joint root parent must appear before child/,
+  "createSkeleton should reject self parent indices"
+);
+assert.throws(
+  () =>
+    createSkeleton([
+      { name: "root" },
+      { name: "child", parentIndex: 2 },
+      { name: "futureParent", parentIndex: 0 }
+    ]),
+  /joint child parent must appear before child/,
+  "createSkeleton should reject future parent indices"
+);
 assert.throws(
   () =>
     createSkeleton([

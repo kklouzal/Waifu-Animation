@@ -114,6 +114,8 @@ export function createSkeleton(definitions: JointDefinition[]): Skeleton {
   const humanoid = new Map<HumanoidBoneName, number>();
   const joints = definitions.map((joint, index): SkeletonJoint => {
     const parentIndex = resolveParentIndex(joint, index, nameToIndex);
+    if (!Number.isInteger(parentIndex)) throw new Error(`joint ${joint.name} parent index must be an integer`);
+    if (parentIndex < NO_PARENT) throw new Error(`joint ${joint.name} parent index is invalid`);
     if (parentIndex >= index) throw new Error(`joint ${joint.name} parent must appear before child`);
     if (joint.humanoid) {
       const existingIndex = humanoid.get(joint.humanoid);
