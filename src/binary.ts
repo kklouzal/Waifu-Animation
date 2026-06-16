@@ -152,11 +152,9 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
       throw new Error(`animation track ${index} target kind is invalid`);
     }
     if (nameByteOffset + nameByteLength > stringBytes) throw new Error(`animation track ${index} name bounds are invalid`);
-    if (timeOffset + keyCount > floatData.length) throw new Error(`animation track ${index} time bounds are invalid`);
-    if (valueOffset + keyCount * stride > floatData.length) throw new Error(`animation track ${index} value bounds are invalid`);
-    if (sourceRestOffset !== NO_OFFSET && sourceRestOffset + 4 > floatData.length) {
-      throw new Error(`animation track ${index} source-rest bounds are invalid`);
-    }
+    assertFloatBounds(index, "time", timeOffset, keyCount, floatData.length);
+    assertFloatBounds(index, "value", valueOffset, keyCount * stride, floatData.length);
+    if (sourceRestOffset !== NO_OFFSET) assertFloatBounds(index, "source-rest", sourceRestOffset, 4, floatData.length);
 
     const name = textDecoder.decode(bytes.subarray(stringByteOffset + nameByteOffset, stringByteOffset + nameByteOffset + nameByteLength));
     const trackBase = {
@@ -202,6 +200,10 @@ function readSourceRestQuaternion(track: AnimationTrack): Float32Array | null {
     throw new Error(`animation track ${targetName}.${track.property} sourceRestQuaternion must contain exactly 4 values`);
   }
   return sourceRestQuaternion;
+}
+
+function assertFloatBounds(trackIndex: number, label: string, offset: number, count: number, floatCount: number): void {
+  if (offset + count > floatCount) throw new Error(`animation track ${trackIndex} ${label} bounds are invalid`);
 }
 
 function align4(value: number): number {

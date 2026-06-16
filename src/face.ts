@@ -14,7 +14,7 @@ export type VisemeMixerOptions = {
 export type VisemeSpeed = number | Partial<Record<VisemeName, number>>;
 
 export function zeroVisemes(): VisemeWeights {
-  return { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+  return visemeWeights(() => 0);
 }
 
 export function limitVisemeStack(values: VisemeWeights, maxTotal: number): VisemeWeights {
@@ -22,13 +22,7 @@ export function limitVisemeStack(values: VisemeWeights, maxTotal: number): Visem
   const total = VISEME_NAMES.reduce((sum, name) => sum + values[name], 0);
   if (total <= safeMaxTotal || total <= 0) return { ...values };
   const scale = safeMaxTotal / total;
-  return {
-    aa: values.aa * scale,
-    ih: values.ih * scale,
-    ou: values.ou * scale,
-    ee: values.ee * scale,
-    oh: values.oh * scale
-  };
+  return visemeWeights((name) => values[name] * scale);
 }
 
 export class VisemeMixer {
@@ -71,6 +65,16 @@ export class VisemeMixer {
 
 function visemeSpeedFor(speed: VisemeSpeed, name: VisemeName): number {
   return typeof speed === "number" ? speed : speed[name] ?? 0;
+}
+
+function visemeWeights(read: (name: VisemeName) => number): VisemeWeights {
+  return {
+    aa: read("aa"),
+    ih: read("ih"),
+    ou: read("ou"),
+    ee: read("ee"),
+    oh: read("oh")
+  };
 }
 
 export type BlinkState = {
