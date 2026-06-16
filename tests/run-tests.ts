@@ -4,6 +4,7 @@ import {
   AnimationRuntime,
   type AnimationManifest,
   type AnimationClip,
+  type SampleRepairDiagnostic,
   BlinkScheduler,
   FacialExpressionMixer,
   finiteSigned,
@@ -818,6 +819,31 @@ assert.deepEqual(malformedFallbackPose[0]!.translation, [0, 0, 0], "missing tran
 assert.deepEqual(malformedFallbackPose[1]!.rotation, [0, 0, 0, 1], "missing rotation samples should fall back to identity rotation");
 assert.deepEqual(malformedFallbackPose[2]!.scale, [1, 1, 1], "missing scale samples should fall back to identity scale");
 assert.deepEqual(malformedFallbackPose[3]!.scale, [1, 1, 1], "empty scale tracks should fall back to identity scale");
+const malformedFiniteSampleDiagnostics: SampleRepairDiagnostic[] = [];
+const malformedFiniteSampleClip: AnimationClip = {
+  id: "malformed-finite-samples",
+  duration: 1,
+  tracks: [
+    { humanBone: "spine", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([Number.NaN, 2, Number.POSITIVE_INFINITY, 4, 5, 6]) },
+    { humanBone: "head", property: "scale", times: toFloat32Array([0, 1]), values: toFloat32Array([1, Number.NEGATIVE_INFINITY, 1, Number.NaN, 3, 4]) }
+  ]
+};
+const malformedFiniteSamplePose = sampleClipToPose(skeleton, malformedFiniteSampleClip, 0.5, { diagnostics: malformedFiniteSampleDiagnostics });
+assert.deepEqual(malformedFiniteSamplePose[1]!.translation, [2, 3.5, 3], "non-finite translation sample components should be repaired before interpolation");
+assert.deepEqual(malformedFiniteSamplePose[2]!.scale, [1, 2, 2.5], "non-finite scale sample components should be repaired before interpolation");
+assert.ok(malformedFiniteSamplePose.every((transform) => transform.translation.every(Number.isFinite) && transform.scale.every(Number.isFinite)));
+assert.ok(
+  malformedFiniteSampleDiagnostics.some((issue) => issue.property === "translation" && issue.sample === 0 && issue.message === "translation track sample values were repaired to finite defaults"),
+  "direct pose sampling should report repaired translation samples"
+);
+assert.ok(
+  malformedFiniteSampleDiagnostics.some((issue) => issue.property === "scale" && issue.sample === 0 && issue.message === "scale track sample values were repaired to finite defaults"),
+  "direct pose sampling should report repaired scale samples"
+);
+assert.ok(
+  malformedFiniteSampleDiagnostics.some((issue) => issue.property === "scale" && issue.sample === 1 && issue.message === "scale track sample values were repaired to finite defaults"),
+  "direct pose sampling should report each repaired scale key used for interpolation"
+);
 const shortSamplingRestPose = sampleClipToPose(skeleton, { ...malformedFallbackClip, tracks: [malformedFallbackClip.tracks[2]!] }, 0, { restPose: [] });
 assert.deepEqual(shortSamplingRestPose[2]!.translation, skeleton.restPose[2]!.translation, "short sampling rest poses should fall back missing base joints to skeleton rest pose");
 const invalidSamplingRestPose = clonePose(skeleton.restPose);
@@ -1561,7 +1587,39 @@ invalidRuntime.setLayer("invalid-source", invalidTranslationScaleClip, { weight:
 assert.equal(invalidRuntime.evaluate().diagnostics, undefined, "runtime diagnostics should stay opt-in");
 const invalidEvaluation = invalidRuntime.evaluate({ diagnostics: true });
 assert.ok(invalidEvaluation.diagnostics!.some((issue) => issue.stage === "sample" && issue.layerId === "invalid-source" && issue.clipId === "invalid-translation-scale"));
-assert.ok(invalidEvaluation.diagnostics!.some((issue) => issue.stage === "final" && issue.joint === "spine"));
+assert.ok(
+  invalidEvaluation.diagnostics!.some(
+    (issue) =>
+      issue.stage === "sample" &&
+      issue.layerId === "invalid-source" &&
+      issue.clipId === "invalid-translation-scale" &&
+      issue.track === 0 &&
+      issue.sample === 0 &&
+      issue.joint === "spine" &&
+      issue.index === 1 &&
+      issue.message === "translation track sample values were repaired to finite defaults"
+  ),
+  "runtime diagnostics should report translation samples repaired during sampling"
+);
+assert.ok(
+  invalidEvaluation.diagnostics!.some(
+    (issue) =>
+      issue.stage === "sample" &&
+      issue.layerId === "invalid-source" &&
+      issue.clipId === "invalid-translation-scale" &&
+      issue.track === 1 &&
+      issue.sample === 0 &&
+      issue.joint === "head" &&
+      issue.index === 2 &&
+      issue.message === "scale track sample values were repaired to finite defaults"
+  ),
+  "runtime diagnostics should report scale samples repaired during sampling"
+);
+assert.equal(
+  invalidEvaluation.diagnostics!.some((issue) => issue.stage === "final" && issue.joint === "spine"),
+  false,
+  "translation and scale sample repairs should prevent final-pose diagnostics for the repaired joints"
+);
 assertFiniteEvaluation(invalidEvaluation);
 for (const transform of invalidEvaluation.localPose) {
   assert.ok(Math.abs(Math.hypot(...transform.rotation) - 1) < 1e-5);

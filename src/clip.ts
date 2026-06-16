@@ -327,7 +327,8 @@ function readTrackValue(
   const fallback = defaultTrackSample(property);
   const values = fallback.map((value, index) => track.values[offset + index] ?? value);
   if (stride === 4) pushRotationSampleRepairDiagnostic(diagnostics, diagnosticContext, track, values as Quat, keyIndex);
-  return stride === 4 ? normalizeQuat(values as Quat) : values;
+  if (stride === 4) return normalizeQuat(values as Quat);
+  return repairVec3Sample(track, values as [number, number, number], fallback as [number, number, number], keyIndex, diagnostics, diagnosticContext);
 }
 
 function pushRotationSampleRepairDiagnostic(
@@ -341,6 +342,26 @@ function pushRotationSampleRepairDiagnostic(
   const message = quaternionRepairMessage(value, "rotation track quaternion");
   if (!message) return;
   diagnostics.push({ ...diagnosticContext, property: track.property, sample, message });
+}
+
+function repairVec3Sample(
+  track: AnimationTrack,
+  values: [number, number, number],
+  fallback: [number, number, number],
+  sample: number,
+  diagnostics: SampleRepairDiagnostic[] | undefined,
+  diagnosticContext: Pick<SampleRepairDiagnostic, "track" | "joint" | "index"> | undefined
+): [number, number, number] {
+  let repaired = false;
+  const output = values.map((value, index) => {
+    if (Number.isFinite(value)) return value;
+    repaired = true;
+    return fallback[index]!;
+  }) as [number, number, number];
+  if (repaired) {
+    diagnostics?.push({ ...diagnosticContext, property: track.property, sample, message: `${track.property} track sample values were repaired to finite defaults` });
+  }
+  return output;
 }
 
 function pushSourceRestRepairDiagnostic(
