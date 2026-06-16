@@ -68,6 +68,8 @@ export function validateManifest(manifest: AnimationManifest): string[] {
     if (entry.validation?.status === "accepted" && entry.validation.reason) {
       issues.push(`${entry.id} is accepted but still has rejection reason`);
     }
+    const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry);
+    if (rootMotionPolicyIssue) issues.push(`${entry.id || "<unknown>"} ${rootMotionPolicyIssue}`);
   }
   return issues;
 }
@@ -97,6 +99,10 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   const issues = validateClip(clip);
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
   const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
+  const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip);
+  if (rootMotionPolicyIssue) {
+    issues.push({ message: rootMotionPolicyIssue });
+  }
   if (isRootMotionNamed(entry, clip)) {
     if (!rootMotionPolicy) {
       issues.push({ message: "root-motion clip must declare source.rootMotion.policy" });
@@ -140,6 +146,30 @@ export function manifestValidationStatusIssue(entry: AnimationManifestEntry): st
   return null;
 }
 
+export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): string | null {
+  const entrySource = entry.source ?? {};
+  const sourceRootMotion = entrySource.rootMotion;
+  if (sourceRootMotion !== undefined) {
+    if (typeof sourceRootMotion === "string") {
+      if (!isRootMotionPolicy(sourceRootMotion)) return `has invalid source.rootMotion policy ${String(sourceRootMotion)}`;
+    } else if (typeof sourceRootMotion === "object" && sourceRootMotion !== null && "policy" in sourceRootMotion) {
+      const policy = (sourceRootMotion as { policy?: unknown }).policy;
+      if (!isRootMotionPolicy(policy)) return `has invalid source.rootMotion.policy ${String(policy)}`;
+    } else {
+      return "has invalid source.rootMotion metadata";
+    }
+  }
+  const sourcePolicy = entrySource.rootMotionPolicy;
+  if (sourcePolicy !== undefined && !isRootMotionPolicy(sourcePolicy)) return `has invalid source.rootMotionPolicy ${String(sourcePolicy)}`;
+  return null;
+}
+
+function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {
+  const clipPolicy = clip.metadata?.rootMotionPolicy;
+  if (clipPolicy !== undefined && !isRootMotionPolicy(clipPolicy)) return `has invalid clip rootMotionPolicy ${String(clipPolicy)}`;
+  return null;
+}
+
 function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): boolean {
   return /\broot[-_ ]?motion\b/i.test(`${entry.id} ${entry.label} ${entry.url} ${clip.id} ${clip.name ?? ""}`);
 }
@@ -173,12 +203,16 @@ function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {
 }
 
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
-  return manifest.clips.filter((entry) => !manifestValidationStatusIssue(entry));
+  return manifest.clips.filter((entry) => !manifestRejectionIssue(entry));
 }
 
 export function rejectedAnimationReport(manifest: AnimationManifest): Array<{ id: string; label?: string; reason: string }> {
   return manifest.clips
-    .map((entry) => ({ entry, reason: manifestValidationStatusIssue(entry) }))
+    .map((entry) => ({ entry, reason: manifestRejectionIssue(entry) }))
     .filter((item): item is { entry: AnimationManifestEntry; reason: string } => item.reason !== null)
     .map(({ entry, reason }) => ({ id: entry.id, label: entry.label, reason }));
+}
+
+function manifestRejectionIssue(entry: AnimationManifestEntry): string | null {
+  return manifestValidationStatusIssue(entry) ?? manifestRootMotionPolicyIssue(entry);
 }

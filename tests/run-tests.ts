@@ -324,7 +324,10 @@ const malformedValidationStatusManifest = {
     { id: "numeric-status", label: "Numeric Status", url: "/numeric-status.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: 1 } },
     quarantinedManifestEntry,
     { id: "rejected", label: "Rejected", url: "/rejected.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "rejected" } },
-    { id: "accepted", label: "Accepted", url: "/accepted.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "accepted" } }
+    { id: "accepted", label: "Accepted", url: "/accepted.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "accepted" } },
+    { id: "invalid-root-motion-policy", label: "Invalid Root Motion Policy", url: "/invalid-root-motion-policy.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: { policy: "keep-everything" } } },
+    { id: "invalid-root-motion-shape", label: "Invalid Root Motion Shape", url: "/invalid-root-motion-shape.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: true } },
+    { id: "invalid-root-motion-policy-alias", label: "Invalid Root Motion Policy Alias", url: "/invalid-root-motion-policy-alias.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotionPolicy: "keep-everything" } }
   ]
 } as unknown as AnimationManifest;
 const malformedValidationStatusIssues = validateManifest(malformedValidationStatusManifest);
@@ -335,6 +338,18 @@ assert.ok(
 assert.ok(
   malformedValidationStatusIssues.includes("numeric-status has invalid validation status 1"),
   "validateManifest should report non-string validation.status values from runtime JSON"
+);
+assert.ok(
+  malformedValidationStatusIssues.includes("invalid-root-motion-policy has invalid source.rootMotion.policy keep-everything"),
+  "validateManifest should report invalid source.rootMotion.policy values from runtime JSON"
+);
+assert.ok(
+  malformedValidationStatusIssues.includes("invalid-root-motion-shape has invalid source.rootMotion metadata"),
+  "validateManifest should report malformed source.rootMotion shapes from runtime JSON"
+);
+assert.ok(
+  malformedValidationStatusIssues.includes("invalid-root-motion-policy-alias has invalid source.rootMotionPolicy keep-everything"),
+  "validateManifest should report invalid source.rootMotionPolicy aliases from runtime JSON"
 );
 assert.deepEqual(
   usableManifestClips(malformedValidationStatusManifest).map((entry) => entry.id),
@@ -347,7 +362,10 @@ assert.deepEqual(
     ["typo-status", "invalid validation status acceptted"],
     ["numeric-status", "invalid validation status 1"],
     ["quarantined", "manual hold"],
-    ["rejected", "manifest marks clip rejected"]
+    ["rejected", "manifest marks clip rejected"],
+    ["invalid-root-motion-policy", "has invalid source.rootMotion.policy keep-everything"],
+    ["invalid-root-motion-shape", "has invalid source.rootMotion metadata"],
+    ["invalid-root-motion-policy-alias", "has invalid source.rootMotionPolicy keep-everything"]
   ],
   "rejectedAnimationReport should surface malformed validation status through the existing rejected logging path"
 );
@@ -740,6 +758,21 @@ assert.equal(invalidRootMotionPolicyInspection.rootMotionPolicy, "none");
 assert.ok(
   invalidRootMotionPolicyInspection.issues.some((issue) => issue.message === "root-motion clip must declare source.rootMotion.policy"),
   "asset validation should use the same root-motion policy interpretation as manifest inspection"
+);
+const invalidNonRootMotionPolicyInspection = inspectClipAsset(
+  {
+    id: "idle-invalid-root-motion-policy",
+    label: "Idle Invalid Root Motion Policy",
+    url: "/idle-invalid-root-motion-policy.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "keep-everything" } }
+  },
+  nodClip
+);
+assert.equal(invalidNonRootMotionPolicyInspection.accepted, false);
+assert.ok(
+  invalidNonRootMotionPolicyInspection.issues.some((issue) => issue.message === "has invalid source.rootMotion.policy keep-everything"),
+  "inspectClipAsset should reject invalid root-motion metadata even when the clip name is not root-motion"
 );
 assert.equal(
   inspectAnimationAsset(
