@@ -134,6 +134,15 @@ export type PresenceBoneTarget = {
   speed: number;
 };
 
+type PresenceArmSideInput = {
+  lead: number;
+  gesture: number;
+  beat: number;
+  shrug: number;
+  shoulderLift: number;
+  armTarget: number;
+};
+
 export type PresenceUpdateInput = {
   nowMs: number;
   elapsedSeconds: number;
@@ -225,6 +234,22 @@ function gestureAmount(behavior: Required<PresenceBehavior>, name: PresenceGestu
 
 function pushTarget(targets: PresenceBoneTarget[], bone: PresenceBoneName, x: number, y: number, z: number, influence: number, speed: number): void {
   targets.push({ bone, rotation: [x, y, z], influence: clamp01(influence), speed });
+}
+
+function pushArmTargets(targets: PresenceBoneTarget[], side: "left" | "right", input: PresenceArmSideInput): void {
+  const { lead, gesture, beat, shrug, shoulderLift, armTarget } = input;
+  if (side === "left") {
+    pushTarget(targets, "leftShoulder", 0.02 + shoulderLift, -shrug * 0.04, mixTarget(-0.05, -0.18, lead) + shrug * 0.08, armTarget, 5.5);
+    pushTarget(targets, "leftUpperArm", mixTarget(0.04, 0.34 + beat + shrug * 0.16, gesture), 0.04 + shrug * 0.08, mixTarget(1.15, 0.58, gesture), armTarget, 5.8);
+    pushTarget(targets, "leftLowerArm", mixTarget(0.18, 0.72 + beat + shrug * 0.12, gesture), 0.04 + shrug * 0.12, mixTarget(-0.18, -0.52, gesture), armTarget, 5.8);
+    pushTarget(targets, "leftHand", mixTarget(0.06, -0.02 - shrug * 0.1, gesture), shrug * 0.12, mixTarget(-0.08, -0.24, gesture), armTarget, 6.2);
+    return;
+  }
+
+  pushTarget(targets, "rightShoulder", 0.02 + shoulderLift, shrug * 0.04, mixTarget(0.05, 0.2, lead) - shrug * 0.08, armTarget, 5.5);
+  pushTarget(targets, "rightUpperArm", mixTarget(0.08, 0.48 + beat + shrug * 0.18, gesture), mixTarget(-0.06, -0.18 - shrug * 0.08, gesture), mixTarget(-1.15, -0.5, gesture), armTarget, 5.8);
+  pushTarget(targets, "rightLowerArm", mixTarget(0.18, 0.92 + beat + shrug * 0.14, gesture), -0.04 - shrug * 0.12, mixTarget(0.18, 0.46, gesture), armTarget, 5.8);
+  pushTarget(targets, "rightHand", mixTarget(0.06, -0.04 - shrug * 0.1, gesture), -shrug * 0.12, mixTarget(0.08, 0.28, gesture), armTarget, 6.2);
 }
 
 export class PresencePlanner {
@@ -476,22 +501,8 @@ export class PresencePlanner {
     pushTarget(targets, "upperChest", motion.breath * 0.28 + affectLift * 0.24 + shoulderLift * 0.28, motion.idleShiftX * 0.04, motion.weightShift * 0.12, bodyTarget * 0.75, 3.3);
     pushTarget(targets, "neck", motion.headPitch * 0.16 + nodMotion * 0.24, motion.headYaw * 0.16, -motion.weightShift * 0.12, headTarget * 0.72, 3.8);
     pushTarget(targets, "head", motion.headPitch * 0.46 + nodMotion * 0.58, motion.headYaw * 0.42 + motion.idleShiftX * 0.08, motion.weightShift * 0.1, headTarget, 4.2);
-    pushTarget(targets, "leftShoulder", 0.02 + shoulderLift, -shrug * 0.04, mixTarget(-0.05, -0.18, leftLead) + shrug * 0.08, armTarget, 5.5);
-    pushTarget(targets, "rightShoulder", 0.02 + shoulderLift, shrug * 0.04, mixTarget(0.05, 0.2, rightLead) - shrug * 0.08, armTarget, 5.5);
-    pushTarget(targets, "leftUpperArm", mixTarget(0.04, 0.34 + leftBeat + shrug * 0.16, leftGesture), 0.04 + shrug * 0.08, mixTarget(1.15, 0.58, leftGesture), armTarget, 5.8);
-    pushTarget(
-      targets,
-      "rightUpperArm",
-      mixTarget(0.08, 0.48 + rightBeat + shrug * 0.18, rightGesture),
-      mixTarget(-0.06, -0.18 - shrug * 0.08, rightGesture),
-      mixTarget(-1.15, -0.5, rightGesture),
-      armTarget,
-      5.8
-    );
-    pushTarget(targets, "leftLowerArm", mixTarget(0.18, 0.72 + leftBeat + shrug * 0.12, leftGesture), 0.04 + shrug * 0.12, mixTarget(-0.18, -0.52, leftGesture), armTarget, 5.8);
-    pushTarget(targets, "rightLowerArm", mixTarget(0.18, 0.92 + rightBeat + shrug * 0.14, rightGesture), -0.04 - shrug * 0.12, mixTarget(0.18, 0.46, rightGesture), armTarget, 5.8);
-    pushTarget(targets, "leftHand", mixTarget(0.06, -0.02 - shrug * 0.1, leftGesture), shrug * 0.12, mixTarget(-0.08, -0.24, leftGesture), armTarget, 6.2);
-    pushTarget(targets, "rightHand", mixTarget(0.06, -0.04 - shrug * 0.1, rightGesture), -shrug * 0.12, mixTarget(0.08, 0.28, rightGesture), armTarget, 6.2);
+    pushArmTargets(targets, "left", { lead: leftLead, gesture: leftGesture, beat: leftBeat, shrug, shoulderLift, armTarget });
+    pushArmTargets(targets, "right", { lead: rightLead, gesture: rightGesture, beat: rightBeat, shrug, shoulderLift, armTarget });
 
     return targets;
   }

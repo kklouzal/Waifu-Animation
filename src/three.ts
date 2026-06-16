@@ -580,18 +580,35 @@ export function createThreeLocomotionUpperBodyTargets(options: ThreeLocomotionUp
   if (influence <= 0) return [];
   const phase = sanitizeThreeRuntimePhase(options.phase ?? 0);
   const swing = sanitizeThreeRuntimeSwing(options.swing, phase);
-  const counterSwing = -swing;
   const speed = finiteNonNegative(options.speed ?? 18, 18);
+  const leftTargets = createThreeLocomotionSideTargets("left", swing, influence, speed);
+  const rightTargets = createThreeLocomotionSideTargets("right", swing, influence, speed);
 
   return [
-    { bone: "leftShoulder", rotation: [0.015, -0.018, 0.026 + swing * 0.014], influence: influence * 0.72, speed },
-    { bone: "rightShoulder", rotation: [0.015, 0.018, -0.026 + counterSwing * 0.014], influence: influence * 0.72, speed },
-    { bone: "leftUpperArm", rotation: [0.26 + swing * 0.18, 0.055 + swing * 0.03, 1.64 + swing * 0.05], influence, speed: speed * 1.4 },
-    { bone: "rightUpperArm", rotation: [0.26 + counterSwing * 0.18, -0.055 + counterSwing * 0.03, -1.64 + counterSwing * 0.05], influence, speed: speed * 1.4 },
-    { bone: "leftLowerArm", rotation: [1.55 + Math.max(0, -swing) * 0.24, 0.42 + swing * 0.05, -1.18 - Math.max(0, swing) * 0.18], influence, speed: speed * 1.15 },
-    { bone: "rightLowerArm", rotation: [1.55 + Math.max(0, -counterSwing) * 0.24, -0.42 + counterSwing * 0.05, 1.18 + Math.max(0, counterSwing) * 0.18], influence, speed: speed * 1.15 },
-    { bone: "leftHand", rotation: [0.16, 0.08, -0.2 + swing * 0.024], influence: influence * 0.82, speed },
-    { bone: "rightHand", rotation: [0.16, -0.08, 0.2 + counterSwing * 0.024], influence: influence * 0.82, speed }
+    leftTargets[0]!,
+    rightTargets[0]!,
+    leftTargets[1]!,
+    rightTargets[1]!,
+    leftTargets[2]!,
+    rightTargets[2]!,
+    leftTargets[3]!,
+    rightTargets[3]!
+  ];
+}
+
+function createThreeLocomotionSideTargets(side: ThreeLocomotionArmSide, swing: number, influence: number, speed: number): ThreePresenceBoneTarget[] {
+  const sign = side === "left" ? 1 : -1;
+  const sideSwing = sign * swing;
+  return [
+    { bone: `${side}Shoulder`, rotation: [0.015, -sign * 0.018, sign * (0.026 + sideSwing * 0.014)], influence: influence * 0.72, speed },
+    { bone: `${side}UpperArm`, rotation: [0.26 + sideSwing * 0.18, sign * (0.055 + sideSwing * 0.03), sign * (1.64 + sideSwing * 0.05)], influence, speed: speed * 1.4 },
+    {
+      bone: `${side}LowerArm`,
+      rotation: [1.55 + Math.max(0, -sideSwing) * 0.24, sign * (0.42 + sideSwing * 0.05), sign * (-1.18 - Math.max(0, sideSwing) * 0.18)],
+      influence,
+      speed: speed * 1.15
+    },
+    { bone: `${side}Hand`, rotation: [0.16, sign * 0.08, sign * (-0.2 + sideSwing * 0.024)], influence: influence * 0.82, speed }
   ];
 }
 
