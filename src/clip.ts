@@ -47,6 +47,17 @@ export type SampleOptions = {
 const SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
 const ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
 
+type QuaternionNormalizationMessages = {
+  finite: string;
+  normalizable: string;
+  normalized: string;
+};
+
+type QuaternionNormalizationIssue = {
+  kind: keyof QuaternionNormalizationMessages;
+  message: string;
+};
+
 export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipValidationIssue[] {
   const issues: ClipValidationIssue[] = [];
   const resolvedChannels = new Map<string, { track: number; joint: string; property: NormalizedTrackProperty }>();
@@ -118,17 +129,24 @@ function validateRotationTrackQuaternions(
   const sampleCount = Math.floor(track.values.length / 4);
   for (let sample = 0; sample < sampleCount; sample += 1) {
     const offset = sample * 4;
-    const length = Math.hypot(track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!, track.values[offset + 3]!);
-    if (length <= EPSILON) {
+    const issue = quaternionNormalizationIssue(
+      [track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!, track.values[offset + 3]!],
+      ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE,
+      {
+        finite: "rotation track quaternions must be finite",
+        normalizable: "rotation track quaternions must be normalizable",
+        normalized: "rotation track quaternions must be normalized"
+      }
+    );
+    if (issue?.kind === "normalizable") {
       if (!reportedNonNormalizable) {
-        issues.push({ track: index, joint, property: track.property, message: "rotation track quaternions must be normalizable" });
+        issues.push({ track: index, joint, property: track.property, message: issue.message });
         reportedNonNormalizable = true;
       }
       continue;
     }
-    const lengthSquared = length * length;
-    if (Math.abs(lengthSquared - 1) > ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE && !reportedNonNormalized) {
-      issues.push({ track: index, joint, property: track.property, message: "rotation track quaternions must be normalized" });
+    if (issue?.kind === "normalized" && !reportedNonNormalized) {
+      issues.push({ track: index, joint, property: track.property, message: issue.message });
       reportedNonNormalized = true;
     }
     if (reportedNonNormalizable && reportedNonNormalized) return;
@@ -151,20 +169,13 @@ function validateSourceRestQuaternion(
     issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion must contain exactly 4 values" });
     return;
   }
-  for (let component = 0; component < sourceRest.length; component += 1) {
-    if (!Number.isFinite(sourceRest[component])) {
-      issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion values must be finite" });
-      return;
-    }
-  }
-  const length = Math.hypot(sourceRest[0]!, sourceRest[1]!, sourceRest[2]!, sourceRest[3]!);
-  if (length <= EPSILON) {
-    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion must be normalizable" });
-    return;
-  }
-  const lengthSquared = length * length;
-  if (Math.abs(lengthSquared - 1) > SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE) {
-    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion must be normalized" });
+  const issue = quaternionNormalizationIssue(sourceRest, SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE, {
+    finite: "sourceRestQuaternion values must be finite",
+    normalizable: "sourceRestQuaternion must be normalizable",
+    normalized: "sourceRestQuaternion must be normalized"
+  });
+  if (issue) {
+    issues.push({ track: index, joint, property: track.property, message: issue.message });
   }
 }
 
@@ -344,10 +355,20 @@ function pushSourceRestRepairDiagnostic(
 }
 
 function quaternionRepairMessage(value: Quat, label: string): string | null {
-  if (!value.every(Number.isFinite)) return `${label} values were repaired to finite defaults`;
-  const length = Math.hypot(value[0], value[1], value[2], value[3]);
-  if (!Number.isFinite(length) || length <= EPSILON) return `${label} was repaired to a normalizable fallback`;
+  return quaternionNormalizationIssue(value, ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE, {
+    finite: `${label} values were repaired to finite defaults`,
+    normalizable: `${label} was repaired to a normalizable fallback`,
+    normalized: `${label} was normalized during sampling`
+  })?.message ?? null;
+}
+
+function quaternionNormalizationIssue(value: ArrayLike<number>, lengthSquaredTolerance: number, messages: QuaternionNormalizationMessages): QuaternionNormalizationIssue | null {
+  for (let component = 0; component < 4; component += 1) {
+    if (!Number.isFinite(value[component])) return { kind: "finite", message: messages.finite };
+  }
+  const length = Math.hypot(value[0]!, value[1]!, value[2]!, value[3]!);
+  if (!Number.isFinite(length) || length <= EPSILON) return { kind: "normalizable", message: messages.normalizable };
   const lengthSquared = length * length;
-  if (Math.abs(lengthSquared - 1) > ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE) return `${label} was normalized during sampling`;
+  if (Math.abs(lengthSquared - 1) > lengthSquaredTolerance) return { kind: "normalized", message: messages.normalized };
   return null;
 }
