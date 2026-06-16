@@ -6,6 +6,7 @@ import {
   composeMat4,
   isFiniteTransform,
   multiplyMat4,
+  numericArraysEqual,
 } from "./math.js";
 
 export const NO_PARENT = -1;
@@ -218,11 +219,7 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
 }
 
 function transformsEqual(a: Transform, b: Transform): boolean {
-  return vectorsEqual(a.translation, b.translation) && vectorsEqual(a.rotation, b.rotation) && vectorsEqual(a.scale, b.scale);
-}
-
-function vectorsEqual(a: readonly number[], b: readonly number[]): boolean {
-  return a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+  return numericArraysEqual(a.translation, b.translation) && numericArraysEqual(a.rotation, b.rotation) && numericArraysEqual(a.scale, b.scale);
 }
 
 export function createRestPose(skeleton: Skeleton): Transform[] {

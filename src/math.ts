@@ -19,6 +19,10 @@ export function isFiniteNumber(value: number): boolean {
   return Number.isFinite(value);
 }
 
+export function numericArraysEqual(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+}
+
 export function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, value));
