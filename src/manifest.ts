@@ -48,6 +48,8 @@ export type RootMotionPolicy = "none" | "preserved" | "stripped-to-in-place";
 
 export type AssetLoader = (url: string) => Promise<unknown>;
 
+const STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE = 1e-4;
+
 export type ManifestLoaderOptions = {
   resolveInclude?: (includeUrl: string, parentUrl: string) => string;
   optionalIncludes?: boolean;
@@ -108,6 +110,16 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
       issues.push({ message: "root-motion clip must declare source.rootMotion.policy" });
     } else if (rootMotionPolicy === "preserved" && !hasRootCarrierTranslationTrack) {
       issues.push({ message: "root-motion policy is preserved but clip has no root carrier translation track" });
+    }
+  }
+  if (rootMotionPolicy === "stripped-to-in-place") {
+    const movingRootCarrierTrack = clip.tracks.find(rootCarrierTranslationTrackHasMotion);
+    if (movingRootCarrierTrack) {
+      issues.push({
+        joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
+        property: movingRootCarrierTrack.property,
+        message: "root-motion policy is stripped-to-in-place but root carrier translation still moves"
+      });
     }
   }
   if (entry.playback) {
@@ -176,6 +188,22 @@ function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): 
 
 function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
   return normalizedTrackProperty(track.property) === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
+}
+
+function rootCarrierTranslationTrackHasMotion(track: AnimationTrack): boolean {
+  if (!isRootCarrierTranslationTrack(track)) return false;
+  const sampleCount = Math.floor(track.values.length / 3);
+  if (sampleCount < 2) return false;
+  const baseX = track.values[0] ?? 0;
+  const baseY = track.values[1] ?? 0;
+  const baseZ = track.values[2] ?? 0;
+  for (let sample = 1; sample < sampleCount; sample += 1) {
+    const offset = sample * 3;
+    if (Math.abs((track.values[offset] ?? 0) - baseX) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
+    if (Math.abs((track.values[offset + 1] ?? 0) - baseY) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
+    if (Math.abs((track.values[offset + 2] ?? 0) - baseZ) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
+  }
+  return false;
 }
 
 function isRootCarrierJointName(joint: string | undefined): boolean {

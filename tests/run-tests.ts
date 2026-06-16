@@ -704,6 +704,43 @@ assert.equal(
   ).accepted,
   true
 );
+const strippedRootMotionMovingHipsInspection = inspectClipAsset(
+  {
+    id: "root-motion-stripped-moving-hips",
+    label: "Root Motion Stripped Moving Hips",
+    url: "/root-motion-stripped-moving-hips.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "stripped-to-in-place" } }
+  },
+  {
+    id: "root-motion-stripped-moving-hips",
+    duration: 1,
+    tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 0.25]) }]
+  }
+);
+assert.equal(strippedRootMotionMovingHipsInspection.accepted, false);
+assert.ok(
+  strippedRootMotionMovingHipsInspection.issues.some((issue) => issue.message === "root-motion policy is stripped-to-in-place but root carrier translation still moves"),
+  "stripped-to-in-place clips should reject meaningful hips translation motion"
+);
+assert.equal(
+  inspectClipAsset(
+    {
+      id: "idle-stripped-stationary-pelvis",
+      label: "Idle Stripped Stationary Pelvis",
+      url: "/idle-stripped-stationary-pelvis.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "stripped-to-in-place" } }
+    },
+    {
+      id: "idle-stripped-stationary-pelvis",
+      duration: 1,
+      tracks: [{ joint: "pelvis", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([1, 0, 2, 1.00001, -0.00001, 2.00001]) }]
+    }
+  ).accepted,
+  true,
+  "stripped-to-in-place clips should tolerate tiny stationary root-carrier translation noise"
+);
 const preservedRootMotionHeadOnlyClip: AnimationClip = {
   id: "root-motion-head-only",
   duration: 1,
