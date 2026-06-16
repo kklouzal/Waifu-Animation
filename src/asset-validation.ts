@@ -58,15 +58,13 @@ export async function validateAnimationManifestAssets(
   options: AnimationAssetValidationOptions = {}
 ): Promise<AnimationAssetValidationReport> {
   const entries = await Promise.all(manifest.clips.map((entry) => validateAnimationManifestEntry(entry, fetchAsset, options)));
-  const accepted = entries.filter((entry) => entry.status === "accepted").length;
-  const rejected = entries.filter((entry) => entry.status === "rejected").length;
-  const quarantined = entries.filter((entry) => entry.status === "quarantined").length;
+  const statusCounts = countValidationStatuses(entries);
   return {
     generatedAt: (options.now ?? new Date()).toISOString(),
     total: entries.length,
-    accepted,
-    rejected,
-    quarantined,
+    accepted: statusCounts.accepted,
+    rejected: statusCounts.rejected,
+    quarantined: statusCounts.quarantined,
     entries
   };
 }
@@ -199,6 +197,16 @@ function dedupeIssues(issues: AnimationAssetValidationIssue[]): AnimationAssetVa
     seen.add(key);
     return true;
   });
+}
+
+function countValidationStatuses(entries: AnimationAssetValidationEntry[]): Record<AssetValidationStatus, number> {
+  return entries.reduce(
+    (counts, entry) => {
+      counts[entry.status] += 1;
+      return counts;
+    },
+    { accepted: 0, rejected: 0, quarantined: 0 }
+  );
 }
 
 function buildRejectedEntry(entry: AnimationManifestEntry, issues: AnimationAssetValidationIssue[]): AnimationAssetValidationEntry {
