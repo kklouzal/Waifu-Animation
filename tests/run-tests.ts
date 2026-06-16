@@ -1736,6 +1736,44 @@ assert.ok(mirroredLegActualLeft[2]! < -0.65 && Math.abs(mirroredLegActualLeft[0]
 assert.ok(vectorNearlyEqual(mirroredLegActualLeft, mirroredLegExpected, 1e-5), "left leg rendered direction should preserve source flexion axis");
 assert.ok(vectorNearlyEqual(mirroredLegActualRight, mirroredLegExpected, 1e-5), "right leg rendered direction should preserve source flexion axis");
 
+const motusLeftLowerLegRest: [number, number, number, number] = [-0.0344, 0.0344, -0.2013, 0.9783];
+const motusLeftLowerLegInwardSample: [number, number, number, number] = [-0.1252, -0.0155, -0.5739, 0.8091];
+const motusRightLowerLegRest: [number, number, number, number] = [-0.0266, -0.0186, -0.5677, 0.8226];
+const motusRightLowerLegInwardSample: [number, number, number, number] = [-0.0164, 0.0277, -0.2138, 0.9763];
+const motusLeftLowerLegRawDirection = rotateVec3ByQuat(retargetQuaternionSample(motusLeftLowerLegRest, [0, 0, 0, 1], motusLeftLowerLegInwardSample), [0, -1, 0]);
+const motusRightLowerLegRawDirection = rotateVec3ByQuat(retargetQuaternionSample(motusRightLowerLegRest, [0, 0, 0, 1], motusRightLowerLegInwardSample), [0, -1, 0]);
+const motusLeftLowerLegRetargetedDirection = rotateVec3ByQuat(
+  retargetQuaternionSample(motusLeftLowerLegRest, [0, 0, 0, 1], motusLeftLowerLegInwardSample, "leftLowerLeg"),
+  [0, -1, 0]
+);
+const motusRightLowerLegRetargetedDirection = rotateVec3ByQuat(
+  retargetQuaternionSample(motusRightLowerLegRest, [0, 0, 0, 1], motusRightLowerLegInwardSample, "rightLowerLeg"),
+  [0, -1, 0]
+);
+assert.ok(
+  Math.abs(motusLeftLowerLegRawDirection[0]!) > 0.65 && Math.abs(motusRightLowerLegRawDirection[0]!) > 0.65,
+  "Motus lower-leg fixture should reproduce the inward lateral knee bend before axis remap"
+);
+assert.ok(
+  Math.abs(motusLeftLowerLegRetargetedDirection[0]!) < 0.25 && Math.abs(motusRightLowerLegRetargetedDirection[0]!) < 0.25,
+  "Motus lower-leg retargeting should move knee bend out of the inward lateral axis"
+);
+assert.ok(
+  Math.abs(motusLeftLowerLegRetargetedDirection[2]!) > 0.65 && Math.abs(motusRightLowerLegRetargetedDirection[2]!) > 0.65,
+  "Motus lower-leg retargeting should preserve the authored knee bend on the sagittal axis"
+);
+
+const normalLowerLegRest: [number, number, number, number] = quatFromAxisAngle([1, 0, 0], Math.PI / 7);
+const normalLowerLegSample = multiplyQuat(quatFromAxisAngle([1, 0, 0], Math.PI / 5), normalLowerLegRest);
+assert.ok(
+  quaternionNearlyEqual(
+    retargetQuaternionSample(normalLowerLegRest, [0, 0, 0, 1], normalLowerLegSample, "leftLowerLeg"),
+    retargetQuaternionSample(normalLowerLegRest, [0, 0, 0, 1], normalLowerLegSample),
+    1e-5
+  ),
+  "lower-leg axis remap should not affect non-rolled source rests"
+);
+
 const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const mirroredLimbSourceRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
 const mirroredLimbTargetRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);

@@ -289,7 +289,8 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
       const { values, invalidSamples } = retargetQuaternionTrackValues(
         sampleWindow.values,
         track.sourceRestQuaternion,
-        options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray()
+        options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray(),
+        String(boneName)
       );
       if (invalidSamples > 0) {
         options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, invalidSamples);

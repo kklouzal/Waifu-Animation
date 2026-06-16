@@ -260,7 +260,7 @@ function retargetSampledRotation(
     return sampled;
   }
   pushSourceRestRepairDiagnostic(diagnostics, diagnosticContext, track, sourceRest);
-  return retargetQuaternionSample(cloneNormalizedQuat(sourceRest), targetRest, sampled);
+  return retargetQuaternionSample(cloneNormalizedQuat(sourceRest), targetRest, sampled, String(track.humanBone ?? track.joint ?? ""));
 }
 
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {
