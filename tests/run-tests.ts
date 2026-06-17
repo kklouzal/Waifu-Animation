@@ -1993,6 +1993,24 @@ assert.deepEqual(
   [0, 0, 0, 1, -0, -0, -0, 1],
   "retargeted quaternion tracks should keep equivalent samples in the shortest hemisphere"
 );
+const retargetedNaNTrack = retargetQuaternionTrackValues([0, Number.NaN, 0, 1], undefined, [0, 0, 0, 1]);
+assert.equal(retargetedNaNTrack.invalidSamples, 1, "retargeted quaternion tracks should count NaN source samples as invalid");
+assert.ok(
+  quaternionNearlyEqual(retargetedNaNTrack.values, [0, 0, 0, 1], 1e-5),
+  "retargeted quaternion tracks should repair NaN source samples to a normalized fallback"
+);
+const retargetedZeroTrack = retargetQuaternionTrackValues([0, 0, 0, 0], undefined, [0, 0, 0, 1]);
+assert.equal(retargetedZeroTrack.invalidSamples, 1, "retargeted quaternion tracks should count zero source samples as invalid");
+assert.ok(
+  quaternionNearlyEqual(retargetedZeroTrack.values, [0, 0, 0, 1], 1e-5),
+  "retargeted quaternion tracks should repair zero source samples to a normalized fallback"
+);
+const retargetedNonUnitTrack = retargetQuaternionTrackValues([0, 0, 0, 2], undefined, [0, 0, 0, 1]);
+assert.equal(retargetedNonUnitTrack.invalidSamples, 0, "retargeted quaternion tracks should accept normalizable non-unit source samples");
+assert.ok(
+  quaternionNearlyEqual(retargetedNonUnitTrack.values, [0, 0, 0, 1], 1e-5),
+  "retargeted quaternion tracks should normalize non-unit source samples without changing their rotation"
+);
 
 const mismatchedBasisSourceRest = quatFromAxisAngle([0, 0, 1], Math.PI / 2);
 const mismatchedBasisTargetRest = [0, 0, 0, 1] as const;

@@ -1,4 +1,4 @@
-import { type Quat, cloneNormalizedQuat, ensureShortestQuat, invertQuat, multiplyQuat, normalizeQuat } from "./math.js";
+import { EPSILON, type Quat, cloneNormalizedQuat, ensureShortestQuat, invertQuat, multiplyQuat, normalizeQuat } from "./math.js";
 import { type HumanoidBoneName, VRM_HUMANOID_BONES } from "./skeleton.js";
 
 export type RetargetedQuaternionTrack = {
@@ -33,7 +33,9 @@ export function retargetQuaternionTrackValues(
   let invalidSamples = 0;
   let previous: Quat = [0, 0, 0, 1];
   for (let i = 0; i < values.length; i += 4) {
-    const sample = normalizeQuat([values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1]);
+    const rawSample: Quat = [values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1];
+    if (isMalformedQuaternionSample(rawSample)) invalidSamples += 1;
+    const sample = normalizeQuat(rawSample);
     let retargeted = srcRest ? retargetQuaternionSample(srcRest, dstRest, sample, humanBone) : sample;
     if (!retargeted.every(Number.isFinite)) {
       invalidSamples += 1;
@@ -44,6 +46,12 @@ export function retargetQuaternionTrackValues(
     previous = retargeted;
   }
   return { values: output, invalidSamples };
+}
+
+function isMalformedQuaternionSample(value: Quat): boolean {
+  if (!value.every(Number.isFinite)) return true;
+  const length = Math.hypot(value[0], value[1], value[2], value[3]);
+  return !Number.isFinite(length) || length <= EPSILON;
 }
 
 function remapHumanoidSourceDelta(sourceDelta: Quat, sourceRest: Quat, humanBone: string | undefined): Quat {
