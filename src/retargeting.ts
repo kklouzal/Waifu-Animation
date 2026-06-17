@@ -16,8 +16,8 @@ export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sou
   const srcRest = normalizeQuat(sourceRest);
   const dstRest = normalizeQuat(targetRest);
   const srcSample = normalizeQuat(sourceSample, srcRest);
-  const sourceDelta = remapHumanoidSourceDelta(multiplyQuat(srcSample, invertQuat(srcRest)), srcRest, humanBone);
-  return normalizeQuat(multiplyQuat(sourceDelta, dstRest));
+  const sourceDelta = remapHumanoidSourceDelta(multiplyQuat(invertQuat(srcRest), srcSample), srcRest, humanBone);
+  return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
 }
 
 export function retargetQuaternionTrackValues(
