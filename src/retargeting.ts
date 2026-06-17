@@ -58,11 +58,20 @@ function remapHumanoidSourceDelta(sourceDelta: Quat, sourceRest: Quat, humanBone
     // Motus/FBX left forearm uses the opposite bend sign after upper-arm basis remapping.
     return normalizeQuat([sourceDelta[0], sourceDelta[1], -sourceDelta[2], sourceDelta[3]]);
   }
+  if (isMotusLegZAxisDelta(sourceDelta, humanBone)) {
+    // Motus/FBX leg hinges are authored on source-local Z, while VRM leg flexion is local X.
+    return normalizeQuat([sourceDelta[2], sourceDelta[1], sourceDelta[0], sourceDelta[3]]);
+  }
   if (isRolledLowerLegSource(sourceRest, humanBone)) {
     // Motus/FBX lower-leg tracks arrive with knee hinge motion on the rolled source Z axis.
     return normalizeQuat([sourceDelta[2], sourceDelta[1], sourceDelta[0], sourceDelta[3]]);
   }
   return sourceDelta;
+}
+
+function isMotusLegZAxisDelta(sourceDelta: Quat, humanBone: string): boolean {
+  if (humanBone !== "leftUpperLeg" && humanBone !== "rightUpperLeg" && humanBone !== "leftLowerLeg" && humanBone !== "rightLowerLeg") return false;
+  return Math.abs(sourceDelta[2]) > 0.15 && Math.abs(sourceDelta[2]) > Math.abs(sourceDelta[0]) * 2;
 }
 
 function isRolledLeftLowerArmSource(sourceRest: Quat, humanBone: string): boolean {

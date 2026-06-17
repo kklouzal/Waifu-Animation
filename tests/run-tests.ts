@@ -2056,6 +2056,49 @@ assert.ok(
 );
 assert.ok(vectorNearlyEqual(motusLegActual, motusLegExpected, 1e-5), "right leg should preserve forward local stride instead of twisting inward");
 
+const realMotusWalkLegSamples: Array<{
+  bone: "leftUpperLeg" | "rightUpperLeg" | "leftLowerLeg" | "rightLowerLeg";
+  rest: [number, number, number, number];
+  sample: [number, number, number, number];
+}> = [
+  {
+    bone: "leftUpperLeg",
+    rest: [0.073705, -0.062139, -0.008584, 0.995305],
+    sample: [0.180756, 0.001265, 0.277474, 0.943575]
+  },
+  {
+    bone: "rightUpperLeg",
+    rest: [0.062139, 0.073705, 0.995305, 0.008584],
+    sample: [0.004475, 0.157648, 0.956273, -0.246312]
+  },
+  {
+    bone: "leftLowerLeg",
+    rest: [-0.048884, 0.018864, -0.065522, 0.996474],
+    sample: [-0.084341, -0.082607, -0.595885, 0.794345]
+  },
+  {
+    bone: "rightLowerLeg",
+    rest: [-0.048884, 0.018864, -0.065522, 0.996474],
+    sample: [-0.03445, -0.020477, -0.584123, 0.810675]
+  }
+];
+for (const fixture of realMotusWalkLegSamples) {
+  const unremappedDirection = rotateVec3ByQuat(retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample), [0, -1, 0]);
+  const retargetedDirection = rotateVec3ByQuat(retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample, fixture.bone), [0, -1, 0]);
+  assert.ok(
+    Math.abs(unremappedDirection[0]!) > 0.45,
+    `${fixture.bone} real Motus walk sample should reproduce the lateral failure before leg basis remap`
+  );
+  assert.ok(
+    Math.abs(retargetedDirection[0]!) < 0.25,
+    `${fixture.bone} real Motus walk sample should not retarget leg hinge motion into the lateral axis`
+  );
+  assert.ok(
+    Math.abs(retargetedDirection[2]!) > 0.5,
+    `${fixture.bone} real Motus walk sample should retarget leg hinge motion into the sagittal axis`
+  );
+}
+
 const mirroredLegSourceRestLeft = quatFromAxisAngle([0, 1, 0], Math.PI / 2);
 const mirroredLegSourceRestRight = quatFromAxisAngle([0, 1, 0], -Math.PI / 2);
 const mirroredLegFlexion = quatFromAxisAngle([1, 0, 0], Math.PI / 4);
