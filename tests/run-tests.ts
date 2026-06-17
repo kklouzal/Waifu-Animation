@@ -939,7 +939,7 @@ const oppositeQuaternionEndpointInspection = inspectAnimationAsset(
 );
 assert.equal(oppositeQuaternionEndpointInspection.status, "accepted", "sign-opposite normalized rotation endpoints should remain valid");
 assert.equal(
-  oppositeQuaternionEndpointInspection.issues.some((issue) => issue.message === loopEndpointWarning),
+  oppositeQuaternionEndpointInspection.issues.some((issue) => issue.message.startsWith(loopEndpointWarning)),
   false,
   "looping rotation endpoints should compare quaternion-equivalent signs"
 );
@@ -950,20 +950,80 @@ const mismatchedTranslationEndpointClip: AnimationClip = {
   loop: true,
   tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0.25, 0, 0]) }]
 };
-assert.equal(
-  inspectAnimationAsset(
+const mismatchedTranslationEndpointInspection = inspectAnimationAsset(
+  {
+    id: "mismatched-translation-endpoints",
+    label: "Mismatched Translation Endpoints",
+    url: "/mismatched-translation-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true
+  },
+  mismatchedTranslationEndpointClip,
+  skeleton
+);
+const mismatchedTranslationEndpointIssue = mismatchedTranslationEndpointInspection.issues.find((issue) => issue.message.startsWith(loopEndpointWarning));
+assert.ok(mismatchedTranslationEndpointIssue, "translation loop endpoint validation should keep raw component behavior");
+assert.equal(mismatchedTranslationEndpointIssue.track, 0);
+assert.equal(mismatchedTranslationEndpointIssue.joint, "head");
+assert.equal(mismatchedTranslationEndpointIssue.property, "translation");
+assert.equal(mismatchedTranslationEndpointIssue.delta, 0.25);
+assert.ok(mismatchedTranslationEndpointIssue.message.includes("delta 0.2500"), "translation seam warning should include measured delta");
+
+const mismatchedRotationEndpointClip: AnimationClip = {
+  id: "mismatched-rotation-endpoints",
+  duration: 1,
+  loop: true,
+  tracks: [
     {
-      id: "mismatched-translation-endpoints",
-      label: "Mismatched Translation Endpoints",
-      url: "/mismatched-translation-endpoints.waifuanim.bin",
-      format: WAIFU_ANIMATION_BINARY_FORMAT,
-      loop: true
-    },
-    mismatchedTranslationEndpointClip,
-    skeleton
-  ).issues.some((issue) => issue.message === loopEndpointWarning),
-  true,
-  "translation loop endpoint validation should keep raw component behavior"
+      humanBone: "head",
+      property: "quaternion",
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, 0, 0.5, 0, 0.8660254])
+    }
+  ]
+};
+const mismatchedRotationEndpointIssue = inspectAnimationAsset(
+  {
+    id: "mismatched-rotation-endpoints",
+    label: "Mismatched Rotation Endpoints",
+    url: "/mismatched-rotation-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true
+  },
+  mismatchedRotationEndpointClip,
+  skeleton
+).issues.find((issue) => issue.message.startsWith(loopEndpointWarning));
+assert.ok(mismatchedRotationEndpointIssue, "rotation loop endpoint validation should report mismatched rotation endpoints");
+assert.equal(mismatchedRotationEndpointIssue.track, 0);
+assert.equal(mismatchedRotationEndpointIssue.joint, "head");
+assert.equal(mismatchedRotationEndpointIssue.property, "rotation");
+assert.ok((mismatchedRotationEndpointIssue.delta ?? 0) > 0.5, "rotation seam warning should include a meaningful measured delta");
+
+const malformedLoopEndpointClip: AnimationClip = {
+  id: "malformed-loop-endpoints",
+  duration: 1,
+  loop: true,
+  tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0]) }]
+};
+const malformedLoopEndpointInspection = inspectAnimationAsset(
+  {
+    id: "malformed-loop-endpoints",
+    label: "Malformed Loop Endpoints",
+    url: "/malformed-loop-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true
+  },
+  malformedLoopEndpointClip,
+  skeleton
+);
+assert.equal(
+  malformedLoopEndpointInspection.issues.some((issue) => issue.message.startsWith(loopEndpointWarning)),
+  false,
+  "malformed loop endpoint tracks should not crash or emit seam warnings from missing samples"
+);
+assert.ok(
+  malformedLoopEndpointInspection.issues.some((issue) => issue.message === "track value count does not match times and stride"),
+  "malformed loop endpoint tracks should still report structural validation errors"
 );
 
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);

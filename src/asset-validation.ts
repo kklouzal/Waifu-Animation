@@ -17,6 +17,8 @@ export type AnimationAssetValidationIssue = {
   message: string;
   track?: number;
   joint?: string;
+  property?: string;
+  delta?: number;
 };
 
 export type AnimationAssetValidationEntry = {
@@ -126,9 +128,7 @@ function inspectSemanticAsset(entry: AnimationManifestEntry, clip: AnimationClip
     const severity = /aim[-_ ]?offset/i.test(`${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""}`) ? "warning" : "error";
     issues.push({ id: entry.id, severity, message: "looping clip is too short to blend safely unless used as a static pose/aim offset" });
   }
-  if (entry.loop && !hasLoopCompatibleEndpoints(clip)) {
-    issues.push({ id: entry.id, severity: "warning", message: "loop endpoints differ; crossfade or seam blending is required" });
-  }
+  if (entry.loop) issues.push(...inspectLoopEndpointMismatches(entry.id, clip, skeleton));
   if (skeleton) {
     const mapped = jointCoverage(clip, skeleton).length;
     if (mapped === 0) issues.push({ id: entry.id, severity: "error", message: "clip has no tracks that map to target skeleton" });
@@ -136,19 +136,50 @@ function inspectSemanticAsset(entry: AnimationManifestEntry, clip: AnimationClip
   return issues;
 }
 
-function hasLoopCompatibleEndpoints(clip: AnimationClip): boolean {
-  for (const track of clip.tracks) {
+const LOOP_ENDPOINT_WARNING_PREFIX = "loop endpoints differ; crossfade or seam blending is required";
+
+function inspectLoopEndpointMismatches(id: string, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationIssue[] {
+  const issues: AnimationAssetValidationIssue[] = [];
+  for (let index = 0; index < clip.tracks.length; index += 1) {
+    const track = clip.tracks[index]!;
     if (track.times.length < 2) continue;
     const property = normalizedTrackProperty(track.property);
     if (!property) continue;
     const stride = property === "rotation" ? 4 : 3;
+    if (track.values.length < track.times.length * stride) continue;
     const first = 0;
     const last = (track.times.length - 1) * stride;
     const tolerance = property === "rotation" ? 0.24 : 0.18;
     const delta = property === "rotation" ? rotationEndpointDelta(track.values, first, last) : vectorEndpointDelta(track.values, first, last, stride);
-    if (delta > tolerance) return false;
+    if (!Number.isFinite(delta) || delta <= tolerance) continue;
+    const joint = resolveLoopEndpointJoint(track, skeleton);
+    issues.push({
+      id,
+      severity: "warning",
+      message: `${LOOP_ENDPOINT_WARNING_PREFIX}: track ${index}${joint ? ` (${joint})` : ""} ${property} delta ${formatDelta(delta)} exceeds ${formatDelta(tolerance)}`,
+      track: index,
+      ...(joint ? { joint } : {}),
+      property,
+      delta
+    });
   }
-  return true;
+  return issues;
+}
+
+function resolveLoopEndpointJoint(track: AnimationClip["tracks"][number], skeleton?: Skeleton): string | undefined {
+  if (skeleton) {
+    const index = resolveTrackJointIndex(skeleton, track);
+    if (index >= 0) {
+      const joint = skeleton.joints[index]!;
+      return joint.humanoid ?? joint.name;
+    }
+  }
+  const joint = track.humanBone ?? track.joint;
+  return joint === undefined ? undefined : String(joint);
+}
+
+function formatDelta(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toPrecision(4);
 }
 
 function vectorEndpointDelta(values: ArrayLike<number>, first: number, last: number, stride: number): number {
@@ -192,7 +223,7 @@ function toAssetIssue(id: string, issue: ClipValidationIssue): AnimationAssetVal
 function dedupeIssues(issues: AnimationAssetValidationIssue[]): AnimationAssetValidationIssue[] {
   const seen = new Set<string>();
   return issues.filter((issue) => {
-    const key = `${issue.severity}:${issue.track ?? ""}:${issue.joint ?? ""}:${issue.message}`;
+    const key = `${issue.severity}:${issue.track ?? ""}:${issue.joint ?? ""}:${issue.property ?? ""}:${issue.delta ?? ""}:${issue.message}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
