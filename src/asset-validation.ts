@@ -1,5 +1,5 @@
 import { decodeAnimationBinary } from "./binary.js";
-import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, resolveTrackJointIndex, validateClip } from "./clip.js";
+import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, resolveTrackJointIndex, sampleTrack, trackStride, validateClip } from "./clip.js";
 import {
   type AnimationManifest,
   type AnimationManifestEntry,
@@ -129,7 +129,7 @@ function inspectSemanticAsset(entry: AnimationManifestEntry, clip: AnimationClip
     const severity = /aim[-_ ]?offset/i.test(`${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""}`) ? "warning" : "error";
     issues.push({ id: entry.id, severity, message: "looping clip is too short to blend safely unless used as a static pose/aim offset" });
   }
-  if (effectiveLoop) issues.push(...inspectLoopEndpointMismatches(entry.id, clip, skeleton));
+  if (effectiveLoop) issues.push(...inspectLoopEndpointMismatches(entry, clip, skeleton));
   if (skeleton) {
     const mapped = jointCoverage(clip, skeleton).length;
     if (mapped === 0) issues.push({ id: entry.id, severity: "error", message: "clip has no tracks that map to target skeleton" });
@@ -139,23 +139,25 @@ function inspectSemanticAsset(entry: AnimationManifestEntry, clip: AnimationClip
 
 const LOOP_ENDPOINT_WARNING_PREFIX = "loop endpoints differ; crossfade or seam blending is required";
 
-function inspectLoopEndpointMismatches(id: string, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationIssue[] {
+function inspectLoopEndpointMismatches(entry: AnimationManifestEntry, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
+  const playbackWindow = resolvePlaybackWindow(entry, clip);
+  if (!playbackWindow) return issues;
   for (let index = 0; index < clip.tracks.length; index += 1) {
     const track = clip.tracks[index]!;
     if (track.times.length < 2) continue;
     const property = normalizedTrackProperty(track.property);
     if (!property) continue;
-    const stride = property === "rotation" ? 4 : 3;
+    const stride = trackStride(property);
     if (track.values.length < track.times.length * stride) continue;
-    const first = 0;
-    const last = (track.times.length - 1) * stride;
+    const startSample = sampleTrack(track, playbackWindow.start);
+    const endSample = sampleTrack(track, playbackWindow.end);
     const tolerance = property === "rotation" ? 0.24 : 0.18;
-    const delta = property === "rotation" ? rotationEndpointDelta(track.values, first, last) : vectorEndpointDelta(track.values, first, last, stride);
+    const delta = property === "rotation" ? rotationEndpointDelta(startSample, endSample) : vectorEndpointDelta(startSample, endSample, stride);
     if (!Number.isFinite(delta) || delta <= tolerance) continue;
     const joint = resolveLoopEndpointJoint(track, skeleton);
     issues.push({
-      id,
+      id: entry.id,
       severity: "warning",
       message: `${LOOP_ENDPOINT_WARNING_PREFIX}: track ${index}${joint ? ` (${joint})` : ""} ${property} delta ${formatDelta(delta)} exceeds ${formatDelta(tolerance)}`,
       track: index,
@@ -165,6 +167,13 @@ function inspectLoopEndpointMismatches(id: string, clip: AnimationClip, skeleton
     });
   }
   return issues;
+}
+
+function resolvePlaybackWindow(entry: AnimationManifestEntry, clip: AnimationClip): { start: number; end: number } | null {
+  const start = entry.playback?.start ?? 0;
+  const end = entry.playback?.end ?? clip.duration;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5) return null;
+  return { start, end };
 }
 
 function resolveLoopEndpointJoint(track: AnimationClip["tracks"][number], skeleton?: Skeleton): string | undefined {
@@ -183,15 +192,15 @@ function formatDelta(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toPrecision(4);
 }
 
-function vectorEndpointDelta(values: ArrayLike<number>, first: number, last: number, stride: number): number {
+function vectorEndpointDelta(first: ArrayLike<number>, last: ArrayLike<number>, stride: number): number {
   let delta = 0;
-  for (let i = 0; i < stride; i += 1) delta += Math.abs((values[first + i] ?? 0) - (values[last + i] ?? 0));
+  for (let i = 0; i < stride; i += 1) delta += Math.abs((first[i] ?? 0) - (last[i] ?? 0));
   return delta;
 }
 
-function rotationEndpointDelta(values: ArrayLike<number>, first: number, last: number): number {
-  const firstQuat = cloneNormalizedQuat(Array.prototype.slice.call(values, first, first + 4));
-  const lastQuat = cloneNormalizedQuat(Array.prototype.slice.call(values, last, last + 4));
+function rotationEndpointDelta(first: ArrayLike<number>, last: ArrayLike<number>): number {
+  const firstQuat = cloneNormalizedQuat(Array.prototype.slice.call(first, 0, 4));
+  const lastQuat = cloneNormalizedQuat(Array.prototype.slice.call(last, 0, 4));
   const sameHemisphereDot = Math.abs(dotQuat(firstQuat, lastQuat));
   return Math.sqrt(Math.max(0, 2 - 2 * Math.min(1, sameHemisphereDot)));
 }

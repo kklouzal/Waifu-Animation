@@ -969,6 +969,71 @@ assert.equal(mismatchedTranslationEndpointIssue.property, "translation");
 assert.equal(mismatchedTranslationEndpointIssue.delta, 0.25);
 assert.ok(mismatchedTranslationEndpointIssue.message.includes("delta 0.2500"), "translation seam warning should include measured delta");
 
+const trimmedMatchedPlaybackEndpointClip: AnimationClip = {
+  id: "trimmed-matched-playback-endpoints",
+  duration: 1,
+  loop: true,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "translation",
+      times: toFloat32Array([0, 0.25, 0.75, 1]),
+      values: toFloat32Array([0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0.75, 0, 0])
+    }
+  ]
+};
+const trimmedMatchedPlaybackEndpointInspection = inspectAnimationAsset(
+  {
+    id: "trimmed-matched-playback-endpoints",
+    label: "Trimmed Matched Playback Endpoints",
+    url: "/trimmed-matched-playback-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true,
+    playback: { start: 0.25, end: 0.75 }
+  },
+  trimmedMatchedPlaybackEndpointClip,
+  skeleton
+);
+assert.equal(
+  trimmedMatchedPlaybackEndpointInspection.issues.some((issue) => issue.message.startsWith(loopEndpointWarning)),
+  false,
+  "loop endpoint validation should compare sampled playback-window endpoints instead of raw keyframe endpoints"
+);
+
+const trimmedMismatchedPlaybackEndpointClip: AnimationClip = {
+  id: "trimmed-mismatched-playback-endpoints",
+  duration: 1,
+  loop: true,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "translation",
+      times: toFloat32Array([0, 0.25, 0.75, 1]),
+      values: toFloat32Array([0, 0, 0, 0.25, 0, 0, 0.5, 0, 0, 0, 0, 0])
+    }
+  ]
+};
+const trimmedMismatchedPlaybackEndpointIssue = inspectAnimationAsset(
+  {
+    id: "trimmed-mismatched-playback-endpoints",
+    label: "Trimmed Mismatched Playback Endpoints",
+    url: "/trimmed-mismatched-playback-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true,
+    playback: { start: 0.25, end: 0.75 }
+  },
+  trimmedMismatchedPlaybackEndpointClip,
+  skeleton
+).issues.find((issue) => issue.message.startsWith(loopEndpointWarning));
+assert.ok(
+  trimmedMismatchedPlaybackEndpointIssue,
+  "loop endpoint validation should warn when sampled playback-window endpoints differ even if raw keyframe endpoints match"
+);
+assert.equal(trimmedMismatchedPlaybackEndpointIssue.track, 0);
+assert.equal(trimmedMismatchedPlaybackEndpointIssue.joint, "head");
+assert.equal(trimmedMismatchedPlaybackEndpointIssue.property, "translation");
+assert.equal(trimmedMismatchedPlaybackEndpointIssue.delta, 0.25);
+
 const inferredLoopEndpointIssue = inspectAnimationAsset(
   {
     id: "inferred-loop-endpoints",
