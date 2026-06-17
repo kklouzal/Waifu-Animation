@@ -123,12 +123,13 @@ export function rejectedValidatedAnimationAssets(report: AnimationAssetValidatio
 
 function inspectSemanticAsset(entry: AnimationManifestEntry, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
+  const effectiveLoop = entry.loop ?? clip.loop;
   if (clip.tracks.length === 0) issues.push({ id: entry.id, severity: "error", message: "clip has no animation tracks" });
-  if ((entry.loop ?? clip.loop) && clip.duration < 0.25) {
+  if (effectiveLoop && clip.duration < 0.25) {
     const severity = /aim[-_ ]?offset/i.test(`${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""}`) ? "warning" : "error";
     issues.push({ id: entry.id, severity, message: "looping clip is too short to blend safely unless used as a static pose/aim offset" });
   }
-  if (entry.loop) issues.push(...inspectLoopEndpointMismatches(entry.id, clip, skeleton));
+  if (effectiveLoop) issues.push(...inspectLoopEndpointMismatches(entry.id, clip, skeleton));
   if (skeleton) {
     const mapped = jointCoverage(clip, skeleton).length;
     if (mapped === 0) issues.push({ id: entry.id, severity: "error", message: "clip has no tracks that map to target skeleton" });

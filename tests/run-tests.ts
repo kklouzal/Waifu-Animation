@@ -969,6 +969,39 @@ assert.equal(mismatchedTranslationEndpointIssue.property, "translation");
 assert.equal(mismatchedTranslationEndpointIssue.delta, 0.25);
 assert.ok(mismatchedTranslationEndpointIssue.message.includes("delta 0.2500"), "translation seam warning should include measured delta");
 
+const inferredLoopEndpointIssue = inspectAnimationAsset(
+  {
+    id: "inferred-loop-endpoints",
+    label: "Inferred Loop Endpoints",
+    url: "/inferred-loop-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  },
+  { ...mismatchedTranslationEndpointClip, id: "inferred-loop-endpoints" },
+  skeleton
+).issues.find((issue) => issue.message.startsWith(loopEndpointWarning));
+assert.ok(inferredLoopEndpointIssue, "decoded clip.loop should enable loop endpoint validation when manifest loop is omitted");
+assert.equal(inferredLoopEndpointIssue.track, 0);
+assert.equal(inferredLoopEndpointIssue.joint, "head");
+assert.equal(inferredLoopEndpointIssue.property, "translation");
+
+const manifestLoopFalseEndpointInspection = inspectAnimationAsset(
+  {
+    id: "manifest-loop-false-endpoints",
+    label: "Manifest Loop False Endpoints",
+    url: "/manifest-loop-false-endpoints.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: false
+  },
+  { ...mismatchedTranslationEndpointClip, id: "manifest-loop-false-endpoints" },
+  skeleton
+);
+assert.equal(manifestLoopFalseEndpointInspection.loop, false, "manifest loop false should override decoded clip.loop in the validation report");
+assert.equal(
+  manifestLoopFalseEndpointInspection.issues.some((issue) => issue.message.startsWith(loopEndpointWarning)),
+  false,
+  "manifest loop false should disable loop endpoint validation even when decoded clip.loop is true"
+);
+
 const mismatchedRotationEndpointClip: AnimationClip = {
   id: "mismatched-rotation-endpoints",
   duration: 1,
