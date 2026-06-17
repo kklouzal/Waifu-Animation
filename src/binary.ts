@@ -1,4 +1,4 @@
-import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, toFloat32Array, trackStride } from "./clip.js";
+import { type AnimationClip, type AnimationTrack, type ClipValidationIssue, normalizedTrackProperty, toFloat32Array, trackStride, validateClip } from "./clip.js";
 
 export const WAIFU_ANIMATION_BINARY_FORMAT = "waifu-animation-bin";
 
@@ -22,6 +22,8 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
+  assertValidClipForBinaryEncoding(clip);
+
   const trackRecords = clip.tracks.map((track) => {
     const targetName = track.humanBone ?? track.joint;
     if (!targetName) throw new Error(`animation track in ${clip.id} is missing joint or humanBone`);
@@ -105,6 +107,21 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
   }
 
   return buffer;
+}
+
+function assertValidClipForBinaryEncoding(clip: AnimationClip): void {
+  const issue = validateClip(clip)[0];
+  if (!issue) return;
+  throw new Error(`animation clip ${clip.id || "<unknown>"} is invalid: ${formatClipValidationIssue(issue)}`);
+}
+
+function formatClipValidationIssue(issue: ClipValidationIssue): string {
+  const context: string[] = [];
+  if (issue.track !== undefined) context.push(`track ${issue.track}`);
+  const channel = [issue.joint, issue.property].filter((value) => value !== undefined && value !== "").join(".");
+  if (channel) context.push(channel);
+  if (issue.index !== undefined) context.push(`index ${issue.index}`);
+  return context.length > 0 ? `${context.join(" ")} ${issue.message}` : issue.message;
 }
 
 export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id = "animation"): AnimationClip {

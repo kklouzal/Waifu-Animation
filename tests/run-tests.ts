@@ -484,7 +484,7 @@ assert.deepEqual(
 );
 assert.throws(
   () => encodeAnimationBinary({ ...validSourceRestQuaternionClip, tracks: [{ ...validSourceRestQuaternionClip.tracks[0]!, sourceRestQuaternion: toFloat32Array([0, 0, 1]) }] }),
-  /animation track head\.quaternion sourceRestQuaternion must contain exactly 4 values/,
+  /animation clip valid-source-rest-quaternion is invalid: track 0 head\.quaternion sourceRestQuaternion must contain exactly 4 values/,
   "binary encoding should reject malformed source rest quaternion metadata before writing a corrupt payload"
 );
 
@@ -580,6 +580,11 @@ assert.ok(
   ),
   "inspectClipAsset should reject source rest quaternion metadata on non-rotation tracks"
 );
+assert.throws(
+  () => encodeAnimationBinary(invalidSourceRestQuaternionPropertyClip),
+  /animation clip invalid-source-rest-quaternion-property is invalid: track 0 head\.translation sourceRestQuaternion is only valid on rotation tracks/,
+  "binary encoding should reject source rest quaternion metadata on non-rotation tracks"
+);
 
 const invalidZeroRotationSampleClip: AnimationClip = {
   id: "invalid-zero-rotation-sample",
@@ -597,6 +602,11 @@ assert.ok(
       issue.message === "rotation track quaternions must be normalizable"
   ),
   "validateAnimationInputs should reject zero-length rotation samples"
+);
+assert.throws(
+  () => encodeAnimationBinary(invalidZeroRotationSampleClip),
+  /animation clip invalid-zero-rotation-sample is invalid: track 0 head\.quaternion rotation track quaternions must be normalizable/,
+  "binary encoding should reject non-normalizable rotation sample quaternions"
 );
 
 const invalidNonUnitRotationSampleInspection = inspectClipAsset(
@@ -634,6 +644,11 @@ assert.ok(
   validateAnimationInputs(skeleton, duplicateTrackTimeClip).clipIssues.some((issue) => issue.message === "track times must be sorted"),
   "equal track times should be rejected"
 );
+assert.throws(
+  () => encodeAnimationBinary(duplicateTrackTimeClip),
+  /animation clip duplicate-track-time is invalid: track 0 head\.translation track times must be sorted/,
+  "binary encoding should reject unsorted or duplicate track times"
+);
 
 const negativeTrackTimeClip: AnimationClip = {
   id: "negative-track-time",
@@ -645,6 +660,11 @@ assert.ok(
   validateAnimationInputs(skeleton, negativeTrackTimeClip).clipIssues.some((issue) => issue.message === "track time must be within clip duration"),
   "negative track times should be rejected"
 );
+assert.throws(
+  () => encodeAnimationBinary(negativeTrackTimeClip),
+  /animation clip negative-track-time is invalid: track 0 head\.translation track time must be within clip duration/,
+  "binary encoding should reject negative track times"
+);
 
 const overDurationTrackTimeClip: AnimationClip = {
   id: "over-duration-track-time",
@@ -655,6 +675,11 @@ assert.equal(validateAnimationInputs(skeleton, overDurationTrackTimeClip).accept
 assert.ok(
   validateAnimationInputs(skeleton, overDurationTrackTimeClip).clipIssues.some((issue) => issue.message === "track time must be within clip duration"),
   "track times beyond clip duration should be rejected"
+);
+assert.throws(
+  () => encodeAnimationBinary(overDurationTrackTimeClip),
+  /animation clip over-duration-track-time is invalid: track 0 head\.translation track time must be within clip duration/,
+  "binary encoding should reject track times beyond the clip duration"
 );
 
 const endpointTrackTimeClip: AnimationClip = {
@@ -669,6 +694,36 @@ assert.equal(decodedNodClip.id, "nod");
 assert.equal(decodedNodClip.tracks.length, 1);
 assert.deepEqual(Array.from(decodedNodClip.tracks[0]!.times), [0, 0.5, 1]);
 assert.ok(decodedNodClip.tracks[0]!.values instanceof Float32Array);
+assert.throws(
+  () => encodeAnimationBinary({ ...nodClip, id: "binary-non-finite-duration", duration: Number.NaN }),
+  /animation clip binary-non-finite-duration is invalid: clip duration must be positive and finite/,
+  "binary encoding should reject non-finite clip durations"
+);
+assert.throws(
+  () =>
+    encodeAnimationBinary({
+      id: "binary-non-finite-values",
+      duration: 1,
+      tracks: [{ joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, Number.NaN, 0]) }]
+    }),
+  /animation clip binary-non-finite-values is invalid: track 0 head\.translation track values must be finite/,
+  "binary encoding should reject non-finite track values"
+);
+assert.throws(
+  () =>
+    encodeAnimationBinary({
+      id: "binary-non-normalized-rotation",
+      duration: 1,
+      tracks: [{ joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 2]) }]
+    }),
+  /animation clip binary-non-normalized-rotation is invalid: track 0 head\.rotation rotation track quaternions must be normalized/,
+  "binary encoding should reject non-normalized rotation sample quaternions"
+);
+assert.throws(
+  () => encodeAnimationBinary(duplicateDeclaredChannelClip),
+  /animation clip duplicate-declared-channel is invalid: track 1 head\.translation duplicate target channel head\.translation conflicts with track 0 \(head\.translation\)/,
+  "binary encoding should reject duplicate target channels without a skeleton"
+);
 const invalidTargetKindBinary = encodeAnimationBinary(nodClip);
 new DataView(invalidTargetKindBinary).setUint32(32, 99, true);
 assert.throws(
