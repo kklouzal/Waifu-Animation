@@ -6,6 +6,7 @@ import {
   type AnimationClip,
   type SampleRepairDiagnostic,
   BlinkScheduler,
+  dampAlpha,
   FacialExpressionMixer,
   finiteSigned,
   limitVisemeStack,
@@ -2681,6 +2682,23 @@ assert.ok(Object.values(invalidVisemes.update(Number.NaN)).every(Number.isFinite
 const invalidIntensityVisemes = new VisemeMixer({ intensity: Number.NaN });
 invalidIntensityVisemes.setTarget({ aa: 1 });
 assert.ok(Object.values(invalidIntensityVisemes.update(1 / 30)).every(Number.isFinite), "viseme mixer should keep weights finite for non-finite intensity");
+
+const partialAttackVisemes = new VisemeMixer({ attack: { aa: 60 }, release: 20, maxTotal: 1 });
+partialAttackVisemes.setTarget({ aa: 0.5, ih: 0.5 });
+const partialAttackMixed = partialAttackVisemes.update(1 / 30);
+assert.ok(partialAttackMixed.ih > 0, "partial viseme attack maps should fall back for unspecified visemes");
+assert.ok(Math.abs(partialAttackMixed.aa - 0.5 * dampAlpha(60, 1 / 30)) < 1e-6, "partial viseme attack maps should respect specified speeds");
+assert.ok(Math.abs(partialAttackMixed.ih - 0.5 * dampAlpha(30, 1 / 30)) < 1e-6, "partial viseme attack maps should use the default attack speed");
+
+const partialReleaseVisemes = new VisemeMixer({ attack: 30, release: { aa: 40 }, maxTotal: 1 });
+partialReleaseVisemes.setTarget({ aa: 0.5, ih: 0.5 });
+partialReleaseVisemes.update(1 / 30);
+partialReleaseVisemes.setTarget({});
+const beforePartialRelease = { ...partialReleaseVisemes.current };
+const partialReleaseMixed = partialReleaseVisemes.update(1 / 30);
+assert.ok(partialReleaseMixed.ih < beforePartialRelease.ih, "partial viseme release maps should fall back for unspecified visemes");
+assert.ok(Math.abs(partialReleaseMixed.aa - beforePartialRelease.aa * (1 - dampAlpha(40, 1 / 30))) < 1e-6, "partial viseme release maps should respect specified speeds");
+assert.ok(Math.abs(partialReleaseMixed.ih - beforePartialRelease.ih * (1 - dampAlpha(20, 1 / 30))) < 1e-6, "partial viseme release maps should use the default release speed");
 
 const blink = new BlinkScheduler("test", 0);
 assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);

@@ -13,6 +13,9 @@ export type VisemeMixerOptions = {
 
 export type VisemeSpeed = number | Partial<Record<VisemeName, number>>;
 
+const DEFAULT_ATTACK_SPEED = 30;
+const DEFAULT_RELEASE_SPEED = 20;
+
 export function zeroVisemes(): VisemeWeights {
   return visemeWeights(() => 0);
 }
@@ -34,8 +37,8 @@ export class VisemeMixer {
   intensity: number;
 
   constructor(options: VisemeMixerOptions = {}) {
-    this.attack = options.attack ?? 30;
-    this.release = options.release ?? 20;
+    this.attack = options.attack ?? DEFAULT_ATTACK_SPEED;
+    this.release = options.release ?? DEFAULT_RELEASE_SPEED;
     this.maxTotal = finiteNonNegative(options.maxTotal, 0.36);
     this.intensity = finiteNonNegative(options.intensity, 1);
   }
@@ -54,7 +57,10 @@ export class VisemeMixer {
     const dt = finiteNonNegative(deltaSeconds, 0);
     for (const name of VISEME_NAMES) {
       const target = talking ? this.target[name] : 0;
-      const speed = target > this.current[name] ? visemeSpeedFor(this.attack, name) : visemeSpeedFor(this.release, name);
+      const speed =
+        target > this.current[name]
+          ? visemeSpeedFor(this.attack, name, DEFAULT_ATTACK_SPEED)
+          : visemeSpeedFor(this.release, name, DEFAULT_RELEASE_SPEED);
       const alpha = dampAlpha(speed, dt);
       this.current[name] += (target - this.current[name]) * alpha;
     }
@@ -63,8 +69,8 @@ export class VisemeMixer {
   }
 }
 
-function visemeSpeedFor(speed: VisemeSpeed, name: VisemeName): number {
-  return typeof speed === "number" ? speed : speed[name] ?? 0;
+function visemeSpeedFor(speed: VisemeSpeed, name: VisemeName, defaultSpeed: number): number {
+  return typeof speed === "number" ? speed : speed[name] ?? defaultSpeed;
 }
 
 function visemeWeights(read: (name: VisemeName) => number): VisemeWeights {
