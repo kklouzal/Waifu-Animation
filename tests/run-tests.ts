@@ -62,6 +62,7 @@ import {
   normalizeQuat,
   normalizeTransform,
   normalizeVec3,
+  poseDeltaMetric,
   poseRotationMetric,
   quatFromAxisAngle,
   rotateVec3ByQuat,
@@ -2937,6 +2938,22 @@ assert.equal(
   0,
   "pose rotation metrics should treat sign-opposite quaternions as equivalent rotations"
 );
+const poseDeltaA = clonePose(skeleton.restPose);
+const poseDeltaB = clonePose(skeleton.restPose);
+poseDeltaB[1]!.translation = [0, 2, 0];
+poseDeltaB[3]!.scale = [1, 3, 1];
+poseDeltaB[2]!.rotation = poseDeltaB[2]!.rotation.map((component) => -component) as [number, number, number, number];
+const poseDelta = poseDeltaMetric(poseDeltaA, poseDeltaB, skeleton);
+assert.equal(poseDelta.samples, skeleton.restPose.length);
+assert.equal(poseDelta.rotation.max, 0, "pose delta metrics should preserve sign-equivalent quaternion behavior");
+assert.equal(poseDelta.translation.max, 2);
+assert.equal(poseDelta.translation.maxIndex, 1);
+assert.equal(poseDelta.translation.maxJoint, "spine");
+assert.equal(poseDelta.scale.max, 2);
+assert.equal(poseDelta.scale.maxIndex, 3);
+assert.equal(poseDelta.scale.maxJoint, "leftUpperArm");
+assert.ok(Math.abs(poseDelta.translation.rms - 1) < 1e-12);
+assert.ok(Math.abs(poseDelta.scale.rms - 1) < 1e-12);
 
 const headBone = new Object3D();
 headBone.name = "normalizedHead";

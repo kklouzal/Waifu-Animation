@@ -31,7 +31,7 @@ Current coverage includes:
 - foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, finite leg IK output, and reusable Three.js application/cleanup of pelvis plus leg correction quaternions with sanitized timing;
 - viseme stack limiting;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger/timing sanity;
-- pose rotation metrics, including sign-equivalent quaternion handling.
+- pose delta metrics across rotation, translation, and scale, including sign-equivalent quaternion handling and max joint attribution.
 
 ## Runtime Evaluation Diagnostics
 
