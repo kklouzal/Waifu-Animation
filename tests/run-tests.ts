@@ -2268,16 +2268,8 @@ for (const fixture of realMotusWalkLegSamples) {
   const unremappedDirection = rotateVec3ByQuat(retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample), [0, -1, 0]);
   const retargetedDirection = rotateVec3ByQuat(retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample, fixture.bone), [0, -1, 0]);
   assert.ok(
-    Math.abs(unremappedDirection[0]!) > 0.45,
-    `${fixture.bone} real Motus walk sample should reproduce the lateral failure before leg basis remap`
-  );
-  assert.ok(
-    Math.abs(retargetedDirection[0]!) < 0.25,
-    `${fixture.bone} real Motus walk sample should not retarget leg hinge motion into the lateral axis`
-  );
-  assert.ok(
-    Math.abs(retargetedDirection[2]!) > 0.45,
-    `${fixture.bone} real Motus walk sample should retarget leg hinge motion into the sagittal axis`
+    vectorNearlyEqual(retargetedDirection, unremappedDirection, 1e-5),
+    `${fixture.bone} retargeting must not apply hidden bone-name axis swizzles`
   );
 }
 
@@ -2349,26 +2341,24 @@ const motusRightLowerLegRetargetedDirection = rotateVec3ByQuat(
 );
 assert.ok(
   Math.abs(motusLeftLowerLegRawDirection[0]!) > 0.65 && Math.abs(motusRightLowerLegRawDirection[0]!) > 0.65,
-  "Motus lower-leg fixture should reproduce the inward lateral knee bend before axis remap"
+  "Motus lower-leg fixture keeps documenting the source/target basis incompatibility"
 );
 assert.ok(
-  Math.abs(motusLeftLowerLegRetargetedDirection[0]!) < 0.25 && Math.abs(motusRightLowerLegRetargetedDirection[0]!) < 0.25,
-  "Motus lower-leg retargeting should move knee bend out of the inward lateral axis"
-);
-assert.ok(
-  Math.abs(motusLeftLowerLegRetargetedDirection[2]!) > 0.65 && Math.abs(motusRightLowerLegRetargetedDirection[2]!) > 0.65,
-  "Motus lower-leg retargeting should preserve the authored knee bend on the sagittal axis"
+  vectorNearlyEqual(motusLeftLowerLegRetargetedDirection, motusLeftLowerLegRawDirection, 1e-5) &&
+    vectorNearlyEqual(motusRightLowerLegRetargetedDirection, motusRightLowerLegRawDirection, 1e-5),
+  "Motus lower-leg labels must not alter the mathematically defined local delta"
 );
 
 const normalLowerLegRest: [number, number, number, number] = quatFromAxisAngle([1, 0, 0], Math.PI / 7);
-const normalLowerLegSample = multiplyQuat(quatFromAxisAngle([1, 0, 0], Math.PI / 5), normalLowerLegRest);
+const normalLowerLegLocalDelta = quatFromAxisAngle([0, 1, 0], Math.PI / 5);
+const normalLowerLegSample = multiplyQuat(normalLowerLegRest, normalLowerLegLocalDelta);
 assert.ok(
   quaternionNearlyEqual(
     retargetQuaternionSample(normalLowerLegRest, [0, 0, 0, 1], normalLowerLegSample, "leftLowerLeg"),
     retargetQuaternionSample(normalLowerLegRest, [0, 0, 0, 1], normalLowerLegSample),
     1e-5
   ),
-  "lower-leg axis remap should not affect non-rolled source rests"
+  "lower-leg bone labels should not affect source-rest local delta retargeting"
 );
 
 const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
@@ -2376,6 +2366,8 @@ const mirroredLimbSourceRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
 const mirroredLimbTargetRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const mirroredLimbTargetRestRight = quatFromAxisAngle([1, 0, 0], -Math.PI / 2);
 const mirroredLimbDelta = quatFromAxisAngle([0, 0, 1], Math.PI / 3);
+const mirroredLimbSourceSampleLeft = multiplyQuat(mirroredLimbSourceRestLeft, mirroredLimbDelta);
+const mirroredLimbSourceSampleRight = multiplyQuat(mirroredLimbSourceRestRight, mirroredLimbDelta);
 const mirroredLimbBones = createMirroredLimbBones();
 const mirroredLimbClip = createThreeAnimationClip(
   {
@@ -2387,14 +2379,14 @@ const mirroredLimbClip = createThreeAnimationClip(
         property: "quaternion",
         sourceRestQuaternion: Float32Array.from(mirroredLimbSourceRestLeft),
         times: toFloat32Array([0, 1]),
-        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestLeft, ...multiplyQuat(mirroredLimbDelta, mirroredLimbSourceRestLeft)])
+        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestLeft, ...mirroredLimbSourceSampleLeft])
       },
       {
         humanBone: "rightUpperArm",
         property: "quaternion",
         sourceRestQuaternion: Float32Array.from(mirroredLimbSourceRestRight),
         times: toFloat32Array([0, 1]),
-        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestRight, ...multiplyQuat(mirroredLimbDelta, mirroredLimbSourceRestRight)])
+        values: sanitizeQuaternionTrackValues([...mirroredLimbSourceRestRight, ...mirroredLimbSourceSampleRight])
       }
     ]
   },
@@ -2412,8 +2404,8 @@ const mirroredLimbActual = {
   right: readChildDirection(mirroredLimbBones.rightUpperArm, mirroredLimbBones.rightLowerArm)
 };
 const mirroredLimbExpected = {
-  left: rotateVec3ByQuat(multiplyQuat(mirroredLimbDelta, mirroredLimbTargetRestLeft), [0, 1, 0]),
-  right: rotateVec3ByQuat(multiplyQuat(mirroredLimbDelta, mirroredLimbTargetRestRight), [0, 1, 0])
+  left: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestLeft, mirroredLimbDelta), [0, 1, 0]),
+  right: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestRight, mirroredLimbDelta), [0, 1, 0])
 };
 assert.ok(vectorNearlyEqual(mirroredLimbActual.left, mirroredLimbExpected.left, 1e-5), "left limb rendered direction should preserve target-local rotation axis");
 assert.ok(vectorNearlyEqual(mirroredLimbActual.right, mirroredLimbExpected.right, 1e-5), "right limb rendered direction should preserve target-local rotation axis");

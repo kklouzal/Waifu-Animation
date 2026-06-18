@@ -16,7 +16,8 @@ export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sou
   const srcRest = normalizeQuat(sourceRest);
   const dstRest = normalizeQuat(targetRest);
   const srcSample = normalizeQuat(sourceSample, srcRest);
-  const sourceDelta = remapHumanoidSourceDelta(multiplyQuat(invertQuat(srcRest), srcSample), srcRest, humanBone);
+  void humanBone;
+  const sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
   return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
 }
 
@@ -52,46 +53,4 @@ function isMalformedQuaternionSample(value: Quat): boolean {
   if (!value.every(Number.isFinite)) return true;
   const length = Math.hypot(value[0], value[1], value[2], value[3]);
   return !Number.isFinite(length) || length <= EPSILON;
-}
-
-function remapHumanoidSourceDelta(sourceDelta: Quat, sourceRest: Quat, humanBone: string | undefined): Quat {
-  if (!humanBone) return sourceDelta;
-  if (isRolledUpperArmSource(sourceRest, humanBone)) {
-    // Motus/FBX upper-arm deltas arrive in a source-local basis that leaves VRM normalized arms horizontal.
-    return humanBone === "leftUpperArm"
-      ? normalizeQuat([-sourceDelta[1], sourceDelta[2], sourceDelta[0], sourceDelta[3]])
-      : normalizeQuat([-sourceDelta[1], -sourceDelta[2], -sourceDelta[0], sourceDelta[3]]);
-  }
-  if (isRolledLeftLowerArmSource(sourceRest, humanBone)) {
-    // Motus/FBX left forearm uses the opposite bend sign after upper-arm basis remapping.
-    return normalizeQuat([sourceDelta[0], sourceDelta[1], -sourceDelta[2], sourceDelta[3]]);
-  }
-  if (isMotusLegZAxisDelta(sourceDelta, humanBone)) {
-    // Motus/FBX leg hinges are authored on source-local Z, while VRM leg flexion is local X.
-    return normalizeQuat([sourceDelta[2], sourceDelta[1], sourceDelta[0], sourceDelta[3]]);
-  }
-  if (isRolledLowerLegSource(sourceRest, humanBone)) {
-    // Motus/FBX lower-leg tracks arrive with knee hinge motion on the rolled source Z axis.
-    return normalizeQuat([sourceDelta[2], sourceDelta[1], sourceDelta[0], sourceDelta[3]]);
-  }
-  return sourceDelta;
-}
-
-function isMotusLegZAxisDelta(sourceDelta: Quat, humanBone: string): boolean {
-  if (humanBone !== "leftUpperLeg" && humanBone !== "rightUpperLeg" && humanBone !== "leftLowerLeg" && humanBone !== "rightLowerLeg") return false;
-  return Math.abs(sourceDelta[2]) > 0.15 && Math.abs(sourceDelta[2]) > Math.abs(sourceDelta[0]) * 2;
-}
-
-function isRolledLeftLowerArmSource(sourceRest: Quat, humanBone: string): boolean {
-  return humanBone === "leftLowerArm" && Math.abs(sourceRest[0]) < 0.05 && Math.abs(sourceRest[1]) < 0.05 && Math.abs(sourceRest[2]) < 0.05 && sourceRest[3] > 0.95;
-}
-
-function isRolledUpperArmSource(sourceRest: Quat, humanBone: string): boolean {
-  if (humanBone !== "leftUpperArm" && humanBone !== "rightUpperArm") return false;
-  return Math.abs(sourceRest[1]) > 0.05 && Math.abs(sourceRest[2]) > 0.15 && sourceRest[3] > 0.85;
-}
-
-function isRolledLowerLegSource(sourceRest: Quat, humanBone: string): boolean {
-  if (humanBone !== "leftLowerLeg" && humanBone !== "rightLowerLeg") return false;
-  return Math.abs(sourceRest[2]) > Math.max(0.15, Math.abs(sourceRest[0]) * 2, Math.abs(sourceRest[1]) * 2);
 }
