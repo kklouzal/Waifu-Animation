@@ -34,6 +34,7 @@ import {
   createThreeAnimationClip,
   createThreeRuntimeClipsForEntry,
   calculateThreeRuntimeInfluence,
+  createSubtreeJointMask,
   decodeAnimationBinary,
   encodeAnimationBinary,
   NO_PARENT,
@@ -1390,11 +1391,54 @@ assert.deepEqual(
   "createJointMask should sanitize non-finite defaults and entries without clamping positive overweight entries"
 );
 
+const subtreeMaskSkeleton = createSkeleton([
+  { name: "root" },
+  { name: "torso", parentName: "root", humanoid: "spine" },
+  { name: "head", parentName: "torso", humanoid: "head" },
+  { name: "leftArm", parentName: "torso", humanoid: "leftUpperArm" },
+  { name: "rightArm", parentName: "torso", humanoid: "rightUpperArm" },
+  { name: "prop", parentName: "root" }
+]);
+assert.deepEqual(
+  Array.from(createSubtreeJointMask(subtreeMaskSkeleton, "leftArm")),
+  [0, 0, 0, 1, 0, 0],
+  "createSubtreeJointMask should select the named root without selecting parents or siblings"
+);
+assert.deepEqual(
+  Array.from(createSubtreeJointMask(subtreeMaskSkeleton, "torso", { defaultWeight: 0.25, weight: 2 })),
+  [0.25, 2, 2, 2, 2, 0.25],
+  "createSubtreeJointMask should select a named root and all descendants"
+);
+assert.deepEqual(
+  Array.from(createSubtreeJointMask(subtreeMaskSkeleton, "leftUpperArm")),
+  [0, 0, 0, 1, 0, 0],
+  "createSubtreeJointMask should resolve humanoid bone roots"
+);
+assert.deepEqual(
+  Array.from(createSubtreeJointMask(subtreeMaskSkeleton, ["head", "rightUpperArm"])),
+  [0, 0, 1, 0, 1, 0],
+  "createSubtreeJointMask should compose multiple roots"
+);
+assert.deepEqual(
+  Array.from(createSubtreeJointMask(subtreeMaskSkeleton, ["missing", "leftArm"], { defaultWeight: Number.NaN, weight: Number.POSITIVE_INFINITY })),
+  [0, 0, 0, 1, 0, 0],
+  "createSubtreeJointMask should ignore missing roots and sanitize malformed weights"
+);
+assert.deepEqual(
+  Array.from(createSubtreeJointMask(subtreeMaskSkeleton, "missing", { defaultWeight: -1, weight: -2 })),
+  [0, 0, 0, 0, 0, 0],
+  "createSubtreeJointMask should return a sanitized default-only mask when no roots resolve"
+);
+
 const malformedMaskPose = clonePose(skeleton.restPose);
 malformedMaskPose[0]!.translation = [5, 1, 0];
 malformedMaskPose[1]!.translation = [4, 0, 0];
 malformedMaskPose[2]!.translation = [20, 0, 0];
 malformedMaskPose[3]!.translation = [8, 0, 0];
+const armSubtreeBlend = blendPoses(skeleton, [{ pose: malformedMaskPose, weight: 1, mask: createSubtreeJointMask(skeleton, "leftUpperArm") }], { threshold: 0.01 });
+assert.equal(armSubtreeBlend[1]!.translation[0], 0, "subtree masks should leave unselected parents on fallback pose");
+assert.equal(armSubtreeBlend[2]!.translation[0], 0, "subtree masks should leave unselected siblings on fallback pose");
+assert.equal(armSubtreeBlend[3]!.translation[0], 8, "subtree masks should allow selected joints to own the blended pose");
 const malformedPartialMask = new Float32Array([1, Number.NaN]);
 const malformedMaskedBlend = blendPoses(skeleton, [{ pose: malformedMaskPose, weight: 1, mask: malformedPartialMask }], { threshold: 0.01 });
 assert.equal(malformedMaskedBlend[0]!.translation[0], 5, "finite mask entries should still own their joints");

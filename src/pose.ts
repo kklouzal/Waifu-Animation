@@ -11,7 +11,7 @@ import {
   normalizeTransform,
   transformDelta
 } from "./math.js";
-import { type Skeleton, createRestPose } from "./skeleton.js";
+import { type Skeleton, createRestPose, resolveJointIndex } from "./skeleton.js";
 
 export type Pose = Transform[];
 export type JointMask = Float32Array;
@@ -29,6 +29,13 @@ export type BlendPoseOptions = {
 };
 
 export type PoseLayer = { pose: readonly Transform[]; weight: number; mask?: JointMask };
+
+export type SubtreeJointMaskOptions = {
+  /** Weight assigned to joints outside the selected subtrees. */
+  defaultWeight?: number;
+  /** Weight assigned to each selected root and all descendants. */
+  weight?: number;
+};
 
 export const DEFAULT_BLEND_THRESHOLD = 0.1;
 
@@ -75,6 +82,31 @@ export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: 
   for (const [jointName, weight] of Object.entries(entries)) {
     const index = skeleton.nameToIndex.get(jointName) ?? skeleton.humanoid.get(jointName as never);
     if (index !== undefined) mask[index] = finiteNonNegative(weight, 0);
+  }
+  return mask;
+}
+
+export function createSubtreeJointMask(skeleton: Skeleton, roots: string | readonly string[], options: SubtreeJointMaskOptions = {}): JointMask {
+  const defaultWeight = finiteNonNegative(options.defaultWeight, 0);
+  const subtreeWeight = finiteNonNegative(options.weight, 1);
+  const mask = new Float32Array(skeleton.joints.length);
+  mask.fill(defaultWeight);
+
+  const rootNames = typeof roots === "string" ? [roots] : roots;
+  const rootIndices = new Set<number>();
+  for (const root of rootNames) {
+    const index = resolveJointIndex(skeleton, root);
+    if (index >= 0) rootIndices.add(index);
+  }
+  if (rootIndices.size === 0) return mask;
+
+  const selected = new Uint8Array(skeleton.joints.length);
+  for (let joint = 0; joint < skeleton.joints.length; joint += 1) {
+    const parent = skeleton.parents[joint] ?? skeleton.joints[joint]!.parentIndex;
+    if (rootIndices.has(joint) || (parent >= 0 && selected[parent] === 1)) {
+      selected[joint] = 1;
+      mask[joint] = subtreeWeight;
+    }
   }
   return mask;
 }
