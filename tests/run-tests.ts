@@ -812,6 +812,62 @@ assert.ok(
   strippedRootMotionMovingHipsInspection.issues.some((issue) => issue.message === "root-motion policy is stripped-to-in-place but root carrier translation still moves"),
   "stripped-to-in-place clips should reject meaningful hips translation motion"
 );
+const noPolicyMovingHipsInspection = inspectClipAsset(
+  {
+    id: "walk-moving-hips",
+    label: "Walk Moving Hips",
+    url: "/walk-moving-hips.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  },
+  {
+    id: "walk-moving-hips",
+    duration: 1,
+    tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 0.25]) }]
+  }
+);
+assert.equal(noPolicyMovingHipsInspection.accepted, false);
+assert.ok(
+  noPolicyMovingHipsInspection.issues.some((issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"),
+  "moving hips translation should require an explicit root-motion policy even without root-motion naming"
+);
+const noPolicyMovingRootMetadataInspection = inspectClipAsset(
+  {
+    id: "walk-moving-root",
+    label: "Walk Moving Root",
+    url: "/walk-moving-root.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  },
+  {
+    id: "walk-moving-root",
+    duration: 1,
+    metadata: {},
+    tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+  }
+);
+assert.equal(noPolicyMovingRootMetadataInspection.accepted, false);
+assert.ok(
+  noPolicyMovingRootMetadataInspection.issues.some((issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"),
+  "moving root translation should require an explicit root-motion policy from manifest or clip metadata"
+);
+const nonePolicyMovingRootInspection = inspectClipAsset(
+  {
+    id: "walk-none-moving-root",
+    label: "Walk None Moving Root",
+    url: "/walk-none-moving-root.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "none" } }
+  },
+  {
+    id: "walk-none-moving-root",
+    duration: 1,
+    tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+  }
+);
+assert.equal(nonePolicyMovingRootInspection.accepted, false);
+assert.ok(
+  nonePolicyMovingRootInspection.issues.some((issue) => issue.message === "root-motion policy is none but root carrier translation moves"),
+  "policy none should reject moving root carrier translation"
+);
 assert.equal(
   inspectClipAsset(
     {
@@ -905,6 +961,24 @@ assert.equal(
   ).accepted,
   true,
   "preserved root-motion policy should accept hips translation carriers even without root-motion naming"
+);
+assert.equal(
+  inspectClipAsset(
+    {
+      id: "walk-clip-metadata-preserved-root",
+      label: "Walk Clip Metadata Preserved Root",
+      url: "/walk-clip-metadata-preserved-root.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
+    {
+      id: "walk-clip-metadata-preserved-root",
+      duration: 1,
+      metadata: { rootMotionPolicy: "preserved" },
+      tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+    }
+  ).accepted,
+  true,
+  "preserved clip metadata should accept moving root carrier translation"
 );
 const invalidRootMotionPolicyInspection = inspectAnimationAsset(
   {

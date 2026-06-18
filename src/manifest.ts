@@ -101,6 +101,7 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   const issues = validateClip(clip);
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
   const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
+  const movingRootCarrierTrack = clip.tracks.find(rootCarrierTranslationTrackHasMotion);
   const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip);
   if (rootMotionPolicyIssue) {
     issues.push({ message: rootMotionPolicyIssue });
@@ -113,8 +114,21 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   if (rootMotionPolicy === "preserved" && !hasRootCarrierTranslationTrack) {
     issues.push({ message: "root-motion policy is preserved but clip has no root carrier translation track" });
   }
+  if (!rootMotionPolicy && movingRootCarrierTrack) {
+    issues.push({
+      joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
+      property: movingRootCarrierTrack.property,
+      message: "moving root carrier translation requires source.rootMotion.policy"
+    });
+  }
+  if (rootMotionPolicy === "none" && movingRootCarrierTrack) {
+    issues.push({
+      joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
+      property: movingRootCarrierTrack.property,
+      message: "root-motion policy is none but root carrier translation moves"
+    });
+  }
   if (rootMotionPolicy === "stripped-to-in-place") {
-    const movingRootCarrierTrack = clip.tracks.find(rootCarrierTranslationTrackHasMotion);
     if (movingRootCarrierTrack) {
       issues.push({
         joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
