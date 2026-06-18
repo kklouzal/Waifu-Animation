@@ -18,17 +18,35 @@ export type LookAtOptions = {
   torsoWeight?: number;
 };
 
+function finiteOption(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) ? value : fallback;
+}
+
+function finiteOption01(value: number | undefined, fallback: number): number {
+  return clamp01(finiteOption(value, fallback));
+}
+
+function finiteAttentionWeight(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
 export function distributeLookAt(localTarget: Vec3, options: LookAtOptions = {}): LookAtDistribution {
   const direction = normalizeVec3(localTarget, [0, 0, 1]);
-  const yaw = clamp(Math.atan2(direction[0], Math.max(1e-5, direction[2])), -(options.maxYaw ?? 0.85), options.maxYaw ?? 0.85);
-  const pitch = clamp(Math.atan2(direction[1], Math.hypot(direction[0], direction[2])), -(options.maxPitch ?? 0.52), options.maxPitch ?? 0.52);
-  const eyeLead = options.eyeLead ?? 0.42;
+  const maxYaw = finiteNonNegative(options.maxYaw, 0.85);
+  const maxPitch = finiteNonNegative(options.maxPitch, 0.52);
+  const yaw = clamp(Math.atan2(direction[0], direction[2]), -maxYaw, maxYaw);
+  const pitch = clamp(Math.atan2(direction[1], Math.hypot(direction[0], direction[2])), -maxPitch, maxPitch);
+  const eyeLead = finiteOption01(options.eyeLead, 0.42);
+  const headWeight = finiteOption01(options.headWeight, 0.42);
+  const neckWeight = finiteOption01(options.neckWeight, 0.22);
+  const spineWeight = finiteOption01(options.spineWeight, 0.11);
+  const torsoWeight = finiteOption01(options.torsoWeight, 0.05);
   return {
     eyes: { yaw: yaw * eyeLead, pitch: pitch * eyeLead, weight: 1 },
-    head: { yaw: yaw * (options.headWeight ?? 0.42), pitch: pitch * (options.headWeight ?? 0.46), weight: 1 },
-    neck: { yaw: yaw * (options.neckWeight ?? 0.22), pitch: pitch * (options.neckWeight ?? 0.2), weight: 1 },
-    spine: { yaw: yaw * (options.spineWeight ?? 0.11), pitch: pitch * (options.spineWeight ?? 0.07), weight: 1 },
-    torso: { yaw: yaw * (options.torsoWeight ?? 0.05), pitch: pitch * (options.torsoWeight ?? 0.03), weight: 1 }
+    head: { yaw: yaw * headWeight, pitch: pitch * finiteOption01(options.headWeight, 0.46), weight: 1 },
+    neck: { yaw: yaw * neckWeight, pitch: pitch * finiteOption01(options.neckWeight, 0.2), weight: 1 },
+    spine: { yaw: yaw * spineWeight, pitch: pitch * finiteOption01(options.spineWeight, 0.07), weight: 1 },
+    torso: { yaw: yaw * torsoWeight, pitch: pitch * finiteOption01(options.torsoWeight, 0.03), weight: 1 }
   };
 }
 
@@ -49,18 +67,24 @@ export class AttentionScheduler {
 
   choose(nowMs: number, targets: readonly AttentionTarget[], minDwellMs = 900, maxDwellMs = 3200): AttentionTarget | null {
     if (targets.length === 0) return null;
-    if (nowMs >= this.nextSwitchAt || this.current >= targets.length) {
-      const total = targets.reduce((sum, target) => sum + Math.max(0, target.weight), 0);
-      let pick = this.random() * Math.max(1e-5, total);
+    const now = finiteNonNegative(nowMs, 0);
+    if (now >= this.nextSwitchAt || this.current >= targets.length) {
+      let total = 0;
+      for (const target of targets) total += finiteAttentionWeight(target.weight);
       this.current = 0;
-      for (let i = 0; i < targets.length; i += 1) {
-        pick -= Math.max(0, targets[i]!.weight);
-        if (pick <= 0) {
-          this.current = i;
-          break;
+      if (total > 0) {
+        let pick = this.random() * total;
+        for (let i = 0; i < targets.length; i += 1) {
+          pick -= finiteAttentionWeight(targets[i]!.weight);
+          if (pick <= 0) {
+            this.current = i;
+            break;
+          }
         }
       }
-      this.nextSwitchAt = nowMs + randomRange(this.random, minDwellMs, maxDwellMs);
+      const minDwell = finiteNonNegative(minDwellMs, 900);
+      const maxDwell = Math.max(minDwell, finiteNonNegative(maxDwellMs, 3200));
+      this.nextSwitchAt = now + randomRange(this.random, minDwell, maxDwell);
     }
     return targets[this.current] ?? targets[0] ?? null;
   }

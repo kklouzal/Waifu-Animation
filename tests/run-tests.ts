@@ -5,6 +5,7 @@ import {
   type AnimationManifest,
   type AnimationClip,
   type SampleRepairDiagnostic,
+  AttentionScheduler,
   BlinkScheduler,
   dampAlpha,
   FacialExpressionMixer,
@@ -2505,6 +2506,43 @@ assert.deepEqual(
 const look = distributeLookAt([0.4, 0.2, 2]);
 assert.ok(look.head.yaw > 0);
 assert.ok(look.eyes.pitch > 0);
+const behindLook = distributeLookAt([0, 0, -1], { maxYaw: 0.5 });
+assert.equal(behindLook.eyes.yaw, 0.21, "directly behind targets should clamp toward the yaw limit instead of collapsing to center");
+const hostileLook = distributeLookAt([Number.NaN, Infinity, -1], {
+  maxYaw: Number.POSITIVE_INFINITY,
+  maxPitch: Number.NaN,
+  eyeLead: Number.NaN,
+  headWeight: Number.POSITIVE_INFINITY,
+  neckWeight: Number.NEGATIVE_INFINITY,
+  spineWeight: -4,
+  torsoWeight: 3
+});
+assert.ok(
+  Object.values(hostileLook).every((part) => Number.isFinite(part.yaw) && Number.isFinite(part.pitch) && Number.isFinite(part.weight)),
+  "look-at distribution should stay finite when options contain non-finite limits or weights"
+);
+assert.ok(
+  Object.values(hostileLook).every((part) => Math.abs(part.yaw) <= 0.85 && Math.abs(part.pitch) <= 0.52),
+  "look-at distribution should clamp unsafe option multipliers to bounded corrections"
+);
+const attention = new AttentionScheduler("attention-safety");
+const noPositiveAttention = attention.choose(Number.NaN, [
+  { id: "nan", position: [Number.NaN, 0, 0], weight: Number.NaN },
+  { id: "negative", position: [1, 0, 0], weight: -4 }
+]);
+assert.equal(noPositiveAttention?.id, "nan", "attention scheduler should choose a deterministic default when weights are not positive and finite");
+const weightedAttention = new AttentionScheduler("attention-weighted-safety");
+const finiteWeightedAttention = weightedAttention.choose(1_000, [
+  { id: "ignored-nan", position: [0, 0, 1], weight: Number.NaN },
+  { id: "valid", position: [1, 0, 0], weight: 1 }
+]);
+assert.equal(finiteWeightedAttention?.id, "valid", "NaN attention weights should not poison weighted selection");
+const finiteDwellAttention = new AttentionScheduler("attention-dwell");
+assert.equal(
+  finiteDwellAttention.choose(Number.POSITIVE_INFINITY, [{ id: "finite-dwell", position: [0, 0, 1], weight: 1 }], Number.NaN, Number.POSITIVE_INFINITY)?.id,
+  "finite-dwell",
+  "non-finite dwell and now inputs should not prevent a finite scheduler choice"
+);
 assert.equal(Number.isFinite(breathingWeight(Number.NaN, 0.5)), true, "breathing weight should ignore non-finite elapsed time");
 
 const presenceA = new PresencePlanner("presence-test", 0);
