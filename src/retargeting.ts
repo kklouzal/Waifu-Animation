@@ -1,16 +1,11 @@
 import { EPSILON, type Quat, cloneNormalizedQuat, ensureShortestQuat, invertQuat, multiplyQuat, normalizeQuat } from "./math.js";
-import { type HumanoidBoneName, VRM_HUMANOID_BONES } from "./skeleton.js";
+
+export { isHumanoidBoneName } from "./skeleton.js";
 
 export type RetargetedQuaternionTrack = {
   values: number[];
   invalidSamples: number;
 };
-
-export const VRM_HUMANOID_SET = new Set<string>(VRM_HUMANOID_BONES);
-
-export function isHumanoidBoneName(value: string): value is HumanoidBoneName {
-  return VRM_HUMANOID_SET.has(value);
-}
 
 export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sourceSample: Quat, humanBone?: string): Quat {
   const srcRest = normalizeQuat(sourceRest);

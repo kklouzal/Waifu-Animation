@@ -56,6 +56,7 @@ import {
   inspectAnimationAsset,
   inspectClipAsset,
   identityTransform,
+  isHumanoidBoneName,
   localToModelPose,
   multiplyMat4,
   normalizeQuat,
@@ -212,6 +213,13 @@ assert.throws(
   /duplicate humanoid bone hips on joints hips and pelvis/,
   "createSkeleton should reject duplicate humanoid bone assignments"
 );
+assert.throws(
+  () => createSkeleton([{ name: "root", humanoid: "pelvis" } as unknown as Parameters<typeof createSkeleton>[0][number]]),
+  /joint root has invalid humanoid bone pelvis/,
+  "createSkeleton should reject invalid humanoid bone identifiers from runtime input"
+);
+assert.equal(isHumanoidBoneName("head"), true, "known VRM humanoid names should pass the runtime guard");
+assert.equal(isHumanoidBoneName("pelvis"), false, "unknown humanoid names should fail the runtime guard");
 const duplicateHumanoidSkeleton = {
   ...skeleton,
   joints: skeleton.joints.map((joint, index) => (index === 3 ? { ...joint, humanoid: "head" as const } : joint))
@@ -221,6 +229,16 @@ assert.ok(
     (issue) => issue.index === 3 && issue.joint === "leftUpperArm" && issue.message === "duplicate humanoid bone head also assigned to head"
   ),
   "validateSkeleton should report duplicate humanoid bone assignments on malformed skeletons"
+);
+const invalidJointHumanoidSkeleton = {
+  ...skeleton,
+  joints: skeleton.joints.map((joint, index) => (index === 2 ? { ...joint, humanoid: "pelvis" } : joint))
+};
+assert.ok(
+  validateSkeleton(invalidJointHumanoidSkeleton).some(
+    (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "joint has invalid humanoid bone pelvis"
+  ),
+  "validateSkeleton should report invalid humanoid bone identifiers on joints"
 );
 const nonIntegerParentSkeleton = {
   ...skeleton,
@@ -315,6 +333,19 @@ assert.ok(
 assert.ok(
   staleHumanoidIssues.some((issue) => issue.message === "humanoid map entry rightHand is stale"),
   "validateSkeleton should report stale humanoid map entries"
+);
+const invalidHumanoidMapSkeleton = {
+  ...skeleton,
+  humanoid: new Map([
+    ["hips", 0],
+    ["spine", 1],
+    ["head", 2],
+    ["pelvis", 0]
+  ])
+};
+assert.ok(
+  validateSkeleton(invalidHumanoidMapSkeleton).some((issue) => issue.message === "humanoid map entry pelvis has invalid humanoid bone name"),
+  "validateSkeleton should report invalid humanoid map entry names"
 );
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
@@ -1244,6 +1275,17 @@ assert.equal(
   ),
   true,
   "unsupported external track properties should be reported instead of treated as 3-float transform channels"
+);
+const unknownHumanoidTrackClip = {
+  id: "unknown-humanbone",
+  duration: 1,
+  tracks: [{ humanBone: "pelvis", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }]
+} as unknown as AnimationClip;
+assert.ok(
+  validateClip(unknownHumanoidTrackClip).some(
+    (issue) => issue.track === 0 && issue.joint === "pelvis" && issue.property === "translation" && issue.message === "track has unknown humanoid bone"
+  ),
+  "validateClip should report unknown humanoid track identifiers without requiring a skeleton"
 );
 assert.throws(
   () => sampleTrack(unsupportedPropertyClip.tracks[0]!, 0),

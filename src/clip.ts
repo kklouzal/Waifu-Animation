@@ -1,7 +1,7 @@
 import { type Quat, type Transform, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, readPoseTransformOrRest } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
-import { type HumanoidBoneName, type Skeleton, createRestPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
+import { type HumanoidBoneName, type Skeleton, createRestPose, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
 export type TrackProperty = "translation" | "rotation" | "scale" | "position" | "quaternion";
 export type NormalizedTrackProperty = "translation" | "rotation" | "scale";
@@ -73,6 +73,9 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     }
     const stride = trackStride(property);
     if (!jointName) issues.push({ track: index, property: track.property, message: "track needs joint or humanBone" });
+    if (track.humanBone !== undefined && !isHumanoidBoneName(track.humanBone)) {
+      issues.push({ track: index, joint: String(track.humanBone), property: track.property, message: "track has unknown humanoid bone" });
+    }
     const jointIndex = skeleton && jointName ? resolveTrackJointIndex(skeleton, track) : -1;
     if (skeleton && jointName && jointIndex < 0) {
       issues.push({ track: index, joint: String(jointName), property: track.property, message: "track does not map to skeleton" });

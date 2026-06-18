@@ -71,6 +71,12 @@ export const VRM_HUMANOID_BONES = [
 
 export type HumanoidBoneName = (typeof VRM_HUMANOID_BONES)[number];
 
+const VRM_HUMANOID_BONE_SET = new Set<unknown>(VRM_HUMANOID_BONES);
+
+export function isHumanoidBoneName(value: unknown): value is HumanoidBoneName {
+  return VRM_HUMANOID_BONE_SET.has(value);
+}
+
 export type JointDefinition = {
   name: string;
   parentIndex?: number;
@@ -117,7 +123,10 @@ export function createSkeleton(definitions: JointDefinition[]): Skeleton {
     if (!Number.isInteger(parentIndex)) throw new Error(`joint ${joint.name} parent index must be an integer`);
     if (parentIndex < NO_PARENT) throw new Error(`joint ${joint.name} parent index is invalid`);
     if (parentIndex >= index) throw new Error(`joint ${joint.name} parent must appear before child`);
-    if (joint.humanoid) {
+    if ("humanoid" in joint && joint.humanoid !== undefined) {
+      if (!isHumanoidBoneName(joint.humanoid)) {
+        throw new Error(`joint ${joint.name} has invalid humanoid bone ${String(joint.humanoid)}`);
+      }
       const existingIndex = humanoid.get(joint.humanoid);
       if (existingIndex !== undefined) {
         throw new Error(`duplicate humanoid bone ${joint.humanoid} on joints ${definitions[existingIndex]!.name} and ${joint.name}`);
@@ -187,7 +196,11 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
     if (nameToIndex && joint.name && nameToIndex.get(joint.name) !== index) {
       issues.push({ index, joint: joint.name, message: "nameToIndex entry does not match joint index" });
     }
-    if (joint.humanoid) {
+    if (joint.humanoid !== undefined) {
+      if (!isHumanoidBoneName(joint.humanoid)) {
+        issues.push({ index, joint: joint.name, message: `joint has invalid humanoid bone ${String(joint.humanoid)}` });
+        continue;
+      }
       const existingIndex = humanoidToIndex.get(joint.humanoid);
       if (existingIndex !== undefined) {
         issues.push({
@@ -212,6 +225,10 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
   }
   if (humanoid) {
     for (const [bone, index] of humanoid) {
+      if (!isHumanoidBoneName(bone)) {
+        issues.push({ message: `humanoid map entry ${String(bone)} has invalid humanoid bone name` });
+        continue;
+      }
       if (!Number.isInteger(index) || index < 0 || index >= skeleton.joints.length || skeleton.joints[index]?.humanoid !== bone) {
         issues.push({ message: `humanoid map entry ${bone} is stale` });
       }
