@@ -330,8 +330,12 @@ function readTrackValue(
   const fallback = defaultTrackSample(property);
   const values = fallback.map((value, index) => track.values[offset + index] ?? value);
   if (stride === 4) pushRotationSampleRepairDiagnostic(diagnostics, diagnosticContext, track, values as Quat, keyIndex);
-  if (stride === 4) return normalizeQuat(values as Quat);
+  if (stride === 4) return normalizeQuat(values as Quat, rotationSampleFallback(track));
   return repairVec3Sample(track, values as [number, number, number], fallback as [number, number, number], keyIndex, diagnostics, diagnosticContext);
+}
+
+function rotationSampleFallback(track: AnimationTrack): Quat {
+  return track.sourceRestQuaternion?.length === 4 ? cloneNormalizedQuat(track.sourceRestQuaternion) : cloneQuat(undefined);
 }
 
 function pushRotationSampleRepairDiagnostic(

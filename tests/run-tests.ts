@@ -27,8 +27,12 @@ import {
   breathingWeight,
   clamp01,
   composeMat4,
+  computeBoundAttachmentTransform,
+  computeBoundAttachmentTransforms,
   computeAttachmentTransform,
   computeSkeletonAttachmentTransform,
+  createAttachmentBinding,
+  createAttachmentBindings,
   createThreeLocomotionUpperBodyTargets,
   createJointMask,
   DEFAULT_BLEND_THRESHOLD,
@@ -1412,6 +1416,16 @@ assertMat4NearlyEqual(
   1e-6,
   "attachment transform should resolve joints by name"
 );
+const boundHeadAttachment = createAttachmentBinding({ skeleton, joint: "head", offset: attachmentOffset, id: "hat" });
+assert.equal(boundHeadAttachment.jointIndex, 2, "attachment binding should resolve joint names once");
+assert.equal(boundHeadAttachment.jointName, "head", "attachment binding should retain resolved joint metadata");
+assert.equal(boundHeadAttachment.id, "hat", "attachment binding should retain stable ids");
+assertMat4NearlyEqual(
+  computeBoundAttachmentTransform({ modelPose: models, binding: boundHeadAttachment }),
+  expectedAttachment,
+  1e-6,
+  "bound attachment transform should concatenate joint model matrix then precomputed offset matrix"
+);
 assertMat4NearlyEqual(
   computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "head", offset: attachmentOffset }),
   computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "head", offset: attachmentOffset }),
@@ -1424,6 +1438,15 @@ assertMat4NearlyEqual(
   computeAttachmentTransform({ modelPose: models, jointIndex: 3, offset: { translation: [0, 0.25, 0] } }),
   1e-6,
   "attachment transform should resolve humanoid aliases through the skeleton map"
+);
+const boundHumanoidAttachment = createAttachmentBinding({ skeleton, joint: "leftUpperArm", offset: { translation: [0, 0.25, 0] }, id: "armband" });
+assert.equal(boundHumanoidAttachment.jointIndex, 3, "attachment binding should resolve humanoid aliases once");
+assert.equal(boundHumanoidAttachment.humanoid, "leftUpperArm", "attachment binding should retain humanoid metadata");
+assertMat4NearlyEqual(
+  computeBoundAttachmentTransform({ modelPose: models, binding: boundHumanoidAttachment }),
+  humanoidAttachment,
+  1e-6,
+  "bound attachment transform should evaluate humanoid alias bindings"
 );
 const rotatedAttachmentSkeleton = createSkeleton([
   { name: "root", rest: { rotation: quatFromAxisAngle([0, 0, 1], Math.PI / 2) } },
@@ -1448,6 +1471,18 @@ assert.throws(
   /attachment joint index 99 is out of range/,
   "out-of-range attachment joint indices should be explicit failures"
 );
+assert.throws(
+  () => createAttachmentBinding({ skeleton, joint: 99 }),
+  /attachment joint index 99 is out of range/,
+  "out-of-range numeric attachment bindings should fail during binding"
+);
+const staleBoundAttachment = createAttachmentBinding({ skeleton, joint: "head" });
+const shortModelPose = models.slice(0, 2);
+assert.throws(
+  () => computeBoundAttachmentTransform({ modelPose: shortModelPose, binding: staleBoundAttachment }),
+  /attachment binding joint index 2 is out of range/,
+  "bound attachment evaluation should reject model poses without the resolved joint"
+);
 const nonFiniteJointModels = [...models];
 nonFiniteJointModels[2] = new Float32Array(models[2]!);
 nonFiniteJointModels[2]![12] = Number.NaN;
@@ -1455,6 +1490,11 @@ assert.throws(
   () => computeAttachmentTransform({ modelPose: nonFiniteJointModels, jointIndex: 2 }),
   /attachment joint 2 model matrix values must be finite/,
   "non-finite joint model matrices should not produce plausible attachment output"
+);
+assert.throws(
+  () => computeBoundAttachmentTransform({ modelPose: nonFiniteJointModels, binding: boundHeadAttachment }),
+  /attachment binding joint 2 model matrix values must be finite/,
+  "bound attachment evaluation should reject non-finite joint model matrices"
 );
 const sanitizedOffsetAttachment = computeAttachmentTransform({
   modelPose: [composeMat4(identityTransform())],
@@ -1475,6 +1515,55 @@ assertMat4NearlyEqual(
   0,
   "attachment transform offsets should sanitize Partial<Transform> inputs through cloneTransform"
 );
+const sanitizedBoundAttachment = createAttachmentBinding({
+  skeleton,
+  joint: "head",
+  offset: {
+    translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
+    rotation: [0, Number.NaN, 0, 1],
+    scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
+  }
+});
+assertMat4NearlyEqual(
+  sanitizedBoundAttachment.offsetMatrix,
+  composeMat4(cloneTransform({
+    translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
+    rotation: [0, Number.NaN, 0, 1],
+    scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
+  })),
+  0,
+  "attachment bindings should sanitize Partial<Transform> offsets once during binding"
+);
+const nonFiniteOffsetMatrix = new Float32Array(16);
+nonFiniteOffsetMatrix[0] = Number.NaN;
+assert.throws(
+  () => createAttachmentBinding({ skeleton, joint: "head", offset: nonFiniteOffsetMatrix }),
+  /attachment offset matrix values must be finite/,
+  "attachment bindings should reject non-finite offset matrices"
+);
+assertMat4NearlyEqual(
+  computeBoundAttachmentTransform({ modelPose: models, binding: boundHeadAttachment }),
+  computeBoundAttachmentTransform({ modelPose: models, binding: boundHeadAttachment }),
+  0,
+  "bound attachment transform should be deterministic for repeated evaluation"
+);
+const boundAttachments = createAttachmentBindings(skeleton, [
+  { joint: "head", offset: attachmentOffset, id: "hat" },
+  { joint: "leftUpperArm", offset: { translation: [0, 0.25, 0] }, id: "armband" }
+]);
+const boundAttachmentTransforms = computeBoundAttachmentTransforms({ modelPose: models, bindings: boundAttachments });
+assert.deepEqual(
+  boundAttachmentTransforms.map((result) => result.id),
+  ["hat", "armband"],
+  "batch bound attachment evaluation should preserve attachment id order"
+);
+assert.deepEqual(
+  boundAttachmentTransforms.map((result) => result.jointIndex),
+  [2, 3],
+  "batch bound attachment evaluation should preserve resolved joint order"
+);
+assertMat4NearlyEqual(boundAttachmentTransforms[0]!.transform, expectedAttachment, 1e-6, "batch bound attachment should evaluate the first binding");
+assertMat4NearlyEqual(boundAttachmentTransforms[1]!.transform, humanoidAttachment, 1e-6, "batch bound attachment should evaluate the second binding");
 
 const mask = createJointMask(skeleton, 0, { head: 1 });
 const blended = blendPoses(skeleton, [
@@ -2326,6 +2415,18 @@ assert.ok(
   quaternionNearlyEqual(retargetedZeroTrack.values, [0, 0, 0, 1], 1e-5),
   "retargeted quaternion tracks should repair zero source samples to a normalized fallback"
 );
+const retargetedZeroTrackWithSourceRest = retargetQuaternionTrackValues([0, 0, 0, 0], sourceRestX, targetRestZ);
+assert.equal(retargetedZeroTrackWithSourceRest.invalidSamples, 1, "source-rest retargeted tracks should count zero source samples as invalid");
+assert.ok(
+  quaternionNearlyEqual(retargetedZeroTrackWithSourceRest.values, targetRestZ, 1e-5),
+  "source-rest retargeted tracks should repair zero source samples to the target rest instead of applying an inverse source-rest delta"
+);
+const retargetedNaNTrackWithSourceRest = retargetQuaternionTrackValues([Number.NaN, 0, 0, 1], sourceRestX, targetRestZ);
+assert.equal(retargetedNaNTrackWithSourceRest.invalidSamples, 1, "source-rest retargeted tracks should count non-finite source samples as invalid");
+assert.ok(
+  quaternionNearlyEqual(retargetedNaNTrackWithSourceRest.values, targetRestZ, 1e-5),
+  "source-rest retargeted tracks should repair non-finite source samples to the target rest"
+);
 const retargetedNonUnitTrack = retargetQuaternionTrackValues([0, 0, 0, 2], undefined, [0, 0, 0, 1]);
 assert.equal(retargetedNonUnitTrack.invalidSamples, 0, "retargeted quaternion tracks should accept normalizable non-unit source samples");
 assert.ok(
@@ -2372,6 +2473,34 @@ assert.ok(
   "basis fixture should distinguish local delta retargeting from rest-basis conjugation"
 );
 assert.ok(vectorNearlyEqual(mismatchedBasisActual, mismatchedBasisExpected, 1e-5), "Three retargeting should render child direction from the source local delta");
+
+const invalidSourceRestTrackBones = createSingleLimbBones([0, 0, 0, 1], "leftUpperArm", "leftLowerArm", [0, 1, 0]);
+const invalidSourceRestTrackClip = createThreeAnimationClip(
+  {
+    id: "invalid-source-rest-sample",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "leftUpperArm",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(sourceRestX),
+        times: toFloat32Array([0, 1]),
+        values: Float32Array.from([...sourceRestX, 0, 0, 0, 0])
+      }
+    ]
+  },
+  {
+    resolveBone: (bone) => (bone === "leftUpperArm" ? invalidSourceRestTrackBones.upper : null),
+    targetRestQuaternion: () => targetRestZ
+  }
+);
+sampleThreeClipOnce(invalidSourceRestTrackBones.root, invalidSourceRestTrackClip);
+const invalidSourceRestTrackActual = readChildDirection(invalidSourceRestTrackBones.upper, invalidSourceRestTrackBones.lower);
+const invalidSourceRestTrackExpected = rotateVec3ByQuat(targetRestZ, [0, 1, 0]);
+assert.ok(
+  vectorNearlyEqual(invalidSourceRestTrackActual, invalidSourceRestTrackExpected, 1e-5),
+  "Three source-rest retargeting should hold target rest for invalid samples instead of applying inverse source-rest rotation"
+);
 
 const motusRightUpperLegRest: [number, number, number, number] = [-0.0006, 0.1254, 0.9682, -0.2166];
 const motusRightUpperLegSample: [number, number, number, number] = [-0.0035, 0.1166, 0.9636, -0.2406];

@@ -31,7 +31,7 @@ export function retargetQuaternionTrackValues(
   for (let i = 0; i < values.length; i += 4) {
     const rawSample: Quat = [values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1];
     if (isMalformedQuaternionSample(rawSample)) invalidSamples += 1;
-    const sample = normalizeQuat(rawSample);
+    const sample = normalizeQuat(rawSample, srcRest ?? undefined);
     let retargeted = srcRest ? retargetQuaternionSample(srcRest, dstRest, sample, humanBone) : sample;
     if (!retargeted.every(Number.isFinite)) {
       invalidSamples += 1;
