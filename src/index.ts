@@ -3,6 +3,7 @@ export * from "./skeleton.js";
 export * from "./attachments.js";
 export * from "./pose.js";
 export * from "./clip.js";
+export * from "./motion.js";
 export * from "./binary.js";
 export * from "./runtime.js";
 export * from "./masks.js";

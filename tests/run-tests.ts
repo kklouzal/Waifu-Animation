@@ -75,6 +75,8 @@ import {
   invertQuat,
   retargetQuaternionSample,
   retargetQuaternionTrackValues,
+  sampleMotionCarrier,
+  sampleMotionIntervalDelta,
   sampleClipToPose,
   sampleTrack,
   sanitizeQuaternionTrackValues,
@@ -1240,6 +1242,81 @@ assert.ok(
 
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
 assert.ok(sampled[2]!.rotation[0] > 0.1);
+
+const motionSkeleton = createSkeleton([
+  { name: "root" },
+  { name: "hips", parentName: "root", humanoid: "hips", rest: { translation: [0, 1, 0] } },
+  { name: "spine", parentName: "hips", humanoid: "spine" }
+]);
+const motionClip: AnimationClip = {
+  id: "root-motion",
+  duration: 1,
+  loop: true,
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) },
+    {
+      joint: "root",
+      property: "rotation",
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI)])
+    },
+    { humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 1, 0, 0, 1, 6]) }
+  ]
+};
+const defaultRootMotionSample = sampleMotionCarrier(motionSkeleton, motionClip, 0.25);
+assert.equal(defaultRootMotionSample.joint, "root", "motion sampling should default to the skeleton root carrier");
+assert.deepEqual(defaultRootMotionSample.transform.translation, [2.5, 0, 0]);
+const humanoidMotionSample = sampleMotionCarrier(motionSkeleton, motionClip, 0.5, { carrier: { humanBone: "hips" } });
+assert.equal(humanoidMotionSample.jointIndex, 1, "motion sampling should resolve explicit humanoid carriers");
+assert.deepEqual(humanoidMotionSample.transform.translation, [0, 1, 3]);
+const jointMotionSample = sampleMotionCarrier(motionSkeleton, motionClip, 0.5, { carrier: { joint: "hips" } });
+assert.deepEqual(jointMotionSample.transform.translation, humanoidMotionSample.transform.translation, "motion sampling should resolve explicit joint-name carriers");
+const indexedMotionSample = sampleMotionCarrier(motionSkeleton, motionClip, 0.5, { carrier: { jointIndex: 1 } });
+assert.deepEqual(indexedMotionSample.transform.translation, humanoidMotionSample.transform.translation, "motion sampling should resolve explicit joint-index carriers");
+const motionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0.2, 0.7);
+assert.deepEqual(motionDelta.delta.translation, [5, 0, 0], "motion interval deltas should report carrier displacement");
+assert.ok(quaternionNearlyEqual(motionDelta.delta.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 2), 1e-5), "motion interval deltas should report carrier rotation");
+const wrappedMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0.75, 1.25);
+assert.deepEqual(wrappedMotionDelta.delta.translation, [5, 0, 0], "looped motion intervals should accumulate forward displacement across wrap");
+const negativeMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0.7, 0.2);
+assert.deepEqual(negativeMotionDelta.delta.translation, [0, 0, 0], "negative motion intervals should return identity deltas");
+const nonFiniteMotionSample = sampleMotionCarrier(motionSkeleton, motionClip, Number.NaN);
+assert.equal(nonFiniteMotionSample.time, 0, "non-finite motion sample times should deterministically sample time zero");
+assert.deepEqual(nonFiniteMotionSample.transform.translation, [0, 0, 0]);
+const invalidCarrierDiagnostics: SampleRepairDiagnostic[] = [];
+const invalidCarrierSample = sampleMotionCarrier(motionSkeleton, motionClip, 0.25, {
+  carrier: { humanBone: "pelvis" },
+  diagnostics: invalidCarrierDiagnostics
+});
+assert.equal(invalidCarrierSample.joint, "root", "invalid motion carriers should fall back to the skeleton root");
+assert.ok(
+  invalidCarrierDiagnostics.some((issue) => issue.message === "motion carrier humanoid bone pelvis does not map to skeleton; using root"),
+  "invalid motion carriers should report diagnostics when requested"
+);
+const repairedMotionDiagnostics: SampleRepairDiagnostic[] = [];
+const repairedMotionClip: AnimationClip = {
+  id: "repaired-root-motion",
+  duration: 1,
+  tracks: [
+    {
+      joint: "root",
+      property: "rotation",
+      times: toFloat32Array([0, 1]),
+      values: toFloat32Array([0, 0, 0, 2, Number.NaN, 0, 0, 1])
+    }
+  ]
+};
+const repairedMotionSample = sampleMotionCarrier(motionSkeleton, repairedMotionClip, 0.5, { diagnostics: repairedMotionDiagnostics });
+assert.ok(repairedMotionSample.transform.rotation.every(Number.isFinite), "motion carrier sampling should repair non-finite rotation samples");
+assert.ok(Math.abs(Math.hypot(...repairedMotionSample.transform.rotation) - 1) < 1e-6, "motion carrier rotations should remain normalized");
+assert.ok(
+  repairedMotionDiagnostics.some((issue) => issue.property === "rotation" && issue.message === "rotation track quaternion was normalized during sampling"),
+  "motion carrier sampling should preserve rotation repair diagnostics"
+);
+assert.ok(
+  repairedMotionDiagnostics.some((issue) => issue.property === "rotation" && issue.message === "rotation track quaternion values were repaired to finite defaults"),
+  "motion carrier sampling should report non-finite rotation repairs"
+);
 
 const coreRetargetSourceRest = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const coreRetargetTargetRest = quatFromAxisAngle([0, 0, 1], Math.PI / 3);

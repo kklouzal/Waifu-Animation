@@ -12,6 +12,7 @@ Reference checkout used during initial design:
 - `Skeleton` stores joint parent indices, joint names, and rest poses as separate arrays. Ozz stores rest poses in SoA form for performance; this library stores one transform per joint because JavaScript engines and VRM adapters consume AoS shapes more naturally.
 - `Animation` separates clip metadata from translation, rotation, and scale key data. Ozz sorts runtime keyframes for cache-friendly sampling. This library stores browser-delivered keyframe payloads as versioned binary data, decodes them into typed arrays, validates them aggressively, and samples into local pose buffers.
 - Sampling writes local-space transforms. It does not directly mutate renderer bones.
+- Root motion sampling follows the Ozz motion extraction/playback split at the primitive level: callers explicitly choose a carrier joint, sample its local transform with normal clip sampling, then consume interval deltas outside renderer bone mutation. Waifu does not currently perform Ozz's offline bake/removal pass.
 - Blending operates on local poses with explicit weights, masks, bind/rest fallback, quaternion shortest-path interpolation, and normalization. Per-joint mask weights follow Ozz semantics: negative and non-finite values are treated as zero, while positive values above `1` are preserved.
 - Additive layers are separate from ordinary override blending and are applied as deltas.
 - Local-to-model conversion happens after local pose composition and before world-space constraints.
