@@ -2226,6 +2226,65 @@ assert.ok(evaluated.activeLayers.length === 1);
 assert.ok(evaluated.localPose[2]!.rotation[0] > 0.1);
 assert.equal(evaluated.diagnostics, undefined);
 
+const runtimeBackwardCompatibleUpdate = new AnimationRuntime(skeleton);
+runtimeBackwardCompatibleUpdate.setLayer("fading", nodClip, { weight: 0.0004, targetWeight: 0, fadeSpeed: 8 });
+runtimeBackwardCompatibleUpdate.update(1);
+assert.equal(runtimeBackwardCompatibleUpdate.evaluate().activeLayers.length, 0, "update without root-motion collection should keep removing faded layers");
+
+const runtimeRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeRootMotion.setLayer("move", motionClip, { weight: 1, targetWeight: 1, loop: true });
+const runtimeRootMotionUpdate = runtimeRootMotion.update(0.5, { collectRootMotion: true });
+assert.deepEqual(runtimeRootMotionUpdate.rootMotionDelta.translation, [5, 0, 0], "runtime root motion should collect root carrier interval translation");
+assert.ok(
+  quaternionNearlyEqual(runtimeRootMotionUpdate.rootMotionDelta.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 2), 1e-5),
+  "runtime root motion should collect root carrier interval rotation"
+);
+assert.equal(runtimeRootMotionUpdate.rootMotionLayers[0]?.carrier.joint, "root");
+assert.equal(runtimeRootMotion.evaluate().localPose[0]!.translation[0], 5, "root-motion collection should not strip or separately apply pose motion");
+
+const runtimeHumanoidRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeHumanoidRootMotion.setLayer("hips-move", motionClip, { weight: 1, targetWeight: 1, motionCarrier: { humanBone: "hips" } });
+const runtimeHumanoidMotionUpdate = runtimeHumanoidRootMotion.update(0.5, { collectRootMotion: true });
+assert.deepEqual(runtimeHumanoidMotionUpdate.rootMotionDelta.translation, [0, 0, 3], "runtime root motion should support explicit humanoid carriers");
+assert.equal(runtimeHumanoidMotionUpdate.rootMotionLayers[0]?.carrier.joint, "hips");
+
+const runtimeInvalidRootMotion = new AnimationRuntime(motionSkeleton);
+const runtimeInvalidLayer = runtimeInvalidRootMotion.setLayer("invalid", motionClip, { weight: 1, targetWeight: 1, loop: true });
+runtimeInvalidLayer.time = Number.POSITIVE_INFINITY;
+runtimeInvalidLayer.speed = Number.POSITIVE_INFINITY;
+const invalidRootMotionUpdate = runtimeInvalidRootMotion.update(Number.NaN, { collectRootMotion: true });
+assert.deepEqual(invalidRootMotionUpdate.rootMotionDelta, identityTransform(), "non-finite root-motion update input should produce identity motion");
+assert.equal(invalidRootMotionUpdate.rootMotionLayers.length, 0, "non-finite root-motion update input should not emit unsafe layer deltas");
+
+const weightedMotionA: AnimationClip = {
+  id: "weighted-motion-a",
+  duration: 1,
+  tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) }]
+};
+const weightedMotionB: AnimationClip = {
+  id: "weighted-motion-b",
+  duration: 1,
+  tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 2, 0, 0]) }]
+};
+const runtimeWeightedRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeWeightedRootMotion.setLayer("motion-a", weightedMotionA, { weight: 3, targetWeight: 3, priority: 2 });
+runtimeWeightedRootMotion.setLayer("motion-b", weightedMotionB, { weight: 1, targetWeight: 1, priority: 2 });
+const weightedRootMotionUpdate = runtimeWeightedRootMotion.update(0.5, { collectRootMotion: true });
+assert.ok(Math.abs(weightedRootMotionUpdate.rootMotionDelta.translation[0] - 4) < 1e-6, "same-priority root motion should normalize positive override weights");
+assert.ok(weightedRootMotionUpdate.rootMotionDelta.translation.every(Number.isFinite), "weighted root motion should stay finite");
+assert.deepEqual(
+  weightedRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.normalizedWeight]),
+  [["motion-a", 0.75], ["motion-b", 0.25]],
+  "weighted root-motion diagnostics should be deterministic"
+);
+
+const runtimeAdditiveRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeAdditiveRootMotion.setLayer("base", weightedMotionB, { weight: 1, targetWeight: 1 });
+runtimeAdditiveRootMotion.setLayer("additive-motion", weightedMotionA, { weight: 1, targetWeight: 1, blendMode: "additive" });
+const additiveRootMotionUpdate = runtimeAdditiveRootMotion.update(0.5, { collectRootMotion: true });
+assert.deepEqual(additiveRootMotionUpdate.rootMotionDelta.translation, [1, 0, 0], "additive layers should not contribute to runtime root motion");
+assert.deepEqual(additiveRootMotionUpdate.rootMotionLayers.map((layer) => layer.id), ["base"]);
+
 const sanitizedRuntime = new AnimationRuntime(skeleton);
 const sanitizedLayer = sanitizedRuntime.setLayer("bad-inputs", nodClip, {
   time: Number.NaN,

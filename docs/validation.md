@@ -21,7 +21,7 @@ Current coverage includes:
 - local-to-model pose conversion;
 - Ozz-style attachment transform composition from joint model matrices plus offsets, including target resolution, pre-resolved attachment bindings, batch bound evaluation, offset sanitization/rejection, and invalid input handling;
 - weighted pose blending with masks;
-- runtime layer evaluation, subtractive additive runtime weights, opt-in evaluation diagnostics, and override crossfade orchestration;
+- runtime layer evaluation, explicit override-layer root-motion collection, subtractive additive runtime weights, opt-in evaluation diagnostics, and override crossfade orchestration;
 - declarative track-name masks;
 - Three adapter clip binding and runtime lane construction;
 - look-at target distribution;
@@ -36,6 +36,8 @@ Current coverage includes:
 ## Runtime Evaluation Diagnostics
 
 `AnimationRuntime.evaluate()` keeps the realtime path lean by default and returns only the evaluated local/model poses plus active layer metadata. Consumers that need Ozz-style validation around a frame can call `evaluate({ diagnostics: true })` to receive sampled-layer and final local-pose diagnostics with layer id, clip id, joint/index, track/sample where applicable, and validation messages while still getting a normalized finite output pose. Sample-stage diagnostics also include translation, scale, rotation, and source-rest quaternion repair events from the tolerant sampler path.
+
+`AnimationRuntime.update(deltaSeconds, { collectRootMotion: true })` returns a finite explicit `rootMotionDelta` plus deterministic per-layer contribution metadata for active override layers. Additive layers are excluded from root-motion collection, and invalid/non-finite timing resolves to identity motion.
 
 ## Waifu Integration Gates
 

@@ -40,8 +40,9 @@ npm test
 - `skeleton`: Ozz-style skeleton representation, humanoid mapping, local-to-model conversion.
 - `attachments`: renderer-agnostic Ozz-style joint attachment transform helpers.
 - `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
+- `motion`: explicit motion-carrier sampling and interval deltas for root-motion consumers.
 - `pose`: rest pose creation, blending, additive layers, masks, pose validation.
-- `runtime`: deterministic layer stack, crossfades, priorities, final local/model pose evaluation.
+- `runtime`: deterministic layer stack, crossfades, priorities, explicit root-motion delta collection, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters.
 - `manifest`: manifest includes, duplicate/id validation, clip asset inspection, usable/rejected clip helpers.
 - `procedural`: look-at distribution, seeded attention/idle scheduling helpers.
@@ -62,7 +63,8 @@ The canonical frame pipeline is:
 4. Apply partial-body and additive layers through masks.
 5. Normalize and validate local pose quaternions.
 6. Convert local pose to model-space matrices.
-7. Optionally run procedural look-at/aim, foot-plant, and IK jobs through explicit library hooks for consumers that opt into procedural skeletal corrections.
-8. Emit skeletal pose plus facial/viseme expression weights and non-skeletal cue data to the consumer.
+7. Optionally collect blended motion-carrier interval deltas from active override layers as explicit root-motion output; collection does not apply or strip motion from the skeleton pose.
+8. Optionally run procedural look-at/aim, foot-plant, and IK jobs through explicit library hooks for consumers that opt into procedural skeletal corrections.
+9. Emit skeletal pose plus facial/viseme expression weights and non-skeletal cue data to the consumer.
 
 Waifu remains responsible for VRM model loading, browser rendering, websocket state, audio playback, and visual capture. Under the current Waifu app policy, authored animation clips played through Three `AnimationMixer` are the only runtime source of skeletal bone/joint rotations. `Waifu-Animation` still owns reusable math, manifests, validation, retargeting, Three clip binding, runtime clip lane setup, generic lane blend/action policy, deterministic animation decisions, non-skeletal look-at/face/viseme cues, and optional IK/look-at/foot-plant/procedural job APIs for other consumers or future Waifu policies.

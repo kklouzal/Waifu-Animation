@@ -1,5 +1,6 @@
-import { type Mat4, dampAlpha, finiteNonNegative, finiteSigned } from "./math.js";
+import { type Mat4, type Transform, dampAlpha, finiteNonNegative, finiteSigned, identityTransform, lerpTransform, multiplyQuat } from "./math.js";
 import { type AnimationClip, type ClipValidationIssue, type SampleRepairDiagnostic, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
+import { type MotionCarrier, sampleMotionIntervalDelta } from "./motion.js";
 import {
   type JointMask,
   type Pose,
@@ -27,6 +28,7 @@ export type AnimationLayer = {
   priority: number;
   loop: boolean;
   blendMode: LayerBlendMode;
+  motionCarrier?: MotionCarrier;
   mask?: JointMask;
 };
 
@@ -48,6 +50,28 @@ export type CrossfadeOptions = AnimationLayerOptions & {
 export type AnimationRuntimeOptions = {
   /** Ozz-style rest-pose fallback threshold for override blending. */
   blendThreshold?: number;
+};
+
+export type RuntimeUpdateOptions = {
+  /** Collect an explicit blended motion-carrier interval delta for this update. */
+  collectRootMotion?: boolean;
+};
+
+export type RuntimeRootMotionLayerDelta = {
+  id: string;
+  clipId: string;
+  priority: number;
+  weight: number;
+  normalizedWeight: number;
+  fromTime: number;
+  toTime: number;
+  carrier: { jointIndex: number; joint: string };
+  delta: Transform;
+};
+
+export type RuntimeUpdateResult = {
+  rootMotionDelta: Transform;
+  rootMotionLayers: RuntimeRootMotionLayerDelta[];
 };
 
 export type RuntimeEvaluateOptions = {
@@ -96,6 +120,7 @@ export class AnimationRuntime {
       priority: finiteNonNegative(options.priority, 0),
       loop: options.loop ?? clip.loop ?? false,
       blendMode,
+      ...(options.motionCarrier ? { motionCarrier: options.motionCarrier } : {}),
       ...(options.mask ? { mask: options.mask } : {})
     };
     this.layers.set(id, layer);
@@ -120,6 +145,7 @@ export class AnimationRuntime {
       priority,
       loop: options.loop ?? clip.loop ?? existing?.loop ?? false,
       blendMode,
+      ...(options.motionCarrier ? { motionCarrier: options.motionCarrier } : existing?.motionCarrier ? { motionCarrier: existing.motionCarrier } : {}),
       ...(options.mask ? { mask: options.mask } : existing?.mask ? { mask: existing.mask } : {})
     };
     this.layers.set(id, layer);
@@ -155,15 +181,32 @@ export class AnimationRuntime {
     this.layers.clear();
   }
 
-  update(deltaSeconds: number): void {
+  update(deltaSeconds: number, options: RuntimeUpdateOptions = {}): RuntimeUpdateResult {
     const delta = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
+    const intervals: RuntimeMotionInterval[] = [];
     for (const layer of this.layers.values()) {
       sanitizeLayerState(layer);
+      const fromTime = layer.time;
       layer.time += delta * layer.speed;
       const alpha = dampAlpha(layer.fadeSpeed, delta);
       layer.weight += (layer.targetWeight - layer.weight) * alpha;
+      if (options.collectRootMotion && layer.blendMode === "override" && layer.weight > 0.0001 && delta > 0) {
+        const sampleOptions = {
+          ...(layer.motionCarrier ? { carrier: layer.motionCarrier } : {}),
+          loop: layer.loop,
+          restPose: this.restPose,
+          skipUnsupportedTracks: true
+        };
+        intervals.push({
+          layer,
+          fromTime,
+          toTime: layer.time,
+          interval: sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, layer.time, sampleOptions)
+        });
+      }
       if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) this.layers.delete(layer.id);
     }
+    return options.collectRootMotion ? blendRootMotionIntervals(intervals) : { rootMotionDelta: identityTransform(), rootMotionLayers: [] };
   }
 
   evaluate(options: RuntimeEvaluateOptions = {}): RuntimeEvaluation {
@@ -244,6 +287,67 @@ function sanitizeLayerState(layer: AnimationLayer): AnimationLayer {
 
 function isLayerActive(layer: AnimationLayer): boolean {
   return layer.blendMode === "additive" ? Math.abs(layer.weight) > 0.0001 : layer.weight > 0.0001;
+}
+
+type RuntimeMotionInterval = {
+  layer: AnimationLayer;
+  fromTime: number;
+  toTime: number;
+  interval: ReturnType<typeof sampleMotionIntervalDelta>;
+};
+
+function blendRootMotionIntervals(intervals: RuntimeMotionInterval[]): RuntimeUpdateResult {
+  let rootMotionDelta = identityTransform();
+  const rootMotionLayers: RuntimeRootMotionLayerDelta[] = [];
+  const active = intervals
+    .filter(({ layer }) => layer.blendMode === "override" && layer.weight > 0.0001)
+    .sort((a, b) => a.layer.priority - b.layer.priority || a.layer.id.localeCompare(b.layer.id));
+
+  for (let index = 0; index < active.length; ) {
+    const priority = active[index]!.layer.priority;
+    const group: RuntimeMotionInterval[] = [];
+    let totalWeight = 0;
+    while (index < active.length && active[index]!.layer.priority === priority) {
+      const item = active[index]!;
+      group.push(item);
+      totalWeight += finiteNonNegative(item.layer.weight, 0);
+      index += 1;
+    }
+    if (totalWeight <= 0) continue;
+
+    let groupDelta = identityTransform();
+    for (const item of group) {
+      const normalizedWeight = finiteNonNegative(item.layer.weight, 0) / totalWeight;
+      const weightedDelta = lerpTransform(identityTransform(), item.interval.delta, normalizedWeight);
+      groupDelta = composeRootMotionDelta(groupDelta, weightedDelta);
+      rootMotionLayers.push({
+        id: item.layer.id,
+        clipId: item.layer.clip.id,
+        priority: item.layer.priority,
+        weight: item.layer.weight,
+        normalizedWeight,
+        fromTime: item.fromTime,
+        toTime: item.toTime,
+        carrier: { jointIndex: item.interval.from.jointIndex, joint: item.interval.from.joint },
+        delta: item.interval.delta
+      });
+    }
+    rootMotionDelta = groupDelta;
+  }
+
+  return { rootMotionDelta, rootMotionLayers };
+}
+
+function composeRootMotionDelta(a: Transform, b: Transform): Transform {
+  return {
+    translation: [
+      a.translation[0] + b.translation[0],
+      a.translation[1] + b.translation[1],
+      a.translation[2] + b.translation[2]
+    ],
+    rotation: multiplyQuat(a.rotation, b.rotation),
+    scale: [a.scale[0] * b.scale[0], a.scale[1] * b.scale[1], a.scale[2] * b.scale[2]]
+  };
 }
 
 function pushPoseDiagnostics(
