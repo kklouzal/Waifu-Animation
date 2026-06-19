@@ -31,6 +31,7 @@ export type ThreeAnimationClipOptions = {
   playback?: AnimationManifestEntry["playback"];
   resolveBone: ThreeBoneResolver;
   targetRestQuaternion?: (humanBone: string, bone: Object3D) => ArrayLike<number> | null | undefined;
+  sourceBasisQuaternion?: (humanBone: string, bone: Object3D) => ArrayLike<number> | null | undefined;
   logger?: Pick<Console, "warn">;
   minimumDuration?: number;
 };
@@ -290,7 +291,8 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
         sampleWindow.values,
         track.sourceRestQuaternion,
         options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray(),
-        String(boneName)
+        String(boneName),
+        options.sourceBasisQuaternion?.(String(boneName), bone)
       );
       if (invalidSamples > 0) {
         options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, invalidSamples);

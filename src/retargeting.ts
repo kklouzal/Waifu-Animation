@@ -7,12 +7,16 @@ export type RetargetedQuaternionTrack = {
   invalidSamples: number;
 };
 
-export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sourceSample: Quat, humanBone?: string): Quat {
+export function retargetQuaternionSample(sourceRest: Quat, targetRest: Quat, sourceSample: Quat, humanBone?: string, sourceBasis?: ArrayLike<number>): Quat {
   const srcRest = normalizeQuat(sourceRest);
   const dstRest = normalizeQuat(targetRest);
   const srcSample = normalizeQuat(sourceSample, srcRest);
   void humanBone;
-  const sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
+  let sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
+  if (sourceBasis) {
+    const basis = cloneNormalizedQuat(sourceBasis);
+    sourceDelta = multiplyQuat(multiplyQuat(basis, sourceDelta), invertQuat(basis));
+  }
   return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
 }
 
@@ -20,7 +24,8 @@ export function retargetQuaternionTrackValues(
   values: readonly number[],
   sourceRest: ArrayLike<number> | undefined,
   targetRest: ArrayLike<number>,
-  humanBone?: string
+  humanBone?: string,
+  sourceBasis?: ArrayLike<number> | null | undefined
 ): RetargetedQuaternionTrack {
   if (values.length % 4 !== 0) throw new Error("quaternion values must be a multiple of 4");
   const output: number[] = [];
@@ -32,7 +37,7 @@ export function retargetQuaternionTrackValues(
     const rawSample: Quat = [values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1];
     if (isMalformedQuaternionSample(rawSample)) invalidSamples += 1;
     const sample = normalizeQuat(rawSample, srcRest ?? undefined);
-    let retargeted = srcRest ? retargetQuaternionSample(srcRest, dstRest, sample, humanBone) : sample;
+    let retargeted = srcRest ? retargetQuaternionSample(srcRest, dstRest, sample, humanBone, sourceBasis ?? undefined) : sample;
     if (!retargeted.every(Number.isFinite)) {
       invalidSamples += 1;
       retargeted = previous;

@@ -19,7 +19,7 @@ Current coverage includes:
 - manifest metadata hardening, including malformed runtime JSON status/root-motion policy rejection and rejected-report surfacing;
 - local clip sampling;
 - local-to-model pose conversion;
-- Ozz-style attachment transform composition from joint model matrices plus offsets, including target resolution and invalid input handling;
+- Ozz-style attachment transform composition from joint model matrices plus offsets, including target resolution, pre-resolved attachment bindings, batch bound evaluation, offset sanitization/rejection, and invalid input handling;
 - weighted pose blending with masks;
 - runtime layer evaluation, subtractive additive runtime weights, opt-in evaluation diagnostics, and override crossfade orchestration;
 - declarative track-name masks;

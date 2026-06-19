@@ -69,6 +69,7 @@ import {
   poseDeltaMetric,
   poseRotationMetric,
   quatFromAxisAngle,
+  quatFromUnitVectors,
   rotateVec3ByQuat,
   multiplyQuat,
   invertQuat,
@@ -2651,6 +2652,52 @@ assert.ok(
     1e-5
   ),
   "lower-leg bone labels should not affect source-rest local delta retargeting"
+);
+
+const motusManLimbSourceBasis = quatFromUnitVectors([0, 0, 1], [1, 0, 0]);
+const motusLowerLegSourceRest = quatFromAxisAngle([0, 0, 1], 0.2);
+const motusLowerLegSourceFlexion = quatFromAxisAngle([0, 0, 1], Math.PI / 3);
+const motusLowerLegSourceSample = multiplyQuat(motusLowerLegSourceRest, motusLowerLegSourceFlexion);
+const motusLowerLegUncorrectedDirection = rotateVec3ByQuat(
+  retargetQuaternionSample(motusLowerLegSourceRest, [0, 0, 0, 1], motusLowerLegSourceSample),
+  [0, -1, 0]
+);
+const motusLowerLegCorrectedDirection = rotateVec3ByQuat(
+  retargetQuaternionSample(motusLowerLegSourceRest, [0, 0, 0, 1], motusLowerLegSourceSample, "leftLowerLeg", motusManLimbSourceBasis),
+  [0, -1, 0]
+);
+assert.ok(Math.abs(motusLowerLegUncorrectedDirection[0]!) > 0.85, "MotusMan lower-leg Z-axis flexion reproduces sideways VRM shin motion without a source-basis correction");
+assert.ok(
+  Math.abs(motusLowerLegCorrectedDirection[0]!) < 1e-5 && motusLowerLegCorrectedDirection[2]! < -0.85,
+  "MotusMan lower-leg source-basis correction should turn sideways shin motion into forward/back flexion"
+);
+
+const motusBasisThreeBones = createSingleLimbBones([0, 0, 0, 1], "leftLowerLeg", "leftFoot", [0, -1, 0]);
+const motusBasisThreeClip = createThreeAnimationClip(
+  {
+    id: "motusman-source-basis-lower-leg",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "leftLowerLeg",
+        property: "quaternion",
+        sourceRestQuaternion: Float32Array.from(motusLowerLegSourceRest),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([...motusLowerLegSourceRest, ...motusLowerLegSourceSample])
+      }
+    ]
+  },
+  {
+    resolveBone: (bone) => (bone === "leftLowerLeg" ? motusBasisThreeBones.upper : null),
+    targetRestQuaternion: () => [0, 0, 0, 1],
+    sourceBasisQuaternion: () => motusManLimbSourceBasis
+  }
+);
+sampleThreeClipOnce(motusBasisThreeBones.root, motusBasisThreeClip);
+const motusBasisThreeDirection = readChildDirection(motusBasisThreeBones.upper, motusBasisThreeBones.lower);
+assert.ok(
+  vectorNearlyEqual(motusBasisThreeDirection, motusLowerLegCorrectedDirection, 1e-5),
+  "Three retargeting should apply caller-provided source-basis correction before binding MotusMan limb tracks"
 );
 
 const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);

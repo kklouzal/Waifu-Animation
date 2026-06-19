@@ -6,7 +6,7 @@
 
 - `math`: vectors, quaternions, transforms, matrices, deterministic random helpers, damping, interpolation, and quaternion vector-alignment helpers.
 - `skeleton`: parent-index skeletons, humanoid mappings, rest poses, and local-to-model conversion.
-- `attachments`: Ozz-style joint attachment transform composition for props, targets, and other renderer-agnostic consumers.
+- `attachments`: Ozz-style joint attachment transform composition for props, targets, and other renderer-agnostic consumers, including reusable bindings that pre-resolve attachment joints and offset matrices.
 - `clip`: decoded binary clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
 - `binary`: versioned `.waifuanim.bin` encoding and decoding for animation keyframe payloads.
 - `pose`: pose cloning, normalized blending, additive deltas, joint masks, and pose validation.
@@ -49,6 +49,8 @@ The canonical model mirrors Ozz Animation's runtime flow:
 8. Emit skeletal pose data and expression/viseme weights to the consumer.
 
 Runtime evaluation diagnostics are opt-in through `AnimationRuntime.evaluate({ diagnostics: true })`. When enabled, active sampled layer poses and the composed local pose are validated with layer/clip context before the final pose is normalized and converted to model space. The same path surfaces tolerant sampler repairs for malformed translation, scale, rotation, and source-rest quaternion samples, so consumers can log repaired or invalid source data without paying that cost on every frame by default.
+
+Attachment helpers mirror the Ozz attach sample: consumers select a joint from the LocalToModel/model-space matrix array and concatenate a joint-relative offset matrix after that joint model matrix. `createAttachmentBinding` and `createAttachmentBindings` let consumers resolve joint names or humanoid aliases and sanitize offsets once during setup; `computeBoundAttachmentTransform` and `computeBoundAttachmentTransforms` then evaluate attachments directly from model-space pose matrices without per-frame name lookup or offset recomposition.
 
 Ozz's C++ implementation and SIMD memory layout are not copied. Runtime animation keyframes are shipped as versioned binary payloads and decoded into typed arrays before sampling. JSON remains metadata-only for manifests, curation, includes, behavior hints, and validation policy.
 
