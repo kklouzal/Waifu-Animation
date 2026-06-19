@@ -16,7 +16,7 @@ import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
 import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, dampValue, euclideanModulo, finiteNonNegative, isFiniteNumber, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
 import { type AnimationManifestEntry } from "./manifest.js";
 import {
-  BASE_PROCEDURAL_TRACK_POLICY,
+  AUTHORED_BASE_TRACK_POLICY,
   OVERLAY_UPPER_BODY_TRACK_POLICY,
   ROOT_TRANSLATION_EXCLUDE_POLICY,
   type TrackMaskPolicy,
@@ -368,7 +368,7 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
     return [createThreeRuntimeClip(entry, mixer, animationClip, "overlay")];
   }
 
-  applyThreeTrackPolicy(animationClip, BASE_PROCEDURAL_TRACK_POLICY);
+  applyThreeTrackPolicy(animationClip, AUTHORED_BASE_TRACK_POLICY);
   animationClip.name = `${entry.id}:base:a`;
   const secondClip = animationClip.clone();
   secondClip.name = `${entry.id}:base:b`;

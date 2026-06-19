@@ -53,6 +53,8 @@ import {
   distributeLookAt,
   applySourceTrackPolicy,
   filterTracksByNamePolicy,
+  AUTHORED_BASE_TRACK_POLICY,
+  AUTHORED_BASE_SOURCE_TRACK_POLICY,
   BASE_PROCEDURAL_TRACK_POLICY,
   BASE_PROCEDURAL_SOURCE_TRACK_POLICY,
   LOCOMOTION_BASE_SOURCE_TRACK_POLICY,
@@ -2161,17 +2163,45 @@ assert.deepEqual(
       { name: "rightHand.quaternion" },
       { name: "leftUpperLeg.quaternion" }
     ],
-    BASE_PROCEDURAL_TRACK_POLICY
+    AUTHORED_BASE_TRACK_POLICY
   ).map((track) => track.name),
-  ["hips.position", "spine.quaternion", "leftUpperLeg.quaternion"],
-  "base procedural policy should leave arms to procedural posture instead of source-loop rest poses"
+  [
+    "hips.position",
+    "spine.quaternion",
+    "leftShoulder.quaternion",
+    "leftUpperArm.quaternion",
+    "rightLowerArm.quaternion",
+    "rightHand.quaternion",
+    "leftUpperLeg.quaternion"
+  ],
+  "authored base policy should preserve source-driven arm and leg rotations"
 );
 
 const baseAuthoredClip = makeAuthoredLoopClip("base-authored-upper", ["hips.position", "spine", "leftShoulder", "rightUpperArm", "leftHand", "rightIndexProximal", "leftUpperLeg"]);
 assert.deepEqual(
+  applySourceTrackPolicy(baseAuthoredClip, AUTHORED_BASE_SOURCE_TRACK_POLICY).tracks.map((track) => track.humanBone ?? track.joint),
+  ["hips", "spine", "leftShoulder", "rightUpperArm", "leftHand", "leftUpperLeg"],
+  "authored base source policy should keep arm tracks before Three track names become UUID based"
+);
+assert.deepEqual(
+  filterTracksByNamePolicy(
+    [
+      { name: "leftShoulder.quaternion" },
+      { name: "leftUpperArm.quaternion" },
+      { name: "rightLowerArm.quaternion" },
+      { name: "rightHand.quaternion" },
+      { name: "leftIndexProximal.quaternion" },
+      { name: "leftUpperLeg.quaternion" }
+    ],
+    BASE_PROCEDURAL_TRACK_POLICY
+  ).map((track) => track.name),
+  ["leftShoulder.quaternion", "leftUpperArm.quaternion", "rightLowerArm.quaternion", "rightHand.quaternion", "leftUpperLeg.quaternion"],
+  "legacy base policy alias should no longer underdrive authored arms"
+);
+assert.deepEqual(
   applySourceTrackPolicy(baseAuthoredClip, BASE_PROCEDURAL_SOURCE_TRACK_POLICY).tracks.map((track) => track.humanBone ?? track.joint),
-  ["hips", "spine", "leftUpperLeg"],
-  "base source policy should strip authored arm and finger tracks before Three track names become UUID based"
+  ["hips", "spine", "leftShoulder", "rightUpperArm", "leftHand", "leftUpperLeg"],
+  "legacy base source policy alias should no longer underdrive authored arms"
 );
 
 const locomotionAuthoredClip = makeAuthoredLoopClip("locomotion-authored-upper", [
