@@ -2394,6 +2394,29 @@ assert.deepEqual(
   "weighted root-motion diagnostics should be deterministic"
 );
 
+const weakPriorityRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
+weakPriorityRootMotion.setLayer("base-motion", weightedMotionA, { weight: 1, targetWeight: 1, priority: 0 });
+weakPriorityRootMotion.setLayer("weak-override-motion", weightedMotionB, { weight: 0.05, targetWeight: 0.05, priority: 1 });
+const weakPriorityRootMotionUpdate = weakPriorityRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  Math.abs(weakPriorityRootMotionUpdate.rootMotionDelta.translation[0] - 6) < 1e-6,
+  "under-threshold higher-priority root motion should partially blend with lower-priority fallback motion"
+);
+assert.deepEqual(
+  weakPriorityRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.normalizedWeight]),
+  [["base-motion", 1], ["weak-override-motion", 1]],
+  "priority fallback root-motion diagnostics should preserve per-group normalized weights"
+);
+
+const thresholdPriorityRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
+thresholdPriorityRootMotion.setLayer("base-motion", weightedMotionA, { weight: 1, targetWeight: 1, priority: 0 });
+thresholdPriorityRootMotion.setLayer("threshold-override-motion", weightedMotionB, { weight: 0.1, targetWeight: 0.1, priority: 1 });
+const thresholdPriorityRootMotionUpdate = thresholdPriorityRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  Math.abs(thresholdPriorityRootMotionUpdate.rootMotionDelta.translation[0] - 2) < 1e-6,
+  "at-threshold higher-priority root motion should fully replace lower-priority fallback motion"
+);
+
 const oppositeMotionA: AnimationClip = {
   id: "opposite-motion-a",
   duration: 1,
@@ -3013,6 +3036,41 @@ const motusBasisThreeDirection = readChildDirection(motusBasisThreeBones.upper, 
 assert.ok(
   vectorNearlyEqual(motusBasisThreeDirection, motusLowerLegCorrectedDirection, 1e-5),
   "Three retargeting should apply caller-provided source-basis correction before binding MotusMan limb tracks"
+);
+
+const motusBasisCoreSkeleton = createSkeleton([
+  { name: "leftLowerLeg", humanoid: "leftLowerLeg" },
+  { name: "leftFoot", parentName: "leftLowerLeg", humanoid: "leftFoot", rest: { translation: [0, -1, 0] } }
+]);
+const motusBasisCoreClip: AnimationClip = {
+  id: "motusman-source-basis-core-lower-leg",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "leftLowerLeg",
+      property: "quaternion",
+      sourceRestQuaternion: Float32Array.from(motusLowerLegSourceRest),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([...motusLowerLegSourceRest, ...motusLowerLegSourceSample])
+    }
+  ]
+};
+const motusBasisCorePose = sampleClipToPose(motusBasisCoreSkeleton, motusBasisCoreClip, 1, {
+  sourceBasisQuaternion: () => motusManLimbSourceBasis
+});
+assert.ok(
+  vectorNearlyEqual(rotateVec3ByQuat(motusBasisCorePose[0]!.rotation, [0, -1, 0]), motusLowerLegCorrectedDirection, 1e-5),
+  "core pose sampling should apply caller-provided source-basis correction before local-pose retargeting"
+);
+const motusBasisCoreRuntime = new AnimationRuntime(motusBasisCoreSkeleton);
+motusBasisCoreRuntime.setLayer("motus-lower-leg", motusBasisCoreClip, {
+  time: 1,
+  weight: 1,
+  sourceBasisQuaternion: () => motusManLimbSourceBasis
+});
+assert.ok(
+  vectorNearlyEqual(rotateVec3ByQuat(motusBasisCoreRuntime.evaluate().localPose[0]!.rotation, [0, -1, 0]), motusLowerLegCorrectedDirection, 1e-5),
+  "AnimationRuntime should pass source-basis correction through to sampled mocap layers"
 );
 
 const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);

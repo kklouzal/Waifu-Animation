@@ -40,6 +40,7 @@ export type SampleOptions = {
   loop?: boolean;
   restPose?: readonly Transform[];
   diagnostics?: SampleRepairDiagnostic[];
+  sourceBasisQuaternion?: (humanBone: string, jointIndex: number) => ArrayLike<number> | null | undefined;
   /** Skip structurally unsupported external channels after validation has reported them. */
   skipUnsupportedTracks?: boolean;
 };
@@ -255,7 +256,9 @@ export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSe
     const transform = cloneTransform(output[jointIndex]);
     if (property === "translation") transform.translation = sampled as [number, number, number];
     if (property === "scale") transform.scale = sampled as [number, number, number];
-    if (property === "rotation") transform.rotation = retargetSampledRotation(track, restTransform.rotation, sampled as Quat, options.diagnostics, diagnosticContext);
+    if (property === "rotation") {
+      transform.rotation = retargetSampledRotation(track, restTransform.rotation, sampled as Quat, jointIndex, options, diagnosticContext);
+    }
     output[jointIndex] = transform;
   }
   return output;
@@ -265,17 +268,25 @@ function retargetSampledRotation(
   track: AnimationTrack,
   targetRest: Quat | undefined,
   sampled: Quat,
-  diagnostics?: SampleRepairDiagnostic[],
+  jointIndex: number,
+  options: SampleOptions,
   diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">
 ): Quat {
   const sourceRest = track.sourceRestQuaternion;
   if (!sourceRest || !targetRest) return sampled;
   if (sourceRest.length !== 4) {
-    diagnostics?.push({ ...diagnosticContext, property: track.property, message: "sourceRestQuaternion was ignored because it does not contain exactly 4 values" });
+    options.diagnostics?.push({ ...diagnosticContext, property: track.property, message: "sourceRestQuaternion was ignored because it does not contain exactly 4 values" });
     return sampled;
   }
-  pushSourceRestRepairDiagnostic(diagnostics, diagnosticContext, track, sourceRest);
-  return retargetQuaternionSample(cloneNormalizedQuat(sourceRest), targetRest, sampled, String(track.humanBone ?? track.joint ?? ""));
+  pushSourceRestRepairDiagnostic(options.diagnostics, diagnosticContext, track, sourceRest);
+  const boneName = String(track.humanBone ?? track.joint ?? "");
+  return retargetQuaternionSample(
+    cloneNormalizedQuat(sourceRest),
+    targetRest,
+    sampled,
+    boneName,
+    options.sourceBasisQuaternion?.(boneName, jointIndex) ?? undefined
+  );
 }
 
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {

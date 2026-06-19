@@ -1,4 +1,4 @@
-import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, dampAlpha, dotQuat, finiteNonNegative, finiteSigned, identityTransform, normalizeQuat } from "./math.js";
+import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, dampAlpha, dotQuat, finiteNonNegative, finiteSigned, identityTransform, lerpTransform, normalizeQuat } from "./math.js";
 import { type AnimationClip, type ClipValidationIssue, type SampleRepairDiagnostic, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
 import { type MotionCarrier, sampleMotionIntervalDelta } from "./motion.js";
 import {
@@ -30,6 +30,7 @@ export type AnimationLayer = {
   blendMode: LayerBlendMode;
   motionCarrier?: MotionCarrier;
   mask?: JointMask;
+  sourceBasisQuaternion?: (humanBone: string, jointIndex: number) => ArrayLike<number> | null | undefined;
 };
 
 export type AnimationLayerOptions = Partial<Omit<AnimationLayer, "id" | "clip" | "time">> & {
@@ -121,7 +122,8 @@ export class AnimationRuntime {
       loop: options.loop ?? clip.loop ?? false,
       blendMode,
       ...(options.motionCarrier ? { motionCarrier: options.motionCarrier } : {}),
-      ...(options.mask ? { mask: options.mask } : {})
+      ...(options.mask ? { mask: options.mask } : {}),
+      ...(options.sourceBasisQuaternion ? { sourceBasisQuaternion: options.sourceBasisQuaternion } : {})
     };
     this.layers.set(id, layer);
     return layer;
@@ -146,7 +148,12 @@ export class AnimationRuntime {
       loop: options.loop ?? clip.loop ?? existing?.loop ?? false,
       blendMode,
       ...(options.motionCarrier ? { motionCarrier: options.motionCarrier } : existing?.motionCarrier ? { motionCarrier: existing.motionCarrier } : {}),
-      ...(options.mask ? { mask: options.mask } : existing?.mask ? { mask: existing.mask } : {})
+      ...(options.mask ? { mask: options.mask } : existing?.mask ? { mask: existing.mask } : {}),
+      ...(options.sourceBasisQuaternion
+        ? { sourceBasisQuaternion: options.sourceBasisQuaternion }
+        : existing?.sourceBasisQuaternion
+          ? { sourceBasisQuaternion: existing.sourceBasisQuaternion }
+          : {})
     };
     this.layers.set(id, layer);
 
@@ -196,6 +203,7 @@ export class AnimationRuntime {
           ...(layer.motionCarrier ? { carrier: layer.motionCarrier } : {}),
           loop: layer.loop,
           restPose: this.restPose,
+          ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
           skipUnsupportedTracks: true
         };
         intervals.push({
@@ -208,7 +216,7 @@ export class AnimationRuntime {
       layer.time = finalizeLayerTime(layer, advancedTime);
       if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) this.layers.delete(layer.id);
     }
-    return options.collectRootMotion ? blendRootMotionIntervals(intervals) : { rootMotionDelta: identityTransform(), rootMotionLayers: [] };
+    return options.collectRootMotion ? blendRootMotionIntervals(intervals, this.blendThreshold) : { rootMotionDelta: identityTransform(), rootMotionLayers: [] };
   }
 
   evaluate(options: RuntimeEvaluateOptions = {}): RuntimeEvaluation {
@@ -224,8 +232,19 @@ export class AnimationRuntime {
       const sampleDiagnostics = diagnostics ? [] as SampleRepairDiagnostic[] : undefined;
       if (diagnostics) pushClipDiagnostics(diagnostics, validateClip(layer.clip, this.skeleton), layer, this.skeleton);
       const sampleOptions = sampleDiagnostics
-        ? { loop: layer.loop, restPose: this.restPose, diagnostics: sampleDiagnostics, skipUnsupportedTracks: true }
-        : { loop: layer.loop, restPose: this.restPose, skipUnsupportedTracks: true };
+        ? {
+            loop: layer.loop,
+            restPose: this.restPose,
+            diagnostics: sampleDiagnostics,
+            ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
+            skipUnsupportedTracks: true
+          }
+        : {
+            loop: layer.loop,
+            restPose: this.restPose,
+            ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
+            skipUnsupportedTracks: true
+          };
       const sampled = sampleClipToPose(this.skeleton, layer.clip, layer.time, sampleOptions);
       if (diagnostics) {
         pushSampleRepairDiagnostics(diagnostics, sampleDiagnostics ?? [], layer);
@@ -306,7 +325,7 @@ type RuntimeMotionInterval = {
   interval: ReturnType<typeof sampleMotionIntervalDelta>;
 };
 
-function blendRootMotionIntervals(intervals: RuntimeMotionInterval[]): RuntimeUpdateResult {
+function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold: number): RuntimeUpdateResult {
   let rootMotionDelta = identityTransform();
   const rootMotionLayers: RuntimeRootMotionLayerDelta[] = [];
   const active = intervals
@@ -340,7 +359,9 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[]): RuntimeUp
       });
     }
     const groupDelta = blendRootMotionGroup(group, totalWeight);
-    rootMotionDelta = groupDelta;
+    rootMotionDelta = totalWeight < threshold
+      ? lerpTransform(rootMotionDelta, groupDelta, totalWeight / threshold)
+      : groupDelta;
   }
 
   return { rootMotionDelta, rootMotionLayers };
