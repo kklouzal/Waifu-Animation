@@ -876,6 +876,86 @@ assert.ok(
   nonePolicyMovingRootInspection.issues.some((issue) => issue.message === "root-motion policy is none but root carrier translation moves"),
   "policy none should reject moving root carrier translation"
 );
+const playbackWindowInPlaceRootCarrierInspection = inspectClipAsset(
+  {
+    id: "walk-trimmed-in-place-root",
+    label: "Walk Trimmed In Place Root",
+    url: "/walk-trimmed-in-place-root.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    playback: { start: 0.25, end: 0.75 }
+  },
+  {
+    id: "walk-trimmed-in-place-root",
+    duration: 1,
+    tracks: [
+      {
+        joint: "root",
+        property: "translation",
+        times: toFloat32Array([0, 0.25, 0.75, 1]),
+        values: toFloat32Array([1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0])
+      }
+    ]
+  }
+);
+assert.equal(playbackWindowInPlaceRootCarrierInspection.accepted, true);
+assert.equal(
+  playbackWindowInPlaceRootCarrierInspection.issues.some(
+    (issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy" || issue.message === "root-motion policy is none but root carrier translation moves"
+  ),
+  false,
+  "root carrier motion outside the playback window should not trigger root-motion policy failures for an in-place segment"
+);
+const playbackWindowMovingRootCarrierInspection = inspectClipAsset(
+  {
+    id: "walk-trimmed-moving-root",
+    label: "Walk Trimmed Moving Root",
+    url: "/walk-trimmed-moving-root.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "none" } },
+    playback: { start: 0.25, end: 0.75 }
+  },
+  {
+    id: "walk-trimmed-moving-root",
+    duration: 1,
+    tracks: [
+      {
+        joint: "root",
+        property: "translation",
+        times: toFloat32Array([0, 0.25, 0.5, 0.75, 1]),
+        values: toFloat32Array([0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0.5, 0, 0, 0.5, 0, 0])
+      }
+    ]
+  }
+);
+assert.equal(playbackWindowMovingRootCarrierInspection.accepted, false);
+assert.ok(
+  playbackWindowMovingRootCarrierInspection.issues.some((issue) => issue.message === "root-motion policy is none but root carrier translation moves"),
+  "root carrier motion inside the playback window should still trigger root-motion policy failures"
+);
+const invalidPlaybackWindowRootCarrierInspection = inspectClipAsset(
+  {
+    id: "walk-invalid-playback-root",
+    label: "Walk Invalid Playback Root",
+    url: "/walk-invalid-playback-root.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    playback: { start: 0.75, end: 0.25 }
+  },
+  {
+    id: "walk-invalid-playback-root",
+    duration: 1,
+    tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+  }
+);
+assert.equal(invalidPlaybackWindowRootCarrierInspection.accepted, false);
+assert.ok(
+  invalidPlaybackWindowRootCarrierInspection.issues.some((issue) => issue.message === "invalid playback window 0.75..0.25"),
+  "invalid playback windows should still be reported"
+);
+assert.equal(
+  invalidPlaybackWindowRootCarrierInspection.issues.some((issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"),
+  false,
+  "invalid playback windows should not add a second root-motion movement failure"
+);
 assert.equal(
   inspectClipAsset(
     {

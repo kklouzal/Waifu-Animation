@@ -1,4 +1,4 @@
-import { type AnimationClip, type AnimationTrack, type ClipValidationIssue, normalizedTrackProperty, validateClip } from "./clip.js";
+import { type AnimationClip, type AnimationTrack, type ClipValidationIssue, normalizedTrackProperty, sampleTrack, validateClip } from "./clip.js";
 import { WAIFU_ANIMATION_BINARY_FORMAT } from "./binary.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
@@ -101,7 +101,8 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   const issues = validateClip(clip);
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
   const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
-  const movingRootCarrierTrack = clip.tracks.find(rootCarrierTranslationTrackHasMotion);
+  const playbackWindow = resolvePlaybackWindow(entry, clip);
+  const movingRootCarrierTrack = playbackWindow ? clip.tracks.find((track) => rootCarrierTranslationTrackHasMotion(track, playbackWindow)) : undefined;
   const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip);
   if (rootMotionPolicyIssue) {
     issues.push({ message: rootMotionPolicyIssue });
@@ -140,7 +141,7 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   if (entry.playback) {
     const start = entry.playback.start ?? 0;
     const end = entry.playback.end ?? clip.duration;
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5) {
+    if (!playbackWindow) {
       issues.push({ message: `invalid playback window ${start}..${end}` });
     }
   }
@@ -205,20 +206,32 @@ function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
   return normalizedTrackProperty(track.property) === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
 }
 
-function rootCarrierTranslationTrackHasMotion(track: AnimationTrack): boolean {
+function rootCarrierTranslationTrackHasMotion(track: AnimationTrack, window: { start: number; end: number }): boolean {
   if (!isRootCarrierTranslationTrack(track)) return false;
-  const sampleCount = Math.floor(track.values.length / 3);
-  if (sampleCount < 2) return false;
-  const baseX = track.values[0] ?? 0;
-  const baseY = track.values[1] ?? 0;
-  const baseZ = track.values[2] ?? 0;
-  for (let sample = 1; sample < sampleCount; sample += 1) {
-    const offset = sample * 3;
-    if (Math.abs((track.values[offset] ?? 0) - baseX) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
-    if (Math.abs((track.values[offset + 1] ?? 0) - baseY) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
-    if (Math.abs((track.values[offset + 2] ?? 0) - baseZ) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
+  if (track.times.length < 2 || track.values.length !== track.times.length * 3) return false;
+  const base = sampleTrack(track, window.start);
+  const sampleTimes = [window.end];
+  for (const time of track.times) {
+    if (time > window.start && time < window.end) sampleTimes.push(time);
+  }
+  for (const time of sampleTimes) {
+    if (translationSamplesDiffer(base, sampleTrack(track, time))) return true;
   }
   return false;
+}
+
+function translationSamplesDiffer(base: ArrayLike<number>, sample: ArrayLike<number>): boolean {
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (Math.abs((sample[axis] ?? 0) - (base[axis] ?? 0)) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
+  }
+  return false;
+}
+
+function resolvePlaybackWindow(entry: AnimationManifestEntry, clip: AnimationClip): { start: number; end: number } | null {
+  const start = entry.playback?.start ?? 0;
+  const end = entry.playback?.end ?? clip.duration;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5) return null;
+  return { start, end };
 }
 
 function isRootCarrierJointName(joint: string | undefined): boolean {
