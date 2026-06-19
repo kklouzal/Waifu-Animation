@@ -2322,6 +2322,36 @@ assert.ok(
 assert.equal(runtimeRootMotionUpdate.rootMotionLayers[0]?.carrier.joint, "root");
 assert.equal(runtimeRootMotion.evaluate().localPose[0]!.translation[0], 5, "root-motion collection should not strip or separately apply pose motion");
 
+const runtimeLoopingTime = new AnimationRuntime(motionSkeleton);
+runtimeLoopingTime.setLayer("move", motionClip, { weight: 1, targetWeight: 1, loop: true, time: 0.75 });
+const runtimeLoopingTimeUpdate = runtimeLoopingTime.update(2.5, { collectRootMotion: true });
+assert.equal(runtimeLoopingTime.evaluate().activeLayers[0]?.time, 0.25, "looping runtime layers should store wrapped clip time after update");
+assert.equal(runtimeLoopingTimeUpdate.rootMotionLayers[0]?.fromTime, 0.75, "root-motion diagnostics should keep the unwrapped interval start");
+assert.equal(runtimeLoopingTimeUpdate.rootMotionLayers[0]?.toTime, 3.25, "root-motion diagnostics should keep the unwrapped interval end");
+assert.deepEqual(runtimeLoopingTimeUpdate.rootMotionDelta.translation, [25, 0, 0], "multi-loop runtime root motion should accumulate the full update span");
+
+const runtimeLoopBoundary = new AnimationRuntime(motionSkeleton);
+runtimeLoopBoundary.setLayer("move", motionClip, { weight: 1, targetWeight: 1, loop: true, time: 0.5 });
+runtimeLoopBoundary.update(0.5);
+assert.equal(runtimeLoopBoundary.evaluate().activeLayers[0]?.time, 0, "looping runtime layers should wrap exact duration endpoints to zero");
+
+const runtimeNonLoopingTime = new AnimationRuntime(motionSkeleton);
+runtimeNonLoopingTime.setLayer("move-once", motionClip, { weight: 1, targetWeight: 1, loop: false, time: 0.75 });
+runtimeNonLoopingTime.update(2.5);
+assert.equal(runtimeNonLoopingTime.evaluate().activeLayers[0]?.time, 1, "non-looping runtime layers should clamp to finite clip duration");
+
+const runtimeZeroDurationClip: AnimationClip = { id: "runtime-zero-duration", duration: 0, loop: true, tracks: [] };
+const runtimeNonFiniteDurationClip: AnimationClip = { id: "runtime-non-finite-duration", duration: Number.NaN, loop: true, tracks: [] };
+const runtimeInvalidDurationTime = new AnimationRuntime(motionSkeleton);
+runtimeInvalidDurationTime.setLayer("zero", runtimeZeroDurationClip, { weight: 1, targetWeight: 1, loop: true, time: 0.25 });
+runtimeInvalidDurationTime.setLayer("nan", runtimeNonFiniteDurationClip, { weight: 1, targetWeight: 1, loop: true, time: 0.25 });
+runtimeInvalidDurationTime.update(0.5);
+assert.deepEqual(
+  runtimeInvalidDurationTime.evaluate().activeLayers.map((layer) => [layer.id, layer.time]),
+  [["nan", 0.75], ["zero", 0.75]],
+  "invalid-duration runtime layers should keep finite advanced times instead of wrapping through invalid durations"
+);
+
 const runtimeHumanoidRootMotion = new AnimationRuntime(motionSkeleton);
 runtimeHumanoidRootMotion.setLayer("hips-move", motionClip, { weight: 1, targetWeight: 1, motionCarrier: { humanBone: "hips" } });
 const runtimeHumanoidMotionUpdate = runtimeHumanoidRootMotion.update(0.5, { collectRootMotion: true });

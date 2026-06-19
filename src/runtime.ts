@@ -187,7 +187,8 @@ export class AnimationRuntime {
     for (const layer of this.layers.values()) {
       sanitizeLayerState(layer);
       const fromTime = layer.time;
-      layer.time += delta * layer.speed;
+      const advancedTime = layer.time + delta * layer.speed;
+      layer.time = advancedTime;
       const alpha = dampAlpha(layer.fadeSpeed, delta);
       layer.weight += (layer.targetWeight - layer.weight) * alpha;
       if (options.collectRootMotion && layer.blendMode === "override" && layer.weight > 0.0001 && delta > 0) {
@@ -200,10 +201,11 @@ export class AnimationRuntime {
         intervals.push({
           layer,
           fromTime,
-          toTime: layer.time,
-          interval: sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, layer.time, sampleOptions)
+          toTime: advancedTime,
+          interval: sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, advancedTime, sampleOptions)
         });
       }
+      layer.time = finalizeLayerTime(layer, advancedTime);
       if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) this.layers.delete(layer.id);
     }
     return options.collectRootMotion ? blendRootMotionIntervals(intervals) : { rootMotionDelta: identityTransform(), rootMotionLayers: [] };
@@ -287,6 +289,14 @@ function sanitizeLayerState(layer: AnimationLayer): AnimationLayer {
 
 function isLayerActive(layer: AnimationLayer): boolean {
   return layer.blendMode === "additive" ? Math.abs(layer.weight) > 0.0001 : layer.weight > 0.0001;
+}
+
+function finalizeLayerTime(layer: AnimationLayer, advancedTime: number): number {
+  const time = finiteNonNegative(advancedTime, 0);
+  const duration = layer.clip.duration;
+  if (!Number.isFinite(duration) || duration <= 0) return time;
+  if (!layer.loop) return Math.min(time, duration);
+  return time % duration;
 }
 
 type RuntimeMotionInterval = {
