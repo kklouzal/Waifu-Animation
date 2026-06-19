@@ -2366,6 +2366,12 @@ const invalidRootMotionUpdate = runtimeInvalidRootMotion.update(Number.NaN, { co
 assert.deepEqual(invalidRootMotionUpdate.rootMotionDelta, identityTransform(), "non-finite root-motion update input should produce identity motion");
 assert.equal(invalidRootMotionUpdate.rootMotionLayers.length, 0, "non-finite root-motion update input should not emit unsafe layer deltas");
 
+const runtimeZeroWeightRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeZeroWeightRootMotion.setLayer("zero", motionClip, { weight: 0, targetWeight: 0, loop: true });
+const zeroWeightRootMotionUpdate = runtimeZeroWeightRootMotion.update(0.5, { collectRootMotion: true });
+assert.deepEqual(zeroWeightRootMotionUpdate.rootMotionDelta, identityTransform(), "zero-weight root-motion layers should produce identity motion");
+assert.equal(zeroWeightRootMotionUpdate.rootMotionLayers.length, 0, "zero-weight root-motion layers should not emit diagnostics");
+
 const weightedMotionA: AnimationClip = {
   id: "weighted-motion-a",
   duration: 1,
@@ -2386,6 +2392,69 @@ assert.deepEqual(
   weightedRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.normalizedWeight]),
   [["motion-a", 0.75], ["motion-b", 0.25]],
   "weighted root-motion diagnostics should be deterministic"
+);
+
+const oppositeMotionA: AnimationClip = {
+  id: "opposite-motion-a",
+  duration: 1,
+  tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) }]
+};
+const oppositeMotionB: AnimationClip = {
+  id: "opposite-motion-b",
+  duration: 1,
+  tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, -10, 0, 0]) }]
+};
+const runtimeOppositeRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeOppositeRootMotion.setLayer("opposite-a", oppositeMotionA, { weight: 1, targetWeight: 1, priority: 3 });
+runtimeOppositeRootMotion.setLayer("opposite-b", oppositeMotionB, { weight: 1, targetWeight: 1, priority: 3 });
+const oppositeRootMotionUpdate = runtimeOppositeRootMotion.update(0.5, { collectRootMotion: true });
+assert.deepEqual(oppositeRootMotionUpdate.rootMotionDelta.translation, [0, 0, 0], "opposite equal root-motion directions should cancel instead of sequentially accumulating length");
+assert.deepEqual(oppositeRootMotionUpdate.rootMotionDelta.scale, [1, 1, 1], "blended root-motion deltas should keep identity scale");
+
+const orthogonalMotionA: AnimationClip = {
+  id: "orthogonal-motion-a",
+  duration: 1,
+  tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) }]
+};
+const orthogonalMotionB: AnimationClip = {
+  id: "orthogonal-motion-b",
+  duration: 1,
+  tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 10]) }]
+};
+const runtimeOrthogonalRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeOrthogonalRootMotion.setLayer("orthogonal-a", orthogonalMotionA, { weight: 1, targetWeight: 1, priority: 4 });
+runtimeOrthogonalRootMotion.setLayer("orthogonal-b", orthogonalMotionB, { weight: 1, targetWeight: 1, priority: 4 });
+const orthogonalRootMotionUpdate = runtimeOrthogonalRootMotion.update(1, { collectRootMotion: true });
+assert.deepEqual(orthogonalRootMotionUpdate.rootMotionDelta.translation, [5, 0, 5], "orthogonal equal root-motion deltas should blend to the weighted vector average");
+
+const rotationOrderMotionA: AnimationClip = {
+  id: "rotation-order-motion-a",
+  duration: 1,
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 10]) },
+    { joint: "root", property: "quaternion", times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)]) }
+  ]
+};
+const rotationOrderMotionB: AnimationClip = {
+  id: "rotation-order-motion-b",
+  duration: 1,
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) },
+    { joint: "root", property: "quaternion", times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([1, 0, 0], Math.PI / 2)]) }
+  ]
+};
+const runtimeRootMotionOrderA = new AnimationRuntime(motionSkeleton);
+runtimeRootMotionOrderA.setLayer("first", rotationOrderMotionA, { weight: 1, targetWeight: 1, priority: 4 });
+runtimeRootMotionOrderA.setLayer("second", rotationOrderMotionB, { weight: 1, targetWeight: 1, priority: 4 });
+const rootMotionOrderUpdateA = runtimeRootMotionOrderA.update(0.5, { collectRootMotion: true });
+const runtimeRootMotionOrderB = new AnimationRuntime(motionSkeleton);
+runtimeRootMotionOrderB.setLayer("z-second", rotationOrderMotionB, { weight: 1, targetWeight: 1, priority: 4 });
+runtimeRootMotionOrderB.setLayer("a-first", rotationOrderMotionA, { weight: 1, targetWeight: 1, priority: 4 });
+const rootMotionOrderUpdateB = runtimeRootMotionOrderB.update(0.5, { collectRootMotion: true });
+assert.deepEqual(rootMotionOrderUpdateA.rootMotionDelta.translation, rootMotionOrderUpdateB.rootMotionDelta.translation, "same-priority root-motion translation should be independent of layer id/order");
+assert.ok(
+  quaternionNearlyEqual(rootMotionOrderUpdateA.rootMotionDelta.rotation, rootMotionOrderUpdateB.rootMotionDelta.rotation, 1e-6),
+  "same-priority root-motion rotation should be independent of layer id/order"
 );
 
 const runtimeAdditiveRootMotion = new AnimationRuntime(motionSkeleton);

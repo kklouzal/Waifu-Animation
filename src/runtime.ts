@@ -1,4 +1,4 @@
-import { type Mat4, type Transform, dampAlpha, finiteNonNegative, finiteSigned, identityTransform, lerpTransform, multiplyQuat } from "./math.js";
+import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, dampAlpha, dotQuat, finiteNonNegative, finiteSigned, identityTransform, normalizeQuat } from "./math.js";
 import { type AnimationClip, type ClipValidationIssue, type SampleRepairDiagnostic, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
 import { type MotionCarrier, sampleMotionIntervalDelta } from "./motion.js";
 import {
@@ -325,11 +325,8 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[]): RuntimeUp
     }
     if (totalWeight <= 0) continue;
 
-    let groupDelta = identityTransform();
     for (const item of group) {
       const normalizedWeight = finiteNonNegative(item.layer.weight, 0) / totalWeight;
-      const weightedDelta = lerpTransform(identityTransform(), item.interval.delta, normalizedWeight);
-      groupDelta = composeRootMotionDelta(groupDelta, weightedDelta);
       rootMotionLayers.push({
         id: item.layer.id,
         clipId: item.layer.clip.id,
@@ -342,21 +339,45 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[]): RuntimeUp
         delta: item.interval.delta
       });
     }
+    const groupDelta = blendRootMotionGroup(group, totalWeight);
     rootMotionDelta = groupDelta;
   }
 
   return { rootMotionDelta, rootMotionLayers };
 }
 
-function composeRootMotionDelta(a: Transform, b: Transform): Transform {
+function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: number): Transform {
+  const translation: Vec3 = [0, 0, 0];
+  const rotationSum: Quat = [0, 0, 0, 0];
+  let firstRotation: Quat | undefined;
+
+  for (const item of group) {
+    const normalizedWeight = finiteNonNegative(item.layer.weight, 0) / totalWeight;
+    if (normalizedWeight <= 0) continue;
+
+    const delta = item.interval.delta;
+    translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
+    translation[1] += finiteSigned(delta.translation[1], 0) * normalizedWeight;
+    translation[2] += finiteSigned(delta.translation[2], 0) * normalizedWeight;
+
+    let rotation = normalizeQuat(delta.rotation);
+    const reference = dotQuat(rotationSum, rotationSum) > EPSILON ? rotationSum : firstRotation;
+    if (reference) {
+      if (dotQuat(reference, rotation) < 0) rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
+    } else if (dotQuat([0, 0, 0, 1], rotation) < 0) {
+      rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
+    }
+    firstRotation ??= rotation;
+    rotationSum[0] += rotation[0] * normalizedWeight;
+    rotationSum[1] += rotation[1] * normalizedWeight;
+    rotationSum[2] += rotation[2] * normalizedWeight;
+    rotationSum[3] += rotation[3] * normalizedWeight;
+  }
+
   return {
-    translation: [
-      a.translation[0] + b.translation[0],
-      a.translation[1] + b.translation[1],
-      a.translation[2] + b.translation[2]
-    ],
-    rotation: multiplyQuat(a.rotation, b.rotation),
-    scale: [a.scale[0] * b.scale[0], a.scale[1] * b.scale[1], a.scale[2] * b.scale[2]]
+    translation,
+    rotation: normalizeQuat(rotationSum),
+    scale: [1, 1, 1]
   };
 }
 
