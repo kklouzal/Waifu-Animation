@@ -3578,15 +3578,72 @@ assert.ok(
 const attention = new AttentionScheduler("attention-safety");
 const noPositiveAttention = attention.choose(Number.NaN, [
   { id: "nan", position: [Number.NaN, 0, 0], weight: Number.NaN },
+  { id: "zero", position: [0, 0, 1], weight: 0 },
+  { id: "infinite", position: [0, 1, 0], weight: Number.POSITIVE_INFINITY },
   { id: "negative", position: [1, 0, 0], weight: -4 }
 ]);
-assert.equal(noPositiveAttention?.id, "nan", "attention scheduler should choose a deterministic default when weights are not positive and finite");
+assert.equal(noPositiveAttention, null, "attention scheduler should return null when no target has a positive finite weight");
 const weightedAttention = new AttentionScheduler("attention-weighted-safety");
 const finiteWeightedAttention = weightedAttention.choose(1_000, [
   { id: "ignored-nan", position: [0, 0, 1], weight: Number.NaN },
   { id: "valid", position: [1, 0, 0], weight: 1 }
 ]);
 assert.equal(finiteWeightedAttention?.id, "valid", "NaN attention weights should not poison weighted selection");
+const invalidPositionAttention = new AttentionScheduler("attention-position-safety");
+const finitePositionAttention = invalidPositionAttention.choose(1_000, [
+  { id: "ignored-nan-position", position: [Number.NaN, 0, 1], weight: 100 },
+  { id: "ignored-infinite-position", position: [0, Number.POSITIVE_INFINITY, 1], weight: 100 },
+  { id: "valid-position", position: [0, 1, 1], weight: 1 }
+]);
+assert.equal(finitePositionAttention?.id, "valid-position", "invalid attention target positions should be ignored");
+const disabledDwellAttention = new AttentionScheduler("attention-disabled-dwell");
+assert.equal(
+  disabledDwellAttention.choose(100, [{ id: "initial", position: [0, 0, 1], weight: 1 }], 10_000, 10_000)?.id,
+  "initial"
+);
+assert.equal(
+  disabledDwellAttention.choose(
+    101,
+    [
+      { id: "initial-disabled", position: [0, 0, 1], weight: 0 },
+      { id: "replacement", position: [1, 0, 1], weight: 1 }
+    ],
+    10_000,
+    10_000
+  )?.id,
+  "replacement",
+  "disabled current attention target should not be retained until dwell expires"
+);
+const invalidDwellAttention = new AttentionScheduler("attention-invalid-dwell");
+assert.equal(
+  invalidDwellAttention.choose(100, [{ id: "initial", position: [0, 0, 1], weight: 1 }], 10_000, 10_000)?.id,
+  "initial"
+);
+assert.equal(
+  invalidDwellAttention.choose(
+    101,
+    [
+      { id: "initial-invalid", position: [0, Number.NaN, 1], weight: 1 },
+      { id: "replacement", position: [1, 0, 1], weight: 1 }
+    ],
+    10_000,
+    10_000
+  )?.id,
+  "replacement",
+  "invalid current attention target should not be retained until dwell expires"
+);
+const deterministicAttentionA = new AttentionScheduler("attention-deterministic");
+const deterministicAttentionB = new AttentionScheduler("attention-deterministic");
+const deterministicTargets: Parameters<AttentionScheduler["choose"]>[1] = [
+  { id: "low", position: [0, 0, 1], weight: 1 },
+  { id: "high", position: [1, 0, 1], weight: 5 },
+  { id: "ignored", position: [0, 1, 1], weight: 0 }
+];
+assert.equal(
+  deterministicAttentionA.choose(500, deterministicTargets)?.id,
+  deterministicAttentionB.choose(500, deterministicTargets)?.id,
+  "positive-weight attention selection should remain deterministic under a fixed seed"
+);
 const finiteDwellAttention = new AttentionScheduler("attention-dwell");
 assert.equal(
   finiteDwellAttention.choose(Number.POSITIVE_INFINITY, [{ id: "finite-dwell", position: [0, 0, 1], weight: 1 }], Number.NaN, Number.POSITIVE_INFINITY)?.id,

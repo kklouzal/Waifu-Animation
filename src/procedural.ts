@@ -30,6 +30,10 @@ function finiteAttentionWeight(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
+function isEligibleAttentionTarget(target: AttentionTarget): boolean {
+  return finiteAttentionWeight(target.weight) > 0 && target.position.every(Number.isFinite);
+}
+
 export function distributeLookAt(localTarget: Vec3, options: LookAtOptions = {}): LookAtDistribution {
   const direction = normalizeVec3(localTarget, [0, 0, 1]);
   const maxYaw = finiteNonNegative(options.maxYaw, 0.85);
@@ -59,34 +63,50 @@ export type AttentionTarget = {
 export class AttentionScheduler {
   private readonly random: RandomSource;
   private nextSwitchAt = 0;
-  private current = 0;
+  private current = -1;
 
   constructor(seed: string | number) {
     this.random = createSeededRandom(seed);
   }
 
   choose(nowMs: number, targets: readonly AttentionTarget[], minDwellMs = 900, maxDwellMs = 3200): AttentionTarget | null {
-    if (targets.length === 0) return null;
+    if (targets.length === 0) {
+      this.current = -1;
+      this.nextSwitchAt = 0;
+      return null;
+    }
     const now = finiteNonNegative(nowMs, 0);
-    if (now >= this.nextSwitchAt || this.current >= targets.length) {
+    const currentTarget = this.current >= 0 && this.current < targets.length ? targets[this.current] : null;
+    if (now >= this.nextSwitchAt || !currentTarget || !isEligibleAttentionTarget(currentTarget)) {
       let total = 0;
-      for (const target of targets) total += finiteAttentionWeight(target.weight);
-      this.current = 0;
-      if (total > 0) {
-        let pick = this.random() * total;
-        for (let i = 0; i < targets.length; i += 1) {
-          pick -= finiteAttentionWeight(targets[i]!.weight);
-          if (pick <= 0) {
-            this.current = i;
-            break;
-          }
+      let lastEligible = -1;
+      for (let i = 0; i < targets.length; i += 1) {
+        const target = targets[i]!;
+        if (!isEligibleAttentionTarget(target)) continue;
+        total += finiteAttentionWeight(target.weight);
+        lastEligible = i;
+      }
+      if (total <= 0 || lastEligible < 0) {
+        this.current = -1;
+        this.nextSwitchAt = 0;
+        return null;
+      }
+      let pick = this.random() * total;
+      this.current = lastEligible;
+      for (let i = 0; i < targets.length; i += 1) {
+        const target = targets[i]!;
+        if (!isEligibleAttentionTarget(target)) continue;
+        pick -= finiteAttentionWeight(target.weight);
+        if (pick <= 0) {
+          this.current = i;
+          break;
         }
       }
       const minDwell = finiteNonNegative(minDwellMs, 900);
       const maxDwell = Math.max(minDwell, finiteNonNegative(maxDwellMs, 3200));
       this.nextSwitchAt = now + randomRange(this.random, minDwell, maxDwell);
     }
-    return targets[this.current] ?? targets[0] ?? null;
+    return this.current >= 0 ? (targets[this.current] ?? null) : null;
   }
 }
 
