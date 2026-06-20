@@ -5,6 +5,7 @@ import {
   type AnimationManifest,
   type AnimationClip,
   type Pose,
+  type RawUserTrack,
   type SampleRepairDiagnostic,
   type Skeleton,
   AttentionScheduler,
@@ -80,21 +81,28 @@ import {
   diagnoseRetargetingRestAxes,
   retargetQuaternionSample,
   retargetQuaternionTrackValues,
+  buildUserTrack,
   sampleMotionCarrier,
   sampleMotionIntervalDelta,
   sampleClipToPose,
+  sampleRawUserTrack,
   sampleTrack,
+  sampleUserTrack,
   sanitizeQuaternionTrackValues,
   solveFootPlant,
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   toFloat32Array,
+  triggerFloatTrackEdges,
+  tryBuildUserTrack,
   transformPoint,
   rejectedAnimationReport,
   usableManifestClips,
   validateAnimationManifestAssets,
   validateClip,
   validateManifest,
+  validateRawUserTrack,
+  validateUserTrack,
   validateSkeleton,
   validatePose,
   validateAnimationInputs,
@@ -156,6 +164,146 @@ assert.deepEqual(
   [0, 0, 0, 1, -0, -0, -0, 1],
   "quaternion track sanitization should keep equivalent samples in the shortest hemisphere"
 );
+const invalidRawUserTrack: RawUserTrack<"float"> = {
+  type: "float",
+  keyframes: [
+    { ratio: 0.4, value: 1, interpolation: "linear" },
+    { ratio: 0.4, value: 2, interpolation: "linear" }
+  ]
+};
+const invalidRawUserTrackIssues = validateRawUserTrack(invalidRawUserTrack);
+assert.equal(invalidRawUserTrackIssues.some((issue) => issue.message.includes("strict ascending")), true, "raw user tracks should reject duplicate ratios");
+const invalidUserTrackBuild = tryBuildUserTrack(invalidRawUserTrack);
+assert.equal(invalidUserTrackBuild.ok, false, "invalid raw user tracks should not build");
+if (!invalidUserTrackBuild.ok) assert.equal(invalidUserTrackBuild.issues.length > 0, true);
+assert.throws(() => buildUserTrack(invalidRawUserTrack), /strict ascending/, "buildUserTrack should fail explicitly for invalid raw tracks");
+assert.throws(
+  () => buildUserTrack({ type: "float", keyframes: [{ ratio: 0, value: Number.NaN, interpolation: "linear" }] }),
+  /finite/,
+  "buildUserTrack should not allow NaN values to leak into runtime tracks"
+);
+const patchedUserTrack = buildUserTrack({
+  type: "float",
+  name: "attach-weight",
+  keyframes: [
+    { ratio: 0.25, value: 10, interpolation: "linear" },
+    { ratio: 0.75, value: 20, interpolation: "linear" }
+  ]
+});
+assert.equal(patchedUserTrack.name, "attach-weight");
+assert.deepEqual(Array.from(patchedUserTrack.ratios), [0, 0.25, 0.75, 1], "runtime user tracks should be patched to cover [0,1]");
+assert.deepEqual(Array.from(patchedUserTrack.values), [10, 10, 20, 20]);
+assert.equal(sampleRawUserTrack({ type: "float", keyframes: [] }, 0.5), 0, "empty raw float tracks sample to identity");
+const invalidRuntimeUserTrack = {
+  type: "float" as const,
+  name: "bad-runtime",
+  ratios: new Float32Array([0, 0]),
+  values: new Float32Array([1, 2]),
+  steps: new Uint8Array([0, 0])
+};
+assert.equal(validateUserTrack(invalidRuntimeUserTrack).some((issue) => issue.message.includes("strict ascending")), true);
+assert.throws(() => sampleUserTrack(invalidRuntimeUserTrack, 0.5), /strict ascending/, "runtime user track sampling should fail explicitly on invalid buffers");
+const mixedFloatUserTrack = buildUserTrack({
+  type: "float",
+  keyframes: [
+    { ratio: 0, value: 0, interpolation: "linear" },
+    { ratio: 0.5, value: 4.6, interpolation: "step" },
+    { ratio: 0.7, value: 9.2, interpolation: "linear" },
+    { ratio: 0.9, value: 0, interpolation: "linear" }
+  ]
+});
+assert.ok(Math.abs(sampleUserTrack(mixedFloatUserTrack, 0.25) - 2.3) < 1e-5, "float user tracks should linearly interpolate");
+assert.ok(Math.abs(sampleUserTrack(mixedFloatUserTrack, 0.6) - 4.6) < 1e-5, "step user keys should hold the previous value");
+assert.ok(Math.abs(sampleUserTrack(mixedFloatUserTrack, 0.8) - 4.6) < 1e-5, "linear interpolation resumes after a step segment");
+assert.equal(sampleUserTrack(mixedFloatUserTrack, -1), 0, "user track sampling should clamp ratios below zero");
+assert.equal(sampleUserTrack(mixedFloatUserTrack, 2), 0, "user track sampling should clamp ratios above one");
+const float2UserTrack: RawUserTrack<"float2"> = {
+  type: "float2",
+  keyframes: [
+    { ratio: 0, value: [0, 0], interpolation: "linear" },
+    { ratio: 1, value: [2, 4], interpolation: "linear" }
+  ]
+};
+const float3UserTrack: RawUserTrack<"float3"> = {
+  type: "float3",
+  keyframes: [
+    { ratio: 0, value: [0, 0, 0], interpolation: "linear" },
+    { ratio: 1, value: [2, 4, 6], interpolation: "linear" }
+  ]
+};
+const float4UserTrack: RawUserTrack<"float4"> = {
+  type: "float4",
+  keyframes: [
+    { ratio: 0, value: [0, 0, 0, 0], interpolation: "linear" },
+    { ratio: 1, value: [2, 4, 6, 8], interpolation: "linear" }
+  ]
+};
+assert.deepEqual(sampleUserTrack(buildUserTrack(float2UserTrack), 0.25), [0.5, 1]);
+assert.deepEqual(sampleUserTrack(buildUserTrack(float3UserTrack), 0.5), [1, 2, 3]);
+assert.deepEqual(sampleUserTrack(buildUserTrack(float4UserTrack), 0.25), [0.5, 1, 1.5, 2]);
+const shortestUserTrackEnd = quatFromAxisAngle([0, 1, 0], Math.PI / 2);
+const shortestUserTrack: RawUserTrack<"quaternion"> = {
+  type: "quaternion",
+  keyframes: [
+    { ratio: 0, value: [0, 0, 0, 1], interpolation: "linear" },
+    {
+      ratio: 1,
+      value: [-shortestUserTrackEnd[0], -shortestUserTrackEnd[1], -shortestUserTrackEnd[2], -shortestUserTrackEnd[3]],
+      interpolation: "linear"
+    }
+  ]
+};
+assert.ok(
+  quaternionNearlyEqual(sampleUserTrack(buildUserTrack(shortestUserTrack), 0.5) as readonly number[], quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
+  "quaternion user tracks should use shortest-path normalized interpolation"
+);
+const squareTriggerTrack = buildUserTrack({
+  type: "float",
+  keyframes: [
+    { ratio: 0, value: 0, interpolation: "step" },
+    { ratio: 0.5, value: 2, interpolation: "step" },
+    { ratio: 1, value: 0, interpolation: "step" }
+  ]
+});
+assert.deepEqual(triggerFloatTrackEdges({ track: squareTriggerTrack, from: 0, to: 1, threshold: 1 }), [
+  { ratio: 0.5, rising: true },
+  { ratio: 1, rising: false }
+]);
+assert.deepEqual(triggerFloatTrackEdges({ track: squareTriggerTrack, from: 1, to: 0, threshold: 1 }), [
+  { ratio: 1, rising: true },
+  { ratio: 0.5, rising: false }
+]);
+assert.deepEqual(triggerFloatTrackEdges({ track: squareTriggerTrack, from: 0, to: 2, threshold: 1 }), [
+  { ratio: 0.5, rising: true },
+  { ratio: 1, rising: false },
+  { ratio: 1.5, rising: true },
+  { ratio: 2, rising: false }
+]);
+assert.deepEqual(triggerFloatTrackEdges({ track: squareTriggerTrack, from: 2, to: 0, threshold: 1 }), [
+  { ratio: 2, rising: true },
+  { ratio: 1.5, rising: false },
+  { ratio: 1, rising: true },
+  { ratio: 0.5, rising: false }
+]);
+assert.deepEqual(triggerFloatTrackEdges({ track: squareTriggerTrack, from: 0, to: 0.5, threshold: 1 }), [], "edges at to should be excluded");
+assert.deepEqual(triggerFloatTrackEdges({ track: squareTriggerTrack, from: 0.5, to: 1, threshold: 1 }), [
+  { ratio: 0.5, rising: true },
+  { ratio: 1, rising: false }
+]);
+const linearTriggerTrack = buildUserTrack({
+  type: "float",
+  keyframes: [
+    { ratio: 0, value: -1, interpolation: "linear" },
+    { ratio: 0.5, value: 1, interpolation: "linear" },
+    { ratio: 1, value: -1, interpolation: "linear" }
+  ]
+});
+assert.deepEqual(triggerFloatTrackEdges({ track: linearTriggerTrack, from: 0, to: 1, threshold: 0 }), [
+  { ratio: 0.25, rising: true },
+  { ratio: 0.75, rising: false }
+]);
+assert.throws(() => triggerFloatTrackEdges({ track: squareTriggerTrack, from: 0, to: 3, threshold: 1, maxLoopCount: 2 }), /maxLoopCount/);
+assert.throws(() => triggerFloatTrackEdges({ track: squareTriggerTrack, from: 0, to: 2, threshold: 1, maxEdgeCount: 3 }), /maxEdgeCount/);
 const repairedTransform = normalizeTransform({
   translation: [Number.NaN, 2, Infinity],
   rotation: [0, 0, 0, 0],
