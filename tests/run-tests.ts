@@ -4,7 +4,9 @@ import {
   AnimationRuntime,
   type AnimationManifest,
   type AnimationClip,
+  type Pose,
   type SampleRepairDiagnostic,
+  type Skeleton,
   AttentionScheduler,
   BlinkScheduler,
   dampAlpha,
@@ -1450,6 +1452,129 @@ assert.ok(
   quaternionNearlyEqual(coreRetargetEvaluation.localPose[1]!.rotation, coreRetargetExpected, 1e-5),
   "AnimationRuntime.evaluate should use the retargeted core sampling path"
 );
+
+function modelPoint(skeleton: Skeleton, pose: Pose, joint: string): [number, number, number] {
+  const index = skeleton.joints.findIndex((item) => item.name === joint);
+  assert.ok(index >= 0, `fixture joint ${joint} should exist`);
+  return transformPoint(localToModelPose(skeleton, pose)[index]!, [0, 0, 0]);
+}
+
+function signedJointOffset(a: [number, number, number], b: [number, number, number], c: [number, number, number], axis: [number, number, number]): number {
+  const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]] as [number, number, number];
+  const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]] as [number, number, number];
+  const acLengthSq = ac[0] * ac[0] + ac[1] * ac[1] + ac[2] * ac[2];
+  assert.ok(acLengthSq > 1e-8, "signed joint fixture should not collapse the endpoint line");
+  const t = (ab[0] * ac[0] + ab[1] * ac[1] + ab[2] * ac[2]) / acLengthSq;
+  const closest = [a[0] + ac[0] * t, a[1] + ac[1] * t, a[2] + ac[2] * t] as [number, number, number];
+  const offset = [b[0] - closest[0], b[1] - closest[1], b[2] - closest[2]] as [number, number, number];
+  return offset[0] * axis[0] + offset[1] * axis[1] + offset[2] * axis[2];
+}
+
+const anatomicalLegSkeleton = createSkeleton([
+  { name: "hips", humanoid: "hips", rest: { translation: [0, 1, 0] } },
+  { name: "leftUpperLeg", parentName: "hips", humanoid: "leftUpperLeg", rest: { translation: [-0.12, -0.12, 0] } },
+  { name: "leftLowerLeg", parentName: "leftUpperLeg", humanoid: "leftLowerLeg", rest: { translation: [0, -0.46, 0] } },
+  { name: "leftFoot", parentName: "leftLowerLeg", humanoid: "leftFoot", rest: { translation: [0, -0.46, 0] } },
+  { name: "rightUpperLeg", parentName: "hips", humanoid: "rightUpperLeg", rest: { translation: [0.12, -0.12, 0] } },
+  { name: "rightLowerLeg", parentName: "rightUpperLeg", humanoid: "rightLowerLeg", rest: { translation: [0, -0.46, 0] } },
+  { name: "rightFoot", parentName: "rightLowerLeg", humanoid: "rightFoot", rest: { translation: [0, -0.46, 0] } }
+]);
+const anatomicalKneeFlexion = quatFromAxisAngle([1, 0, 0], Math.PI / 3);
+const anatomicalLegClip: AnimationClip = {
+  id: "anatomical-knee-flexion",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "leftLowerLeg",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...anatomicalKneeFlexion])
+    },
+    {
+      humanBone: "rightLowerLeg",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...anatomicalKneeFlexion])
+    }
+  ]
+};
+const anatomicalLegPose = sampleClipToPose(anatomicalLegSkeleton, anatomicalLegClip, 1);
+const leftKneeForward = signedJointOffset(
+  modelPoint(anatomicalLegSkeleton, anatomicalLegPose, "leftUpperLeg"),
+  modelPoint(anatomicalLegSkeleton, anatomicalLegPose, "leftLowerLeg"),
+  modelPoint(anatomicalLegSkeleton, anatomicalLegPose, "leftFoot"),
+  [0, 0, 1]
+);
+const rightKneeForward = signedJointOffset(
+  modelPoint(anatomicalLegSkeleton, anatomicalLegPose, "rightUpperLeg"),
+  modelPoint(anatomicalLegSkeleton, anatomicalLegPose, "rightLowerLeg"),
+  modelPoint(anatomicalLegSkeleton, anatomicalLegPose, "rightFoot"),
+  [0, 0, 1]
+);
+assert.ok(leftKneeForward > 0.16, `left knee should flex forward in model space, got ${leftKneeForward.toFixed(4)}`);
+assert.ok(rightKneeForward > 0.16, `right knee should flex forward in model space, got ${rightKneeForward.toFixed(4)}`);
+const anatomicalBadBasisPose = sampleClipToPose(anatomicalLegSkeleton, anatomicalLegClip, 1, {
+  sourceBasisQuaternion: () => quatFromUnitVectors([0, 0, 1], [1, 0, 0])
+});
+const badBasisKneeForward = signedJointOffset(
+  modelPoint(anatomicalLegSkeleton, anatomicalBadBasisPose, "leftUpperLeg"),
+  modelPoint(anatomicalLegSkeleton, anatomicalBadBasisPose, "leftLowerLeg"),
+  modelPoint(anatomicalLegSkeleton, anatomicalBadBasisPose, "leftFoot"),
+  [0, 0, 1]
+);
+assert.ok(
+  badBasisKneeForward < leftKneeForward * 0.25,
+  `unneeded source-basis correction should be detectable as lost/backward knee flexion, got ${badBasisKneeForward.toFixed(4)}`
+);
+
+const anatomicalArmSkeleton = createSkeleton([
+  { name: "chest", humanoid: "chest", rest: { translation: [0, 1.35, 0] } },
+  { name: "leftUpperArm", parentName: "chest", humanoid: "leftUpperArm", rest: { translation: [-0.18, 0.12, 0] } },
+  { name: "leftLowerArm", parentName: "leftUpperArm", humanoid: "leftLowerArm", rest: { translation: [-0.36, 0, 0] } },
+  { name: "leftHand", parentName: "leftLowerArm", humanoid: "leftHand", rest: { translation: [-0.34, 0, 0] } },
+  { name: "rightUpperArm", parentName: "chest", humanoid: "rightUpperArm", rest: { translation: [0.18, 0.12, 0] } },
+  { name: "rightLowerArm", parentName: "rightUpperArm", humanoid: "rightLowerArm", rest: { translation: [0.36, 0, 0] } },
+  { name: "rightHand", parentName: "rightLowerArm", humanoid: "rightHand", rest: { translation: [0.34, 0, 0] } }
+]);
+const leftElbowFlexion = quatFromAxisAngle([0, 1, 0], -Math.PI / 3);
+const rightElbowFlexion = quatFromAxisAngle([0, 1, 0], Math.PI / 3);
+const anatomicalArmClip: AnimationClip = {
+  id: "anatomical-elbow-flexion",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "leftLowerArm",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...leftElbowFlexion])
+    },
+    {
+      humanBone: "rightLowerArm",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...rightElbowFlexion])
+    }
+  ]
+};
+const anatomicalArmPose = sampleClipToPose(anatomicalArmSkeleton, anatomicalArmClip, 1);
+const leftElbowForward = signedJointOffset(
+  modelPoint(anatomicalArmSkeleton, anatomicalArmPose, "leftUpperArm"),
+  modelPoint(anatomicalArmSkeleton, anatomicalArmPose, "leftLowerArm"),
+  modelPoint(anatomicalArmSkeleton, anatomicalArmPose, "leftHand"),
+  [0, 0, 1]
+);
+const rightElbowForward = signedJointOffset(
+  modelPoint(anatomicalArmSkeleton, anatomicalArmPose, "rightUpperArm"),
+  modelPoint(anatomicalArmSkeleton, anatomicalArmPose, "rightLowerArm"),
+  modelPoint(anatomicalArmSkeleton, anatomicalArmPose, "rightHand"),
+  [0, 0, 1]
+);
+assert.ok(leftElbowForward > 0.12, `left elbow should flex to the authored forward bend plane, got ${leftElbowForward.toFixed(4)}`);
+assert.ok(rightElbowForward > 0.12, `right elbow should flex to the authored forward bend plane, got ${rightElbowForward.toFixed(4)}`);
 
 const malformedFallbackClip: AnimationClip = {
   id: "malformed-fallbacks",
