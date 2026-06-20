@@ -1,5 +1,5 @@
 import { type AnimationClip, type SampleOptions, type SampleRepairDiagnostic, sampleClipToPose, sampleTime } from "./clip.js";
-import { type Transform, EPSILON, cloneTransform, euclideanModulo, identityTransform, invertQuat, multiplyQuat, subVec3 } from "./math.js";
+import { type Transform, EPSILON, cloneTransform, euclideanModulo, identityTransform, invertQuat, multiplyQuat, scaleRatio, subVec3 } from "./math.js";
 import { readPoseTransformOrRest } from "./pose.js";
 import { type HumanoidBoneName, type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
@@ -104,9 +104,9 @@ export function carrierTransformDelta(from: Transform, to: Transform): Transform
     translation: subVec3(to.translation, from.translation),
     rotation: multiplyQuat(invertQuat(from.rotation), to.rotation),
     scale: [
-      to.scale[0] / Math.max(EPSILON, from.scale[0]),
-      to.scale[1] / Math.max(EPSILON, from.scale[1]),
-      to.scale[2] / Math.max(EPSILON, from.scale[2])
+      scaleRatio(to.scale[0], from.scale[0]),
+      scaleRatio(to.scale[1], from.scale[1]),
+      scaleRatio(to.scale[2], from.scale[2])
     ]
   };
 }

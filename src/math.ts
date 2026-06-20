@@ -286,11 +286,21 @@ export function lerpTransform(a: Transform, b: Transform, t: number): Transform 
   };
 }
 
+export function scaleRatio(numerator: number, denominator: number): number {
+  if (!Number.isFinite(denominator)) return numerator / EPSILON;
+  if (Math.abs(denominator) > EPSILON) return numerator / denominator;
+  return numerator / (denominator < 0 || Object.is(denominator, -0) ? -EPSILON : EPSILON);
+}
+
 export function transformDelta(rest: Transform, sample: Transform): Transform {
   return {
     translation: subVec3(sample.translation, rest.translation),
     rotation: multiplyQuat(invertQuat(rest.rotation), sample.rotation),
-    scale: [sample.scale[0] / Math.max(EPSILON, rest.scale[0]), sample.scale[1] / Math.max(EPSILON, rest.scale[1]), sample.scale[2] / Math.max(EPSILON, rest.scale[2])]
+    scale: [
+      scaleRatio(sample.scale[0], rest.scale[0]),
+      scaleRatio(sample.scale[1], rest.scale[1]),
+      scaleRatio(sample.scale[2], rest.scale[2])
+    ]
   };
 }
 
@@ -315,7 +325,7 @@ export function applyTransformDelta(base: Transform, delta: Transform, weight: n
   const scaleChannel = (baseValue: number, deltaValue: number): number => {
     const factor = 1 + (deltaValue - 1) * absAmount;
     if (amount >= 0) return baseValue * factor;
-    return baseValue / Math.max(EPSILON, factor);
+    return scaleRatio(baseValue, factor);
   };
 
   return {

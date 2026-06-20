@@ -1423,6 +1423,13 @@ const wrappedMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip,
 assert.deepEqual(wrappedMotionDelta.delta.translation, [5, 0, 0], "looped motion intervals should accumulate forward displacement across wrap");
 const negativeMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0.7, 0.2);
 assert.deepEqual(negativeMotionDelta.delta.translation, [0, 0, 0], "negative motion intervals should return identity deltas");
+const signedScaleMotionClip: AnimationClip = {
+  id: "signed-scale-motion",
+  duration: 1,
+  tracks: [{ joint: "root", property: "scale", times: toFloat32Array([0, 1]), values: toFloat32Array([-2, 2, -4, -4, 6, 2]) }]
+};
+const signedScaleMotionDelta = sampleMotionIntervalDelta(motionSkeleton, signedScaleMotionClip, 0, 1, { loop: false });
+assert.deepEqual(signedScaleMotionDelta.delta.scale, [2, 3, -0.5], "motion interval scale deltas should preserve finite negative scale ratios");
 const nonFiniteMotionSample = sampleMotionCarrier(motionSkeleton, motionClip, Number.NaN);
 assert.equal(nonFiniteMotionSample.time, 0, "non-finite motion sample times should deterministically sample time zero");
 assert.deepEqual(nonFiniteMotionSample.transform.translation, [0, 0, 0]);
@@ -2194,6 +2201,14 @@ assert.throws(
   /additive delta pose length mismatch/,
   "oversized additive samples should still fail clearly"
 );
+const signedScaleRestPose = [cloneTransform({ scale: [-2, 2, -4] })];
+const signedScaleSamplePose = [cloneTransform({ scale: [-4, 6, 2] })];
+const signedScaleDeltaPose = additiveDeltaPose(signedScaleRestPose, signedScaleSamplePose);
+assert.deepEqual(signedScaleDeltaPose[0]!.scale, [2, 3, -0.5], "additive scale deltas should preserve finite negative rest-scale ratios");
+const signedScaleAppliedPose = applyAdditivePose(signedScaleRestPose, signedScaleDeltaPose, 1);
+assert.deepEqual(signedScaleAppliedPose[0]!.scale, signedScaleSamplePose[0]!.scale, "positive additive scale weights should apply signed scale ratios");
+const signedScaleSubtractedPose = applyAdditivePose(signedScaleSamplePose, signedScaleDeltaPose, -1);
+assert.deepEqual(signedScaleSubtractedPose[0]!.scale, signedScaleRestPose[0]!.scale, "negative additive scale weights should invert signed scale ratios");
 
 const tinyWeightBlend = blendPoses(skeleton, [{ pose: sampled, weight: DEFAULT_BLEND_THRESHOLD * 0.5 }]);
 assert.ok(tinyWeightBlend[2]!.rotation[0] > 0);
