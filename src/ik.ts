@@ -3,10 +3,12 @@ import {
   IDENTITY_QUAT,
   type Mat4,
   type Quat,
+  type Transform,
   type Vec3,
   addVec3,
   clamp,
   clamp01,
+  composeMat4,
   crossVec3,
   dotVec3,
   finiteNonNegative,
@@ -22,6 +24,7 @@ import {
   scaleVec3,
   subVec3
 } from "./math.js";
+import { type Skeleton, updateLocalToModelPoseRange } from "./skeleton.js";
 
 const MIN_IK_REACH = 1e-5;
 const DEFAULT_IK_SOFTEN = 0.998;
@@ -67,11 +70,17 @@ export type AimIkResult = {
 };
 
 export type TwoBoneIkInput = {
+  /** Root/start joint model-space position. */
   root: Vec3;
+  /** Middle joint model-space position. */
   joint: Vec3;
+  /** End joint model-space position. */
   end: Vec3;
+  /** Target model-space position. */
   target: Vec3;
+  /** Pole vector in model space. */
   pole?: Vec3;
+  /** Fallback middle-joint rotation axis in model space for the position solver. */
   midAxis?: Vec3;
   twistAngle?: number;
   soften?: number;
@@ -91,10 +100,127 @@ export type TwoBoneIkResult = {
 };
 
 export type TwoBoneIkCorrectionResult = TwoBoneIkResult & {
+  /** Model-space correction that pre-multiplies the root/start joint model rotation. */
   rootCorrection: Quat;
+  /** Model-space correction that pre-multiplies the middle joint model rotation after rootCorrection. */
   jointCorrection: Quat;
   correctedUpperDirection: Vec3;
   correctedLowerDirection: Vec3;
+};
+
+export type ModelJointTransform = Mat4 | Transform;
+
+export type TwoBoneIkModelInput = {
+  /** Root/start joint model-space matrix or decomposed model transform. */
+  root: ModelJointTransform;
+  /** Middle joint model-space matrix or decomposed model transform. */
+  mid: ModelJointTransform;
+  /** End joint model-space matrix or decomposed model transform. */
+  end: ModelJointTransform;
+  /** Target model-space position. */
+  target: Vec3;
+  /** Pole vector in model space. */
+  pole?: Vec3;
+  /** Ozz-style middle joint axis in middle-joint local space. */
+  midAxis?: Vec3;
+  twistAngle?: number;
+  soften?: number;
+  weight?: number;
+  maxStretch?: number;
+};
+
+export type TwoBoneIkModelResult = TwoBoneIkCorrectionResult & {
+  /** Model-space correction that pre-multiplies the root/start joint model rotation. */
+  rootModelCorrection: Quat;
+  /** Model-space correction that pre-multiplies the middle joint model rotation after rootModelCorrection. */
+  midModelCorrection: Quat;
+  /**
+   * Ozz-style local-space correction for the root/start joint.
+   * Post-multiply it into the joint local rotation: local.rotation = local.rotation * rootLocalCorrection.
+   */
+  rootLocalCorrection: Quat;
+  /**
+   * Ozz-style local-space correction for the middle joint, computed after rootLocalCorrection.
+   * Post-multiply it into the joint local rotation: local.rotation = local.rotation * midLocalCorrection.
+   */
+  midLocalCorrection: Quat;
+};
+
+export type ApplyTwoBoneIkLocalCorrectionsInput = {
+  skeleton: Skeleton;
+  localPose: Transform[];
+  modelPose: Mat4[];
+  rootJoint: number;
+  midJoint: number;
+  corrections: Pick<TwoBoneIkModelResult, "rootLocalCorrection" | "midLocalCorrection">;
+  /** Last joint index to refresh in modelPose, inclusive. Defaults to all descendants after rootJoint. */
+  updateTo?: number;
+};
+
+export type ApplyTwoBoneIkLocalCorrectionsResult = {
+  localPose: Transform[];
+  modelPose: Mat4[];
+  updatedFrom: number;
+  updatedTo: number;
+};
+
+export type ApplyAimIkModelCorrectionInput = {
+  skeleton: Skeleton;
+  localPose: Transform[];
+  modelPose: Mat4[];
+  joint: number;
+  /** Model-space correction returned by solveAimIk().jointCorrection. */
+  jointCorrection: Quat;
+  /** Last joint index to refresh in modelPose, inclusive. Defaults to all descendants after joint. */
+  updateTo?: number;
+};
+
+export type ApplyAimIkModelCorrectionResult = {
+  localPose: Transform[];
+  modelPose: Mat4[];
+  /** Ozz-style local-space correction post-multiplied into the joint local rotation. */
+  localCorrection: Quat;
+  updatedFrom: number;
+  updatedTo: number;
+};
+
+export type AimIkChainJointInput = {
+  joint: number;
+  forward?: Vec3;
+  offset?: Vec3;
+  up?: Vec3;
+  pole?: Vec3;
+  twistAngle?: number;
+  weight?: number;
+};
+
+export type ApplyAimIkChainInput = {
+  skeleton: Skeleton;
+  localPose: Transform[];
+  modelPose: Mat4[];
+  /** Joints are solved and applied in array order. Model matrices are refreshed after each correction. */
+  joints: readonly (number | AimIkChainJointInput)[];
+  target?: Vec3;
+  targetDirection?: Vec3;
+  forward?: Vec3;
+  offset?: Vec3;
+  up?: Vec3;
+  pole?: Vec3;
+  twistAngle?: number;
+  weight?: number;
+  updateTo?: number;
+};
+
+export type AimIkChainCorrection = {
+  joint: number;
+  aim: AimIkResult;
+  localCorrection: Quat;
+};
+
+export type ApplyAimIkChainResult = {
+  localPose: Transform[];
+  modelPose: Mat4[];
+  corrections: AimIkChainCorrection[];
 };
 
 export function solveAimIk(input: AimIkInput): AimIkResult {
@@ -217,6 +343,164 @@ export function solveTwoBoneIkCorrections(input: TwoBoneIkInput): TwoBoneIkCorre
     jointCorrection,
     correctedUpperDirection: correctedUpper,
     correctedLowerDirection: correctedLower
+  };
+}
+
+export function solveTwoBoneIkModel(input: TwoBoneIkModelInput): TwoBoneIkModelResult {
+  const rootModel = modelMatrixFromTransform(input.root);
+  const midModel = modelMatrixFromTransform(input.mid);
+  const endModel = modelMatrixFromTransform(input.end);
+  const rootModelRotation = rotationFromMat4(rootModel);
+  const midModelRotation = rotationFromMat4(midModel);
+  const root = matrixTranslation(rootModel);
+  const mid = matrixTranslation(midModel);
+  const end = matrixTranslation(endModel);
+  const target = finiteVec3(input.target, end);
+  const pole = input.pole === undefined ? undefined : finiteVec3(input.pole, subVec3(mid, root));
+  const midAxisModel =
+    input.midAxis === undefined
+      ? undefined
+      : normalizeVec3(transformLinearVector(midModel, finiteVec3(input.midAxis, [0, 0, 1])), transformLinearVector(midModel, [0, 0, 1]));
+  const solvedPosition = solveTwoBoneIk({
+    root,
+    joint: mid,
+    end,
+    target,
+    ...(pole === undefined ? {} : { pole }),
+    ...(input.twistAngle === undefined ? {} : { twistAngle: input.twistAngle }),
+    ...(input.soften === undefined ? {} : { soften: input.soften }),
+    ...(input.weight === undefined ? {} : { weight: input.weight }),
+    ...(input.maxStretch === undefined ? {} : { maxStretch: input.maxStretch })
+  });
+  const originalUpper = normalizeVec3(subVec3(mid, root), [0, -1, 0]);
+  const correctedUpper = normalizeVec3(subVec3(solvedPosition.joint, solvedPosition.root), originalUpper);
+  const correctionPole = pole ?? ([0, 0, 1] as Vec3);
+  const rootCorrection = quatFromUnitVectors(originalUpper, correctedUpper, correctionPole);
+  const originalLower = normalizeVec3(subVec3(end, mid), [0, -1, 0]);
+  const rootCorrectedLower = normalizeVec3(rotateVec3ByQuat(rootCorrection, originalLower), originalLower);
+  const correctedLower = normalizeVec3(subVec3(solvedPosition.end, solvedPosition.joint), rootCorrectedLower);
+  const rootedMidAxis = midAxisModel === undefined ? undefined : rotateVec3ByQuat(rootCorrection, midAxisModel);
+  const jointCorrection = quatFromUnitVectors(rootCorrectedLower, correctedLower, rootedMidAxis ?? correctionPole);
+  const solved: TwoBoneIkCorrectionResult = {
+    ...solvedPosition,
+    rootCorrection,
+    jointCorrection,
+    correctedUpperDirection: correctedUpper,
+    correctedLowerDirection: correctedLower
+  };
+  const rootLocalCorrection = modelCorrectionToLocalPostCorrectionForRotation(rootModelRotation, solved.rootCorrection);
+  const rootCorrectedMidModelRotation = multiplyQuat(solved.rootCorrection, midModelRotation);
+  const midLocalCorrection = modelCorrectionToLocalPostCorrectionForRotation(rootCorrectedMidModelRotation, solved.jointCorrection);
+
+  return {
+    ...solved,
+    rootModelCorrection: solved.rootCorrection,
+    midModelCorrection: solved.jointCorrection,
+    rootLocalCorrection,
+    midLocalCorrection
+  };
+}
+
+export function modelCorrectionToLocalPostCorrection(jointModel: Mat4, modelCorrection: Quat): Quat {
+  return modelCorrectionToLocalPostCorrectionForRotation(rotationFromMat4(jointModel), modelCorrection);
+}
+
+export function applyTwoBoneIkLocalCorrections(input: ApplyTwoBoneIkLocalCorrectionsInput): ApplyTwoBoneIkLocalCorrectionsResult {
+  const rootJoint = requireJointIndex(input.skeleton, input.rootJoint, "rootJoint");
+  const midJoint = requireJointIndex(input.skeleton, input.midJoint, "midJoint");
+  if (!isJointDescendantOrSelf(input.skeleton, midJoint, rootJoint)) {
+    throw new Error(`midJoint ${midJoint} must be a descendant of rootJoint ${rootJoint}`);
+  }
+  multiplyPoseRotation(input.localPose, rootJoint, input.corrections.rootLocalCorrection, "rootJoint");
+  multiplyPoseRotation(input.localPose, midJoint, input.corrections.midLocalCorrection, "midJoint");
+  const updatedTo = sanitizeUpdateTo(input.updateTo, input.skeleton.joints.length);
+  updateLocalToModelPoseRange(input.skeleton, input.localPose, input.modelPose, { from: rootJoint, to: updatedTo });
+  return { localPose: input.localPose, modelPose: input.modelPose, updatedFrom: rootJoint, updatedTo };
+}
+
+export function applyAimIkModelCorrection(input: ApplyAimIkModelCorrectionInput): ApplyAimIkModelCorrectionResult {
+  const joint = requireJointIndex(input.skeleton, input.joint, "joint");
+  const jointModel = input.modelPose[joint];
+  if (!jointModel) throw new Error(`modelPose is missing joint ${joint}`);
+  const localCorrection = modelCorrectionToLocalPostCorrection(jointModel, input.jointCorrection);
+  multiplyPoseRotation(input.localPose, joint, localCorrection, "joint");
+  const updatedTo = sanitizeUpdateTo(input.updateTo, input.skeleton.joints.length);
+  updateLocalToModelPoseRange(input.skeleton, input.localPose, input.modelPose, { from: joint, to: updatedTo });
+  return { localPose: input.localPose, modelPose: input.modelPose, localCorrection, updatedFrom: joint, updatedTo };
+}
+
+export function applyAimIkChainToPose(input: ApplyAimIkChainInput): ApplyAimIkChainResult {
+  const corrections: AimIkChainCorrection[] = [];
+  for (const jointInput of input.joints) {
+    const jointConfig = typeof jointInput === "number" ? { joint: jointInput } : jointInput;
+    const joint = requireJointIndex(input.skeleton, jointConfig.joint, "joint");
+    const jointModel = input.modelPose[joint];
+    if (!jointModel) throw new Error(`modelPose is missing joint ${joint}`);
+    const aim = solveAimIk({
+      joint: jointModel,
+      ...(input.target === undefined ? {} : { target: input.target }),
+      ...(input.targetDirection === undefined ? {} : { targetDirection: input.targetDirection }),
+      ...(jointConfig.forward === undefined && input.forward === undefined ? {} : { forward: jointConfig.forward ?? input.forward! }),
+      ...(jointConfig.offset === undefined && input.offset === undefined ? {} : { offset: jointConfig.offset ?? input.offset! }),
+      ...(jointConfig.up === undefined && input.up === undefined ? {} : { up: jointConfig.up ?? input.up! }),
+      ...(jointConfig.pole === undefined && input.pole === undefined ? {} : { pole: jointConfig.pole ?? input.pole! }),
+      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined ? {} : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
+      ...(jointConfig.weight === undefined && input.weight === undefined ? {} : { weight: jointConfig.weight ?? input.weight! })
+    });
+    const applied = applyAimIkModelCorrection({
+      skeleton: input.skeleton,
+      localPose: input.localPose,
+      modelPose: input.modelPose,
+      joint,
+      jointCorrection: aim.jointCorrection,
+      ...(input.updateTo === undefined ? {} : { updateTo: input.updateTo })
+    });
+    corrections.push({ joint, aim, localCorrection: applied.localCorrection });
+  }
+  return { localPose: input.localPose, modelPose: input.modelPose, corrections };
+}
+
+function modelMatrixFromTransform(value: ModelJointTransform): Mat4 {
+  if ("length" in value) return value;
+  return composeMat4(value);
+}
+
+function modelCorrectionToLocalPostCorrectionForRotation(modelRotation: Quat, modelCorrection: Quat): Quat {
+  const rotation = normalizeQuat(modelRotation);
+  const correction = normalizeQuat(modelCorrection);
+  return multiplyQuat(multiplyQuat(invertQuat(rotation), correction), rotation);
+}
+
+function requireJointIndex(skeleton: Skeleton, index: number, label: string): number {
+  if (!Number.isInteger(index) || index < 0 || index >= skeleton.joints.length) {
+    throw new Error(`${label} ${index} is outside skeleton joint range`);
+  }
+  return index;
+}
+
+function sanitizeUpdateTo(updateTo: number | undefined, jointCount: number): number {
+  if (updateTo === undefined) return jointCount - 1;
+  if (!Number.isInteger(updateTo) || updateTo < 0) throw new Error("updateTo must be a non-negative joint index");
+  return Math.min(updateTo, jointCount - 1);
+}
+
+function isJointDescendantOrSelf(skeleton: Skeleton, child: number, ancestor: number): boolean {
+  if (child === ancestor) return true;
+  let parent = skeleton.joints[child]?.parentIndex ?? -1;
+  while (parent >= 0) {
+    if (parent === ancestor) return true;
+    parent = skeleton.joints[parent]?.parentIndex ?? -1;
+  }
+  return false;
+}
+
+function multiplyPoseRotation(localPose: Transform[], joint: number, correction: Quat, label: string): void {
+  const transform = localPose[joint];
+  if (!transform) throw new Error(`localPose is missing ${label} ${joint}`);
+  localPose[joint] = {
+    translation: transform.translation,
+    rotation: multiplyQuat(transform.rotation, correction),
+    scale: transform.scale
   };
 }
 

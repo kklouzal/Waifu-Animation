@@ -166,6 +166,17 @@ export type SkeletonValidationIssue = {
   message: string;
 };
 
+export type LocalToModelPoseRangeOptions = {
+  /** Optional root/model matrix multiplied before root joints, matching Ozz LocalToModelJob::root. */
+  root?: Mat4;
+  /** First joint to update, or NO_PARENT/the default to update the whole hierarchy. */
+  from?: number;
+  /** Last joint index to update, inclusive. Defaults to the final skeleton joint. */
+  to?: number;
+  /** When true, keeps the `from` joint model matrix as-is and updates only its descendants. */
+  fromExcluded?: boolean;
+};
+
 export function createSkeleton(definitions: JointDefinition[]): Skeleton {
   if (definitions.length === 0) throw new Error("skeleton requires at least one joint");
   if (definitions.length > 1024) throw new Error("skeleton exceeds Ozz-style 1024 joint safety limit");
@@ -349,14 +360,56 @@ export function resolveHumanoidIndex(skeleton: Skeleton, bone: HumanoidBoneName)
 }
 
 export function localToModelPose(skeleton: Skeleton, localPose: readonly Transform[], out: Mat4[] = []): Mat4[] {
+  return updateLocalToModelPoseRange(skeleton, localPose, out);
+}
+
+export function updateLocalToModelPoseRange(
+  skeleton: Skeleton,
+  localPose: readonly Transform[],
+  out: Mat4[],
+  options: LocalToModelPoseRangeOptions = {}
+): Mat4[] {
   if (localPose.length !== skeleton.joints.length) {
     throw new Error(`local pose length ${localPose.length} does not match skeleton ${skeleton.joints.length}`);
   }
+  const jointCount = skeleton.joints.length;
+  const from = sanitizeLocalToModelBoundary(options.from, NO_PARENT, jointCount, "from");
+  const to = sanitizeLocalToModelBoundary(options.to, jointCount - 1, jointCount, "to");
   out.length = skeleton.joints.length;
-  for (let index = 0; index < skeleton.joints.length; index += 1) {
-    const local = composeMat4(localPose[index]!);
+  if (to < 0) return out;
+
+  const selected = new Uint8Array(jointCount);
+  for (let index = 0; index < jointCount; index += 1) {
     const parentIndex = skeleton.joints[index]!.parentIndex;
-    out[index] = parentIndex === NO_PARENT ? local : multiplyMat4(out[parentIndex]!, local);
+    if (from === NO_PARENT || index === from) {
+      selected[index] = 1;
+    } else if (parentIndex >= 0 && selected[parentIndex] === 1) {
+      selected[index] = 1;
+    }
+
+    if (selected[index] !== 1 || index > to || (options.fromExcluded === true && index === from)) {
+      continue;
+    }
+
+    const local = composeMat4(localPose[index]!);
+    if (parentIndex === NO_PARENT) {
+      out[index] = options.root ? multiplyMat4(options.root, local) : local;
+      continue;
+    }
+
+    const parentModel = out[parentIndex];
+    if (!parentModel) {
+      throw new Error(`model pose for parent ${parentIndex} must be available before updating joint ${index}`);
+    }
+    out[index] = multiplyMat4(parentModel, local);
   }
   return out;
+}
+
+function sanitizeLocalToModelBoundary(value: number | undefined, fallback: number, jointCount: number, label: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved)) throw new Error(`local-to-model ${label} must be an integer`);
+  if (resolved === NO_PARENT) return resolved;
+  if (resolved < 0) throw new Error(`local-to-model ${label} is out of range`);
+  return Math.min(resolved, jointCount - 1);
 }

@@ -68,6 +68,7 @@ import {
   identityTransform,
   isHumanoidBoneName,
   localToModelPose,
+  updateLocalToModelPoseRange,
   multiplyMat4,
   normalizeQuat,
   normalizeTransform,
@@ -97,9 +98,14 @@ import {
   sampleUserTrack,
   sanitizeQuaternionTrackValues,
   solveAimIk,
+  applyAimIkChainToPose,
+  applyAimIkModelCorrection,
+  applyTwoBoneIkLocalCorrections,
+  modelCorrectionToLocalPostCorrection,
   solveFootPlant,
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
+  solveTwoBoneIkModel,
   toFloat32Array,
   triggerFloatTrackEdges,
   tryBuildUserTrack,
@@ -4289,6 +4295,131 @@ assert.ok(
   "two-bone IK weight should blend the solved endpoint back toward the input pose"
 );
 
+const ikApplicationSkeleton = createSkeleton([
+  { name: "world", rest: { translation: [0.25, 0.1, -0.2], rotation: quatFromAxisAngle([0, 0, 1], Math.PI / 5) } },
+  { name: "hip", parentName: "world", rest: { rotation: quatFromAxisAngle([1, 0, 0], 0.2) } },
+  { name: "knee", parentName: "hip", rest: { translation: [0, -1, 0], rotation: quatFromAxisAngle([0, 1, 0], -0.15) } },
+  { name: "ankle", parentName: "knee", rest: { translation: [0, -1, 0] } },
+  { name: "toe", parentName: "ankle", rest: { translation: [0, -0.25, 0] } }
+]);
+const ikApplicationPose = clonePose(ikApplicationSkeleton.restPose);
+const ikApplicationModels = localToModelPose(ikApplicationSkeleton, ikApplicationPose);
+const initialAnklePosition = modelPosition(ikApplicationModels[3]!);
+const ikApplicationTarget: [number, number, number] = [initialAnklePosition[0] + 0.24, initialAnklePosition[1] + 0.18, initialAnklePosition[2] + 0.16];
+const matrixIk = solveTwoBoneIkModel({
+  root: ikApplicationModels[1]!,
+  mid: ikApplicationModels[2]!,
+  end: ikApplicationModels[3]!,
+  target: ikApplicationTarget,
+  pole: [0, 0, 1],
+  midAxis: [0, 0, 1],
+  soften: 1
+});
+assert.ok(matrixIk.reached, "matrix two-bone IK should report reachable targets with full weight");
+assert.ok(Math.abs(Math.hypot(...matrixIk.rootLocalCorrection) - 1) < 1e-5);
+assert.ok(Math.abs(Math.hypot(...matrixIk.midLocalCorrection) - 1) < 1e-5);
+assert.ok(
+  quaternionNearlyEqual(modelCorrectionToLocalPostCorrection(ikApplicationModels[1]!, matrixIk.rootModelCorrection), matrixIk.rootLocalCorrection, 1e-5),
+  "matrix IK should expose the root correction in local post-multiply space"
+);
+
+const appliedIkPose = clonePose(ikApplicationPose);
+const appliedIkModels = localToModelPose(ikApplicationSkeleton, appliedIkPose);
+applyTwoBoneIkLocalCorrections({
+  skeleton: ikApplicationSkeleton,
+  localPose: appliedIkPose,
+  modelPose: appliedIkModels,
+  rootJoint: 1,
+  midJoint: 2,
+  corrections: matrixIk
+});
+assert.ok(vectorNearlyEqual(modelPosition(appliedIkModels[3]!), matrixIk.end, 1e-4), "local two-bone corrections should place the ankle at the solved model-space endpoint");
+
+const wrongIkPose = clonePose(ikApplicationPose);
+wrongIkPose[1] = { ...wrongIkPose[1]!, rotation: multiplyQuat(wrongIkPose[1]!.rotation, matrixIk.rootModelCorrection) };
+wrongIkPose[2] = { ...wrongIkPose[2]!, rotation: multiplyQuat(wrongIkPose[2]!.rotation, matrixIk.midModelCorrection) };
+const wrongIkModels = localToModelPose(ikApplicationSkeleton, wrongIkPose);
+assert.ok(
+  distance3(modelPosition(wrongIkModels[3]!), matrixIk.end) > 0.01,
+  "model-space two-bone corrections must not be applied directly as local post-multiply corrections under a rotated parent"
+);
+
+const partialIkPose = clonePose(ikApplicationPose);
+const partialIkModels = localToModelPose(ikApplicationSkeleton, partialIkPose);
+applyTwoBoneIkLocalCorrections({
+  skeleton: ikApplicationSkeleton,
+  localPose: partialIkPose,
+  modelPose: partialIkModels,
+  rootJoint: 1,
+  midJoint: 2,
+  corrections: matrixIk,
+  updateTo: 3
+});
+const staleToePosition = modelPosition(partialIkModels[4]!);
+const fullyUpdatedIkModels = localToModelPose(ikApplicationSkeleton, partialIkPose);
+assert.ok(vectorNearlyEqual(modelPosition(partialIkModels[3]!), modelPosition(fullyUpdatedIkModels[3]!), 1e-5), "range update should include the requested end joint");
+assert.ok(distance3(staleToePosition, modelPosition(fullyUpdatedIkModels[4]!)) > 1e-4, "range-limited updates should leave later descendants untouched");
+updateLocalToModelPoseRange(ikApplicationSkeleton, partialIkPose, partialIkModels, { from: 3, fromExcluded: true });
+assert.ok(vectorNearlyEqual(modelPosition(partialIkModels[4]!), modelPosition(fullyUpdatedIkModels[4]!), 1e-5), "fromExcluded range update should refresh descendants from an existing model matrix");
+
+const aimApplicationSkeleton = createSkeleton([
+  { name: "root", rest: { translation: [0.4, -0.2, 0.1], rotation: quatFromAxisAngle([0, 0, 1], -Math.PI / 6) } },
+  { name: "neck", parentName: "root", rest: { translation: [0, 1, 0], rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4) } },
+  { name: "head", parentName: "neck", rest: { translation: [0.25, 0, 0], rotation: quatFromAxisAngle([1, 0, 0], -0.2) } }
+]);
+const aimApplicationPose = clonePose(aimApplicationSkeleton.restPose);
+const aimApplicationModels = localToModelPose(aimApplicationSkeleton, aimApplicationPose);
+const headTarget: [number, number, number] = [0.2, 1.8, 1.1];
+const headModelBeforeAim = aimApplicationModels[2]!;
+const headAim = solveAimIk({
+  joint: headModelBeforeAim,
+  target: headTarget,
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 1, 0]
+});
+const expectedHeadAimLocalCorrection = modelCorrectionToLocalPostCorrection(headModelBeforeAim, headAim.jointCorrection);
+const appliedHeadAim = applyAimIkModelCorrection({
+  skeleton: aimApplicationSkeleton,
+  localPose: aimApplicationPose,
+  modelPose: aimApplicationModels,
+  joint: 2,
+  jointCorrection: headAim.jointCorrection
+});
+assert.ok(
+  quaternionNearlyEqual(appliedHeadAim.localCorrection, expectedHeadAimLocalCorrection, 1e-5),
+  "aim application should report the local post-multiply correction that was applied"
+);
+const appliedHeadPosition = modelPosition(aimApplicationModels[2]!);
+const appliedHeadTargetDirection = normalizeVec3([
+  headTarget[0] - appliedHeadPosition[0],
+  headTarget[1] - appliedHeadPosition[1],
+  headTarget[2] - appliedHeadPosition[2]
+]);
+assert.ok(dotVec3(matrixDirection(aimApplicationModels[2]!, [1, 0, 0]), appliedHeadTargetDirection) > 0.999, "aim application should preserve solveAimIk model-space semantics when writing back to local pose");
+
+const aimChainPose = clonePose(aimApplicationSkeleton.restPose);
+const aimChainModels = localToModelPose(aimApplicationSkeleton, aimChainPose);
+const aimChain = applyAimIkChainToPose({
+  skeleton: aimApplicationSkeleton,
+  localPose: aimChainPose,
+  modelPose: aimChainModels,
+  joints: [{ joint: 1, weight: 0.35 }, { joint: 2, weight: 1 }],
+  target: headTarget,
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 1, 0]
+});
+const aimChainHeadPosition = modelPosition(aimChainModels[2]!);
+const aimChainTargetDirection = normalizeVec3([
+  headTarget[0] - aimChainHeadPosition[0],
+  headTarget[1] - aimChainHeadPosition[1],
+  headTarget[2] - aimChainHeadPosition[2]
+]);
+assert.equal(aimChain.corrections.length, 2);
+assert.ok(aimChain.corrections.every((correction) => correction.localCorrection.every(Number.isFinite)), "aim chain corrections should stay finite");
+assert.ok(dotVec3(matrixDirection(aimChainModels[2]!, [1, 0, 0]), aimChainTargetDirection) > 0.999, "aim chain helper should solve and apply corrections in deterministic model/local spaces");
+
 const footPlant = solveFootPlant(
   [
     {
@@ -5195,6 +5326,20 @@ function vectorNearlyEqual(actual: readonly number[], expected: readonly number[
     Math.abs(actual[1]! - expected[1]!) <= tolerance &&
     Math.abs(actual[2]! - expected[2]!) <= tolerance
   );
+}
+
+function distance3(a: readonly number[], b: readonly number[]): number {
+  return Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
+}
+
+function modelPosition(matrix: Float32Array): [number, number, number] {
+  return transformPoint(matrix, [0, 0, 0]);
+}
+
+function matrixDirection(matrix: Float32Array, localDirection: [number, number, number]): [number, number, number] {
+  const origin = modelPosition(matrix);
+  const point = transformPoint(matrix, localDirection);
+  return normalizeVec3([point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]]);
 }
 
 function assertMat4NearlyEqual(actual: readonly number[], expected: readonly number[], tolerance: number, message: string): void {
