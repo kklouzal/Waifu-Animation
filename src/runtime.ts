@@ -325,11 +325,19 @@ type RuntimeMotionInterval = {
   interval: ReturnType<typeof sampleMotionIntervalDelta>;
 };
 
+function readRootMotionEffectiveWeight(layer: AnimationLayer, carrierJoint: number): number {
+  const layerWeight = finiteNonNegative(layer.weight, 0);
+  if (layerWeight <= 0) return 0;
+  if (!layer.mask) return layerWeight;
+  if (carrierJoint < 0 || carrierJoint >= layer.mask.length) return 0;
+  return layerWeight * finiteNonNegative(layer.mask[carrierJoint], 0);
+}
+
 function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold: number): RuntimeUpdateResult {
   let rootMotionDelta = identityTransform();
   const rootMotionLayers: RuntimeRootMotionLayerDelta[] = [];
   const active = intervals
-    .filter(({ layer }) => layer.blendMode === "override" && layer.weight > 0.0001)
+    .filter(({ layer, interval }) => layer.blendMode === "override" && readRootMotionEffectiveWeight(layer, interval.from.jointIndex) > 0.0001)
     .sort((a, b) => a.layer.priority - b.layer.priority || a.layer.id.localeCompare(b.layer.id));
 
   for (let index = 0; index < active.length; ) {
@@ -338,19 +346,21 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
     let totalWeight = 0;
     while (index < active.length && active[index]!.layer.priority === priority) {
       const item = active[index]!;
+      const effectiveWeight = readRootMotionEffectiveWeight(item.layer, item.interval.from.jointIndex);
       group.push(item);
-      totalWeight += finiteNonNegative(item.layer.weight, 0);
+      totalWeight += effectiveWeight;
       index += 1;
     }
     if (totalWeight <= 0) continue;
 
     for (const item of group) {
-      const normalizedWeight = finiteNonNegative(item.layer.weight, 0) / totalWeight;
+      const effectiveWeight = readRootMotionEffectiveWeight(item.layer, item.interval.from.jointIndex);
+      const normalizedWeight = effectiveWeight / totalWeight;
       rootMotionLayers.push({
         id: item.layer.id,
         clipId: item.layer.clip.id,
         priority: item.layer.priority,
-        weight: item.layer.weight,
+        weight: effectiveWeight,
         normalizedWeight,
         fromTime: item.fromTime,
         toTime: item.toTime,
@@ -373,7 +383,7 @@ function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: numbe
   let firstRotation: Quat | undefined;
 
   for (const item of group) {
-    const normalizedWeight = finiteNonNegative(item.layer.weight, 0) / totalWeight;
+    const normalizedWeight = readRootMotionEffectiveWeight(item.layer, item.interval.from.jointIndex) / totalWeight;
     if (normalizedWeight <= 0) continue;
 
     const delta = item.interval.delta;

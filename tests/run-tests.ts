@@ -2599,6 +2599,29 @@ const zeroWeightRootMotionUpdate = runtimeZeroWeightRootMotion.update(0.5, { col
 assert.deepEqual(zeroWeightRootMotionUpdate.rootMotionDelta, identityTransform(), "zero-weight root-motion layers should produce identity motion");
 assert.equal(zeroWeightRootMotionUpdate.rootMotionLayers.length, 0, "zero-weight root-motion layers should not emit diagnostics");
 
+const maskedMotionPoseClip: AnimationClip = {
+  id: "masked-motion-pose",
+  duration: 1,
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) },
+    { joint: "spine", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0.5, 0]) }
+  ]
+};
+const runtimeMaskedRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeMaskedRootMotion.setLayer("upper-body", maskedMotionPoseClip, {
+  weight: 1,
+  targetWeight: 1,
+  mask: createJointMask(motionSkeleton, 0, { spine: 1 })
+});
+const maskedRootMotionUpdate = runtimeMaskedRootMotion.update(0.5, { collectRootMotion: true });
+assert.deepEqual(maskedRootMotionUpdate.rootMotionDelta, identityTransform(), "masked-out root carrier should not contribute root motion");
+assert.equal(maskedRootMotionUpdate.rootMotionLayers.length, 0, "masked-out root carrier should not emit root-motion diagnostics");
+assert.deepEqual(
+  runtimeMaskedRootMotion.evaluate().localPose[2]!.translation,
+  [0, 0.25, 0],
+  "root-motion masking should still allow the layer to own unmasked pose joints"
+);
+
 const weightedMotionA: AnimationClip = {
   id: "weighted-motion-a",
   duration: 1,
@@ -2619,6 +2642,25 @@ assert.deepEqual(
   weightedRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.normalizedWeight]),
   [["motion-a", 0.75], ["motion-b", 0.25]],
   "weighted root-motion diagnostics should be deterministic"
+);
+
+const runtimeFractionalMaskedRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeFractionalMaskedRootMotion.setLayer("masked-motion-a", weightedMotionA, {
+  weight: 1,
+  targetWeight: 1,
+  priority: 2,
+  mask: createJointMask(motionSkeleton, 0, { root: 0.5 })
+});
+runtimeFractionalMaskedRootMotion.setLayer("motion-b", weightedMotionB, { weight: 1, targetWeight: 1, priority: 2 });
+const fractionalMaskedRootMotionUpdate = runtimeFractionalMaskedRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  Math.abs(fractionalMaskedRootMotionUpdate.rootMotionDelta.translation[0] - 14 / 3) < 1e-6,
+  "fractional carrier mask weight should attenuate root-motion blend weight"
+);
+assert.deepEqual(
+  fractionalMaskedRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.weight, layer.normalizedWeight]),
+  [["masked-motion-a", 0.5, 1 / 3], ["motion-b", 1, 2 / 3]],
+  "fractional carrier masks should be reflected in root-motion diagnostics"
 );
 
 const weakPriorityRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
