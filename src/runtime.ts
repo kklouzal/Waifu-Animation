@@ -194,11 +194,13 @@ export class AnimationRuntime {
     for (const layer of this.layers.values()) {
       sanitizeLayerState(layer);
       const fromTime = layer.time;
+      const fromWeight = layer.weight;
       const advancedTime = layer.time + delta * layer.speed;
       layer.time = advancedTime;
       const alpha = dampAlpha(layer.fadeSpeed, delta);
       layer.weight += (layer.targetWeight - layer.weight) * alpha;
-      if (options.collectRootMotion && layer.blendMode === "override" && layer.weight > 0.0001 && delta > 0) {
+      const toWeight = layer.weight;
+      if (options.collectRootMotion && layer.blendMode === "override" && (fromWeight > 0.0001 || toWeight > 0.0001) && delta > 0) {
         const sampleOptions = {
           ...(layer.motionCarrier ? { carrier: layer.motionCarrier } : {}),
           loop: layer.loop,
@@ -210,6 +212,8 @@ export class AnimationRuntime {
           layer,
           fromTime,
           toTime: advancedTime,
+          fromWeight,
+          toWeight,
           interval: sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, advancedTime, sampleOptions)
         });
       }
@@ -322,22 +326,31 @@ type RuntimeMotionInterval = {
   layer: AnimationLayer;
   fromTime: number;
   toTime: number;
+  fromWeight: number;
+  toWeight: number;
   interval: ReturnType<typeof sampleMotionIntervalDelta>;
 };
 
-function readRootMotionEffectiveWeight(layer: AnimationLayer, carrierJoint: number): number {
-  const layerWeight = finiteNonNegative(layer.weight, 0);
+function readRootMotionEffectiveWeight(layer: AnimationLayer, carrierJoint: number, weight = layer.weight): number {
+  const layerWeight = finiteNonNegative(weight, 0);
   if (layerWeight <= 0) return 0;
   if (!layer.mask) return layerWeight;
   if (carrierJoint < 0 || carrierJoint >= layer.mask.length) return 0;
   return layerWeight * finiteNonNegative(layer.mask[carrierJoint], 0);
 }
 
+function readRootMotionIntervalEffectiveWeight(interval: RuntimeMotionInterval): number {
+  const carrierJoint = interval.interval.from.jointIndex;
+  const fromWeight = readRootMotionEffectiveWeight(interval.layer, carrierJoint, interval.fromWeight);
+  const toWeight = readRootMotionEffectiveWeight(interval.layer, carrierJoint, interval.toWeight);
+  return (fromWeight + toWeight) * 0.5;
+}
+
 function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold: number): RuntimeUpdateResult {
   let rootMotionDelta = identityTransform();
   const rootMotionLayers: RuntimeRootMotionLayerDelta[] = [];
   const active = intervals
-    .filter(({ layer, interval }) => layer.blendMode === "override" && readRootMotionEffectiveWeight(layer, interval.from.jointIndex) > 0.0001)
+    .filter((interval) => interval.layer.blendMode === "override" && readRootMotionIntervalEffectiveWeight(interval) > 0.0001)
     .sort((a, b) => a.layer.priority - b.layer.priority || a.layer.id.localeCompare(b.layer.id));
 
   for (let index = 0; index < active.length; ) {
@@ -346,7 +359,7 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
     let totalWeight = 0;
     while (index < active.length && active[index]!.layer.priority === priority) {
       const item = active[index]!;
-      const effectiveWeight = readRootMotionEffectiveWeight(item.layer, item.interval.from.jointIndex);
+      const effectiveWeight = readRootMotionIntervalEffectiveWeight(item);
       group.push(item);
       totalWeight += effectiveWeight;
       index += 1;
@@ -354,7 +367,7 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
     if (totalWeight <= 0) continue;
 
     for (const item of group) {
-      const effectiveWeight = readRootMotionEffectiveWeight(item.layer, item.interval.from.jointIndex);
+      const effectiveWeight = readRootMotionIntervalEffectiveWeight(item);
       const normalizedWeight = effectiveWeight / totalWeight;
       rootMotionLayers.push({
         id: item.layer.id,
@@ -383,7 +396,7 @@ function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: numbe
   let firstRotation: Quat | undefined;
 
   for (const item of group) {
-    const normalizedWeight = readRootMotionEffectiveWeight(item.layer, item.interval.from.jointIndex) / totalWeight;
+    const normalizedWeight = readRootMotionIntervalEffectiveWeight(item) / totalWeight;
     if (normalizedWeight <= 0) continue;
 
     const delta = item.interval.delta;

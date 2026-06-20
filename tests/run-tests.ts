@@ -2644,6 +2644,45 @@ assert.deepEqual(
   "weighted root-motion diagnostics should be deterministic"
 );
 
+const runtimeSteadyIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+runtimeSteadyIntervalRootMotion.setLayer("steady", weightedMotionA, { weight: 0.5, targetWeight: 0.5, fadeSpeed: 8 });
+const steadyIntervalRootMotionUpdate = runtimeSteadyIntervalRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  Math.abs(steadyIntervalRootMotionUpdate.rootMotionDelta.translation[0] - 5) < 1e-6,
+  "steady root-motion weights should preserve the existing threshold-scaled behavior"
+);
+assert.deepEqual(
+  steadyIntervalRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.weight, layer.normalizedWeight]),
+  [["steady", 0.5, 1]],
+  "steady root-motion diagnostics should report the unchanged effective weight"
+);
+
+const runtimeFadeInIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+runtimeFadeInIntervalRootMotion.setLayer("fade-in", weightedMotionA, { weight: 0, targetWeight: 1, fadeSpeed: Math.log(4) });
+const fadeInIntervalRootMotionUpdate = runtimeFadeInIntervalRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  Math.abs(fadeInIntervalRootMotionUpdate.rootMotionDelta.translation[0] - 3.75) < 1e-6,
+  "fade-in root motion should use interval-average weight instead of applying the endpoint weight to the whole interval"
+);
+assert.deepEqual(
+  fadeInIntervalRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.weight, layer.normalizedWeight]),
+  [["fade-in", 0.375, 1]],
+  "fade-in root-motion diagnostics should expose the interval effective weight"
+);
+
+const runtimeFadeOutIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+runtimeFadeOutIntervalRootMotion.setLayer("fade-out", weightedMotionA, { weight: 1, targetWeight: 0, fadeSpeed: Math.log(4) });
+const fadeOutIntervalRootMotionUpdate = runtimeFadeOutIntervalRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  Math.abs(fadeOutIntervalRootMotionUpdate.rootMotionDelta.translation[0] - 6.25) < 1e-6,
+  "fade-out root motion should use interval-average weight symmetrically"
+);
+assert.deepEqual(
+  fadeOutIntervalRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.weight, layer.normalizedWeight]),
+  [["fade-out", 0.625, 1]],
+  "fade-out root-motion diagnostics should expose the interval effective weight"
+);
+
 const runtimeFractionalMaskedRootMotion = new AnimationRuntime(motionSkeleton);
 runtimeFractionalMaskedRootMotion.setLayer("masked-motion-a", weightedMotionA, {
   weight: 1,
@@ -2661,6 +2700,24 @@ assert.deepEqual(
   fractionalMaskedRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.weight, layer.normalizedWeight]),
   [["masked-motion-a", 0.5, 1 / 3], ["motion-b", 1, 2 / 3]],
   "fractional carrier masks should be reflected in root-motion diagnostics"
+);
+
+const runtimeMaskedFadeIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+runtimeMaskedFadeIntervalRootMotion.setLayer("masked-fade-in", weightedMotionA, {
+  weight: 0,
+  targetWeight: 1,
+  fadeSpeed: Math.log(4),
+  mask: createJointMask(motionSkeleton, 0, { root: 0.5 })
+});
+const maskedFadeIntervalRootMotionUpdate = runtimeMaskedFadeIntervalRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  Math.abs(maskedFadeIntervalRootMotionUpdate.rootMotionDelta.translation[0] - 1.875) < 1e-6,
+  "masked fade-in root motion should average the masked effective weights across the traversed interval"
+);
+assert.deepEqual(
+  maskedFadeIntervalRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.weight, layer.normalizedWeight]),
+  [["masked-fade-in", 0.1875, 1]],
+  "masked fade-in root-motion diagnostics should report the interval masked effective weight"
 );
 
 const weakPriorityRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
