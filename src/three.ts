@@ -758,7 +758,12 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const lowerLength = lengthVec3(subVec3(end, joint));
     const armLength = Math.max(0.25, upperLength + lowerLength);
     const sideSwing = side === "left" ? swing : -swing;
-    const desiredUpperDirection = normalizeVec3([sign * 0.02, -0.985, 0.12 + sideSwing * 0.02], [0, -1, 0]);
+    const bodyForward = objectWorldHorizontalDirection(hips ?? upper.parent, [0, 0, -1], [0, 0, -1]);
+    const sideOut = horizontalDirectionFrom(root, hip, scaleVec3(objectWorldHorizontalDirection(hips ?? upper.parent, [1, 0, 0], [1, 0, 0]), sign));
+    const desiredUpperDirection = normalizeVec3(
+      addVec3(addVec3(scaleVec3(sideOut, 0.02), [0, -0.985, 0]), scaleVec3(bodyForward, 0.12 + sideSwing * 0.02)),
+      [0, -1, 0]
+    );
     const upperCorrection = quatFromUnitVectors(normalizeVec3(subVec3(joint, root), desiredUpperDirection), desiredUpperDirection);
     const appliedUpperArmDirection = applyWorldQuaternionCorrection(upper, upperCorrection, amount);
     upper.updateMatrixWorld(true);
@@ -768,18 +773,20 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const correctedJoint = objectWorldVec3(lower);
     const correctedEnd = objectWorldVec3(hand);
     const desiredJoint = addVec3(correctedRoot, scaleVec3(desiredUpperDirection, upperLength));
-    const handTarget: Vec3 = [
-      hip[0] + sign * Math.min(0.038, shoulderWidth * 0.08),
-      correctedRoot[1] - armLength * 0.72,
-      hip[2] + 0.045 + sideSwing * 0.018
-    ];
+    const handTarget = addVec3(
+      addVec3([hip[0], correctedRoot[1] - armLength * 0.72, hip[2]], scaleVec3(sideOut, Math.min(0.038, shoulderWidth * 0.08))),
+      scaleVec3(bodyForward, 0.045 + sideSwing * 0.018)
+    );
     const pole = normalizeVec3(subVec3(desiredJoint, correctedRoot), desiredUpperDirection);
     const ik = solveTwoBoneIkCorrections({
       root: correctedRoot,
       joint: correctedJoint,
       end: correctedEnd,
       target: handTarget,
-      pole: [sign * Math.max(0.02, shoulderWidth * 0.06), pole[1] - 0.08, 0.42 + sideSwing * 0.035],
+      pole: addVec3(
+        addVec3(scaleVec3(sideOut, Math.max(0.02, shoulderWidth * 0.06)), [0, pole[1] - 0.08, 0]),
+        scaleVec3(bodyForward, 0.56 + sideSwing * 0.035)
+      ),
       maxStretch: 0.58
     });
 
@@ -792,7 +799,10 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     upper.updateMatrixWorld(true);
     lower.updateMatrixWorld(true);
     hand.updateMatrixWorld(true);
-    const desiredLowerDirection = normalizeVec3([-sign * 0.32, -0.88, -0.16 + sideSwing * 0.02], [0, -1, 0]);
+    const desiredLowerDirection = normalizeVec3(
+      addVec3(addVec3(scaleVec3(sideOut, -0.24), [0, -0.88, 0]), scaleVec3(bodyForward, -0.18 + sideSwing * 0.02)),
+      [0, -1, 0]
+    );
     const finalLowerDirectionCorrection = quatFromUnitVectors(normalizeVec3(subVec3(objectWorldVec3(hand), objectWorldVec3(lower)), desiredLowerDirection), desiredLowerDirection);
     const appliedFinalLowerArmDirection = applyWorldQuaternionCorrection(lower, finalLowerDirectionCorrection, amount);
     return {
@@ -964,6 +974,18 @@ function worldOffsetToLocal(bone: Object3D, offset: Vec3, amount: number): Vec3 
 function objectWorldVec3(object: Object3D): Vec3 {
   object.getWorldPosition(tmpWorldDirection);
   return [tmpWorldDirection.x, tmpWorldDirection.y, tmpWorldDirection.z];
+}
+
+function objectWorldHorizontalDirection(object: Object3D | null | undefined, localDirection: Vec3, fallback: Vec3): Vec3 {
+  if (!object) return normalizeVec3([fallback[0], 0, fallback[2]], fallback);
+  object.updateMatrixWorld(true);
+  object.getWorldQuaternion(tmpCurrentWorld);
+  const direction = rotateVec3ByQuat([tmpCurrentWorld.x, tmpCurrentWorld.y, tmpCurrentWorld.z, tmpCurrentWorld.w], localDirection);
+  return normalizeVec3([direction[0], 0, direction[2]], fallback);
+}
+
+function horizontalDirectionFrom(from: Vec3, to: Vec3, fallback: Vec3): Vec3 {
+  return normalizeVec3([from[0] - to[0], 0, from[2] - to[2]], fallback);
 }
 
 function estimateShoulderWidth(leftUpper: Object3D | null | undefined, rightUpper: Object3D | null | undefined): number {

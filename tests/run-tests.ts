@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AnimationMixer, LoopOnce, Object3D, Vector3 } from "three";
+import { AnimationMixer, LoopOnce, Object3D, Quaternion, Vector3 } from "three";
 import {
   AnimationRuntime,
   type AnimationManifest,
@@ -2583,6 +2583,40 @@ assert.ok(
   "locomotion posture IK should bend the lower arm toward the hand target"
 );
 
+const rotatedLocomotionPostureBones = new Map<string, Object3D>();
+const rotatedLocomotionPostureRoot = new Object3D();
+rotatedLocomotionPostureRoot.rotation.y = Math.PI / 2;
+for (const name of locomotionUpperBodyTargets.map((target) => target.bone)) {
+  const bone = new Object3D();
+  bone.name = name;
+  rotatedLocomotionPostureBones.set(name, bone);
+}
+const rotatedLocomotionPostureHips = new Object3D();
+rotatedLocomotionPostureHips.name = "hips";
+rotatedLocomotionPostureBones.set("hips", rotatedLocomotionPostureHips);
+rotatedLocomotionPostureRoot.add(rotatedLocomotionPostureHips);
+attachArmChain(rotatedLocomotionPostureRoot, rotatedLocomotionPostureBones, "left", 1);
+attachArmChain(rotatedLocomotionPostureRoot, rotatedLocomotionPostureBones, "right", -1);
+const rotatedPostureResult = applyThreeLocomotionUpperBodyPosture({
+  resolveBone: (bone) => rotatedLocomotionPostureBones.get(bone),
+  deltaSeconds: 1,
+  phase: 0.125,
+  influence: 1,
+  speed: 100
+});
+assert.equal(rotatedPostureResult.applied, true, "locomotion posture should apply on a yawed avatar root");
+rotatedLocomotionPostureRoot.updateMatrixWorld(true);
+const rotatedForward = new Vector3(0, 0, -1)
+  .applyQuaternion(rotatedLocomotionPostureHips.getWorldQuaternion(new Quaternion()))
+  .setY(0)
+  .normalize();
+for (const side of ["left", "right"] as const) {
+  const shoulder = rotatedLocomotionPostureBones.get(`${side}UpperArm`)!.getWorldPosition(new Vector3());
+  const elbow = rotatedLocomotionPostureBones.get(`${side}LowerArm`)!.getWorldPosition(new Vector3());
+  const hand = rotatedLocomotionPostureBones.get(`${side}Hand`)!.getWorldPosition(new Vector3());
+  assert.ok(signedJointForwardOffset(shoulder, elbow, hand, rotatedForward) > -0.005, "locomotion posture elbows should follow avatar forward on yawed roots");
+}
+
 const runtime = new AnimationRuntime(skeleton);
 runtime.setLayer("base", nodClip, { weight: 1, targetWeight: 1, loop: true });
 runtime.update(0.5);
@@ -4322,6 +4356,15 @@ function attachArmChain(root: Object3D, bones: Map<string, Object3D>, side: "lef
   root.add(upper);
   upper.add(lower);
   lower.add(hand);
+}
+
+function signedJointForwardOffset(a: Vector3, b: Vector3, c: Vector3, axis: Vector3): number {
+  const ac = c.clone().sub(a);
+  const ab = b.clone().sub(a);
+  const lengthSq = ac.lengthSq();
+  if (lengthSq <= 1e-8) return 0;
+  const closest = a.clone().addScaledVector(ac, ab.dot(ac) / lengthSq);
+  return b.clone().sub(closest).dot(axis);
 }
 
 function makeRuntimeClipDiagnosticStub(options: {
