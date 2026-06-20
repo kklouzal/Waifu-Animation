@@ -3938,6 +3938,71 @@ const nonFiniteDeltaFootPlant = applyThreeFootPlantResult(footPlant, {
 assert.equal(nonFiniteDeltaFootPlant.pelvisApplied, false, "Three foot plant damping should treat non-finite delta time as zero elapsed time");
 assert.deepEqual(nonFiniteDeltaFootPlant.pelvisOffsetLocal, [0, 0, 0]);
 
+const anchoredReachRoot = new Object3D();
+anchoredReachRoot.name = "anchoredReachRoot";
+const anchoredReachPelvis = new Object3D();
+anchoredReachPelvis.name = "hips";
+const anchoredReachHip = new Object3D();
+anchoredReachHip.name = "leftUpperLeg";
+anchoredReachHip.position.set(-0.1, -0.05, 0);
+const anchoredReachKnee = new Object3D();
+anchoredReachKnee.name = "leftLowerLeg";
+anchoredReachKnee.position.set(0, -0.45, 0.02);
+const anchoredReachAnkle = new Object3D();
+anchoredReachAnkle.name = "leftFoot";
+anchoredReachAnkle.position.set(0, -0.45, -0.02);
+anchoredReachRoot.add(anchoredReachPelvis);
+anchoredReachPelvis.add(anchoredReachHip);
+anchoredReachHip.add(anchoredReachKnee);
+anchoredReachKnee.add(anchoredReachAnkle);
+anchoredReachPelvis.position.set(0, 1, 0);
+anchoredReachRoot.updateMatrixWorld(true);
+const anchoredReachTarget = anchoredReachAnkle.getWorldPosition(new Vector3()).clone();
+anchoredReachRoot.position.z = -0.18;
+anchoredReachRoot.updateMatrixWorld(true);
+const anchoredReachCurrentAnkle = anchoredReachAnkle.getWorldPosition(new Vector3());
+const anchoredReachPlant = solveFootPlant(
+  [
+    {
+      id: "left",
+      hip: anchoredReachHip.getWorldPosition(new Vector3()).toArray() as [number, number, number],
+      knee: anchoredReachKnee.getWorldPosition(new Vector3()).toArray() as [number, number, number],
+      ankle: anchoredReachCurrentAnkle.toArray() as [number, number, number],
+      ground: {
+        point: [anchoredReachTarget.x, anchoredReachTarget.y - 0.08, anchoredReachTarget.z],
+        normal: [0, 1, 0],
+        rayStart: [anchoredReachTarget.x, anchoredReachTarget.y + 0.5, anchoredReachTarget.z]
+      },
+      footHeight: 0.08,
+      maxAnkleCorrection: 0.5,
+      maxStretch: 1
+    }
+  ],
+  { footHeight: 0.08, maxAnkleCorrection: 0.5, maxPelvisOffset: 0.08, pelvisCompensation: 1, maxStretch: 1 }
+);
+assert.ok(anchoredReachPlant.pelvisOffset[1] < -0.005, "foot plant should lower the pelvis when a planted ankle would otherwise overreach");
+assert.ok(Math.abs(anchoredReachPlant.pelvisOffset[1]) <= 0.0801, "reach compensation should respect the configured pelvis limit");
+assert.equal(anchoredReachPlant.legs[0]!.ik?.clamped, false, "pelvis reach compensation should keep the anchored ankle reachable");
+applyThreeFootPlantResult(anchoredReachPlant, {
+  resolveBone: (bone) =>
+    ({
+      hips: anchoredReachPelvis,
+      leftUpperLeg: anchoredReachHip,
+      leftLowerLeg: anchoredReachKnee,
+      leftFoot: anchoredReachAnkle
+    })[bone] ?? null,
+  pelvis: "hips",
+  legs: [{ id: "left", hip: "leftUpperLeg", knee: "leftLowerLeg", ankle: "leftFoot", alignAnkleToGround: false }],
+  applyPelvis: true,
+  applyLegIk: true
+});
+anchoredReachRoot.updateMatrixWorld(true);
+const anchoredReachAppliedAnkle = anchoredReachAnkle.getWorldPosition(new Vector3());
+assert.ok(
+  anchoredReachAppliedAnkle.distanceTo(anchoredReachTarget) < 0.003,
+  "Three foot plant application should keep an anchored ankle world-stable while the avatar root advances"
+);
+
 const visemes = new VisemeMixer({ maxTotal: 0.4 });
 visemes.setTarget({ aa: 0.4, ou: 0.4 });
 const mixed = visemes.update(1 / 30);

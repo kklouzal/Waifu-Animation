@@ -46,7 +46,7 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const lowerLength = Math.max(1e-5, lengthVec3(subVec3(input.end, input.joint)));
   const physicalMinReach = Math.abs(upperLength - lowerLength) + 1e-5;
   const physicalMaxReach = upperLength + lowerLength;
-  const maxReach = physicalMaxReach * finiteNonNegative(input.maxStretch, 0.998);
+  const maxReach = physicalMaxReach * Math.min(1, finiteNonNegative(input.maxStretch, 0.998));
   const rootToTarget = subVec3(input.target, input.root);
   const targetDistance = lengthVec3(rootToTarget);
   const clampedDistance = clamp(targetDistance, physicalMinReach, maxReach);
@@ -184,6 +184,7 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   const legs: FootPlantLegResult[] = [];
   const issues: string[] = [];
   let lowestCorrection = 0;
+  let reachPelvisCorrection = 0;
 
   for (const leg of input) {
     const groundNormal = normalizeVec3(leg.ground?.normal ?? [0, 1, 0], [0, 1, 0]);
@@ -229,7 +230,32 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     if (clamped) issues.push(`${leg.id}: ankle correction clamped`);
   }
 
-  const pelvisOffset = scaleVec3(down, Math.min(maxPelvisOffset, lowestCorrection * pelvisCompensation));
+  for (const result of legs) {
+    if (!result.planted) continue;
+    const leg = input.find((candidate) => candidate.id === result.id);
+    if (!leg) continue;
+    const influence = clamp01(leg.influence ?? defaultInfluence);
+    if (influence <= 1e-5) continue;
+    const configuredMaxStretch = leg.maxStretch ?? options.maxStretch;
+    if (configuredMaxStretch === undefined) continue;
+    const upperLength = Math.max(1e-5, lengthVec3(subVec3(leg.knee, leg.hip)));
+    const lowerLength = Math.max(1e-5, lengthVec3(subVec3(leg.ankle, leg.knee)));
+    const maxStretch = Math.min(1, finiteNonNegative(configuredMaxStretch, 0.998));
+    const maxReach = (upperLength + lowerLength) * maxStretch;
+    const target = lerpVec3(leg.ankle, result.targetAnkle, influence);
+    const rootToTarget = subVec3(target, leg.hip);
+    const downDistance = dotVec3(rootToTarget, down);
+    if (downDistance <= 0) continue;
+    const distance = lengthVec3(rootToTarget);
+    const horizontalDistanceSquared = Math.max(0, distance * distance - downDistance * downDistance);
+    const maxDownDistanceSquared = maxReach * maxReach - horizontalDistanceSquared;
+    if (maxDownDistanceSquared <= 0) continue;
+    const maxDownDistance = Math.sqrt(maxDownDistanceSquared);
+    reachPelvisCorrection = Math.max(reachPelvisCorrection, (downDistance - maxDownDistance) / influence);
+  }
+
+  const pelvisCorrection = Math.max(lowestCorrection * pelvisCompensation, reachPelvisCorrection);
+  const pelvisOffset = scaleVec3(down, Math.min(maxPelvisOffset, pelvisCorrection));
   let plantedCount = 0;
   for (const result of legs) {
     if (!result.planted) continue;
