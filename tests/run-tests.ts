@@ -54,6 +54,7 @@ import {
   clonePose,
   cloneTransform,
   distributeLookAt,
+  dotVec3,
   applySourceTrackPolicy,
   filterTracksByNamePolicy,
   AUTHORED_BASE_TRACK_POLICY,
@@ -89,6 +90,7 @@ import {
   sampleTrack,
   sampleUserTrack,
   sanitizeQuaternionTrackValues,
+  solveAimIk,
   solveFootPlant,
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
@@ -3970,6 +3972,118 @@ const finitePresenceFrame = presenceA.update({
 assert.ok(finitePresenceFrame.lookAtTarget.every(Number.isFinite), "presence look target should stay finite for non-finite timing");
 assert.ok(finitePresenceFrame.boneTargets.every((target) => target.rotation.every(Number.isFinite)), "presence bone targets should stay finite for non-finite timing");
 
+const aim = solveAimIk({
+  target: [0, 1, 0],
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 0, 1]
+});
+assert.equal(aim.reached, true);
+assert.ok(aim.alignmentError < 1e-5, "aim IK should align the offsetted forward axis to the target");
+assert.ok(Math.hypot(aim.correctedForward[0], aim.correctedForward[1] - 1, aim.correctedForward[2]) < 1e-5, "aim IK should rotate the model forward axis toward the target");
+assert.ok(Math.hypot(aim.correctedUp[0], aim.correctedUp[1], aim.correctedUp[2] - 1) < 1e-5, "aim IK should keep model up aligned to the projected pole");
+assert.ok(Math.abs(Math.hypot(...aim.jointCorrection) - 1) < 1e-5);
+
+const partialAim = solveAimIk({
+  target: [0, 1, 0],
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 0, 1],
+  weight: 0.5
+});
+assert.ok(partialAim.alignmentError > 0.01 && partialAim.alignmentError < Math.PI / 2, "partial aim IK weight should leave a deterministic residual angle");
+assert.ok(dotVec3(partialAim.correctedForward, [0, 1, 0]) > 0.25, "partial aim IK should still rotate toward the target");
+
+const rotatedJointAim = solveAimIk({
+  jointRotation: quatFromAxisAngle([0, 0, 1], Math.PI / 2),
+  target: [0, 2, 0],
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 1, 0]
+});
+assert.ok(rotatedJointAim.alignmentError < 1e-5, "aim IK should accept joint rotation as the model-space orientation input");
+assert.ok(Math.hypot(...rotatedJointAim.jointCorrection.slice(0, 3)) < 1e-5, "already aligned rotated joints should produce an identity correction");
+assert.ok(vectorNearlyEqual(rotatedJointAim.correctedForward, [0, 1, 0], 1e-5), "aim IK correctedForward should be reported in model space");
+
+const rotatedJointCorrection = quatFromAxisAngle([0, 1, 0], Math.PI / 2);
+const rotatedJointNeedsCorrectionAim = solveAimIk({
+  jointRotation: rotatedJointCorrection,
+  target: [0, 1, 0],
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 0, 1]
+});
+const rotatedCorrectedModelRotation = multiplyQuat(rotatedJointNeedsCorrectionAim.jointCorrection, rotatedJointCorrection);
+const rotatedCorrectedForward = normalizeVec3(rotateVec3ByQuat(rotatedCorrectedModelRotation, [1, 0, 0]), [1, 0, 0]);
+const rotatedCorrectedUp = normalizeVec3(rotateVec3ByQuat(rotatedCorrectedModelRotation, [0, 1, 0]), [0, 1, 0]);
+assert.ok(rotatedJointNeedsCorrectionAim.alignmentError < 1e-5, "rotated aim IK should align the model-space correction to the target");
+assert.ok(vectorNearlyEqual(rotatedCorrectedForward, [0, 1, 0], 1e-5), "aim IK jointCorrection should pre-multiply the model joint rotation");
+assert.ok(vectorNearlyEqual(rotatedJointNeedsCorrectionAim.correctedForward, rotatedCorrectedForward, 1e-5), "correctedForward should match the documented model-space application order");
+assert.ok(vectorNearlyEqual(rotatedJointNeedsCorrectionAim.correctedUp, rotatedCorrectedUp, 1e-5), "correctedUp should match the documented model-space application order");
+assert.ok(vectorNearlyEqual(rotatedJointNeedsCorrectionAim.targetDirection, [0, 1, 0], 1e-5), "targetDirection should be reported in model space");
+
+const matrixJointAim = solveAimIk({
+  joint: composeMat4({ translation: [0, 0, 0], rotation: rotatedJointCorrection, scale: [1, 1, 1] }),
+  target: [0, 1, 0],
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 0, 1]
+});
+const matrixCorrectedModelRotation = multiplyQuat(matrixJointAim.jointCorrection, rotatedJointCorrection);
+const matrixCorrectedForward = normalizeVec3(rotateVec3ByQuat(matrixCorrectedModelRotation, [1, 0, 0]), [1, 0, 0]);
+assert.ok(matrixJointAim.alignmentError < 1e-5, "aim IK should derive model correction space from a joint matrix");
+assert.ok(vectorNearlyEqual(matrixCorrectedForward, [0, 1, 0], 1e-5), "matrix aim IK correction should pre-multiply the model joint rotation");
+
+const directionAim = solveAimIk({
+  targetDirection: [0, 0, 1],
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 1, 0]
+});
+assert.ok(directionAim.alignmentError < 1e-5, "aim IK should accept a model-space target direction without a target point");
+assert.ok(Math.hypot(directionAim.correctedForward[0], directionAim.correctedForward[1], directionAim.correctedForward[2] - 1) < 1e-5);
+
+const poleOnlyAim = solveAimIk({
+  target: [2, 0, 0],
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 0, 1]
+});
+assert.ok(poleOnlyAim.alignmentError < 1e-5);
+assert.ok(Math.hypot(poleOnlyAim.correctedForward[0] - 1, poleOnlyAim.correctedForward[1], poleOnlyAim.correctedForward[2]) < 1e-5, "aim IK pole correction must not disturb an already aligned forward axis");
+assert.ok(Math.hypot(poleOnlyAim.correctedUp[0], poleOnlyAim.correctedUp[1], poleOnlyAim.correctedUp[2] - 1) < 1e-5);
+
+const opposedAim = solveAimIk({ target: [-1, 0, 0], forward: [1, 0, 0], up: [0, 1, 0], pole: [0, 1, 0] });
+assert.equal(opposedAim.reached, true);
+assert.ok(opposedAim.jointCorrection.every(Number.isFinite), "opposed aim targets should produce a finite 180-degree correction");
+assert.ok(Math.hypot(opposedAim.correctedForward[0] + 1, opposedAim.correctedForward[1], opposedAim.correctedForward[2]) < 1e-5);
+
+const offsetUnreachableAim = solveAimIk({
+  target: [1, 0, 0],
+  forward: [1, 0, 0],
+  offset: [0, 2, 0],
+  up: [0, 1, 0],
+  pole: [0, 0, 1]
+});
+assert.equal(offsetUnreachableAim.reached, false, "aim IK should report offset targets outside the target sphere as unreachable");
+assert.deepEqual(offsetUnreachableAim.jointCorrection, [0, 0, 0, 1]);
+
+const finiteAim = solveAimIk({
+  jointPosition: [Number.NaN, 0, 0],
+  jointRotation: [Number.NaN, 0, 0, 1],
+  target: [Number.NaN, 0, 0],
+  forward: [Number.NaN, 0, 0],
+  up: [0, Number.NaN, 0],
+  pole: [0, 0, Number.POSITIVE_INFINITY],
+  twistAngle: Number.NaN,
+  weight: Number.NaN
+});
+assert.ok(finiteAim.jointCorrection.every(Number.isFinite), "aim IK should sanitize non-finite job inputs");
+assert.ok(finiteAim.correctedForward.every(Number.isFinite) && finiteAim.correctedUp.every(Number.isFinite));
+const zeroAxisAim = solveAimIk({ target: [0, 1, 0], forward: [0, 0, 0], up: [0, 0, 0], pole: [0, 0, 0] });
+assert.ok(zeroAxisAim.jointCorrection.every(Number.isFinite), "aim IK should use stable fallbacks for zero-length axes");
+assert.ok(zeroAxisAim.correctedForward.every(Number.isFinite) && zeroAxisAim.correctedUp.every(Number.isFinite));
+
 const ik = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0.5, -1.5, 0], pole: [0, 0, 1] });
 assert.ok(ik.targetReach > 0.9);
 assert.ok(Number.isFinite(ik.joint[0]));
@@ -4000,6 +4114,8 @@ assert.equal(fullReachIk.clamped, false, "default IK softening must not report a
 assert.ok(Math.abs(fullReachIk.targetReach - 1) < 1e-5, "physically reachable targets should report full target reach");
 assert.ok(fullReachIk.solvedReach < 1, "default IK softening may still keep the solved endpoint short of full extension");
 assert.equal(fullReachIk.stretchLimited, true);
+const unsoftenedFullReachIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0, -2, 0], pole: [0, 0, 1], soften: 1 });
+assert.ok(Math.abs(unsoftenedFullReachIk.solvedReach - 1) < 1e-5, "soften=1 should leave a reachable full-extension target unshortened");
 
 const stretchLimitedIk = solveTwoBoneIk({
   root: [0, 0, 0],
@@ -4028,6 +4144,31 @@ const nonOrthogonalPoleIk = solveTwoBoneIk({
   pole: [0, -1, 1]
 });
 assert.ok(Math.abs(Math.hypot(...nonOrthogonalPoleIk.joint) - 1) < 1e-5, "IK bend pole must not change the upper bone length");
+const twistedPoleIk = solveTwoBoneIk({
+  root: [0, 0, 0],
+  joint: [0, -1, 0],
+  end: [0, -2, 0],
+  target: [0, -1.5, 0],
+  pole: [0, 0, 1],
+  twistAngle: Math.PI / 2,
+  soften: 1
+});
+assert.ok(Math.abs(Math.abs(twistedPoleIk.joint[0]) - Math.hypot(twistedPoleIk.joint[0], twistedPoleIk.joint[2])) < 1e-5, "two-bone IK twist should rotate the bend plane around the target axis");
+const weightedIkCorrections = solveTwoBoneIkCorrections({
+  root: [0, 0, 0],
+  joint: [0, -1, 0],
+  end: [0, -2, 0],
+  target: [0.5, -1.5, 0],
+  pole: [0, 0, 1],
+  weight: 0.5,
+  midAxis: [0, 0, 1]
+});
+assert.ok(Math.abs(Math.hypot(...weightedIkCorrections.rootCorrection) - 1) < 1e-5);
+assert.ok(
+  Math.hypot(weightedIkCorrections.end[0], weightedIkCorrections.end[1] + 2, weightedIkCorrections.end[2]) <
+    Math.hypot(ikCorrections.end[0], ikCorrections.end[1] + 2, ikCorrections.end[2]),
+  "two-bone IK weight should blend the solved endpoint back toward the input pose"
+);
 
 const footPlant = solveFootPlant(
   [
@@ -4158,7 +4299,10 @@ const footPlantApply = applyThreeFootPlantResult(footPlant, {
 assert.equal(footPlantApply.applied, true);
 assert.equal(footPlantApply.pelvisApplied, true);
 assert.ok(pelvisBone.position.y < 0);
-assert.ok(Math.abs(leftHipBone.quaternion.w) < 0.99999 || Math.abs(leftKneeBone.quaternion.w) < 0.99999);
+assert.ok(
+  Math.hypot(leftHipBone.quaternion.x, leftHipBone.quaternion.y, leftHipBone.quaternion.z) > 1e-6 ||
+    Math.hypot(leftKneeBone.quaternion.x, leftKneeBone.quaternion.y, leftKneeBone.quaternion.z) > 1e-6
+);
 const firstPelvisY = pelvisBone.position.y;
 applyThreeFootPlantResult(footPlant, {
   resolveBone: (bone) => ({ hips: pelvisBone })[bone] ?? null,
