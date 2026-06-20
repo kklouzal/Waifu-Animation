@@ -360,6 +360,64 @@ assert.ok(
   validateSkeleton(invalidHumanoidMapSkeleton).some((issue) => issue.message === "humanoid map entry pelvis has invalid humanoid bone name"),
   "validateSkeleton should report invalid humanoid map entry names"
 );
+const validHumanoidHierarchySkeleton = createSkeleton([
+  { name: "hips", humanoid: "hips" },
+  { name: "spine", parentName: "hips", humanoid: "spine" },
+  { name: "chest", parentName: "spine", humanoid: "chest" },
+  { name: "neck", parentName: "chest", humanoid: "neck" },
+  { name: "head", parentName: "neck", humanoid: "head" },
+  { name: "leftShoulder", parentName: "chest", humanoid: "leftShoulder" },
+  { name: "leftUpperArm", parentName: "leftShoulder", humanoid: "leftUpperArm" },
+  { name: "leftLowerArm", parentName: "leftUpperArm", humanoid: "leftLowerArm" },
+  { name: "leftHand", parentName: "leftLowerArm", humanoid: "leftHand" },
+  { name: "rightUpperLeg", parentName: "hips", humanoid: "rightUpperLeg" },
+  { name: "rightLowerLeg", parentName: "rightUpperLeg", humanoid: "rightLowerLeg" },
+  { name: "rightFoot", parentName: "rightLowerLeg", humanoid: "rightFoot" }
+]);
+assert.deepEqual(validateSkeleton(validHumanoidHierarchySkeleton), [], "validateSkeleton should accept a coherent humanoid hierarchy");
+const invalidHumanoidHierarchySkeleton = createSkeleton([
+  { name: "hips", humanoid: "hips" },
+  { name: "spine", parentName: "hips", humanoid: "spine" },
+  { name: "chest", parentName: "spine", humanoid: "chest" },
+  { name: "neck", parentName: "chest", humanoid: "neck" },
+  { name: "head", parentName: "hips", humanoid: "head" },
+  { name: "leftUpperArm", parentName: "chest", humanoid: "leftUpperArm" },
+  { name: "leftLowerArm", parentName: "hips", humanoid: "leftLowerArm" },
+  { name: "rightUpperLeg", parentName: "hips", humanoid: "rightUpperLeg" },
+  { name: "rightLowerLeg", parentName: "rightUpperLeg", humanoid: "rightLowerLeg" },
+  { name: "rightFoot", parentName: "hips", humanoid: "rightFoot" }
+]);
+const invalidHumanoidHierarchyIssues = validateSkeleton(invalidHumanoidHierarchySkeleton);
+assert.ok(
+  invalidHumanoidHierarchyIssues.some(
+    (issue) => issue.index === 4 && issue.joint === "head" && issue.message === "humanoid bone head must be a descendant of neck"
+  ),
+  "validateSkeleton should report head mappings outside the neck chain"
+);
+assert.ok(
+  invalidHumanoidHierarchyIssues.some(
+    (issue) => issue.index === 6 && issue.joint === "leftLowerArm" && issue.message === "humanoid bone leftLowerArm must be a descendant of leftUpperArm"
+  ),
+  "validateSkeleton should report lower-arm mappings outside the upper-arm chain"
+);
+assert.ok(
+  invalidHumanoidHierarchyIssues.some(
+    (issue) => issue.index === 9 && issue.joint === "rightFoot" && issue.message === "humanoid bone rightFoot must be a descendant of rightLowerLeg"
+  ),
+  "validateSkeleton should report foot mappings outside the lower-leg chain"
+);
+const optionalMissingHumanoidHierarchySkeleton = createSkeleton([
+  { name: "hips", humanoid: "hips" },
+  { name: "spine", parentName: "hips", humanoid: "spine" },
+  { name: "head", parentName: "spine", humanoid: "head" },
+  { name: "leftLowerArm", parentName: "spine", humanoid: "leftLowerArm" },
+  { name: "rightFoot", parentName: "hips", humanoid: "rightFoot" }
+]);
+assert.deepEqual(
+  validateSkeleton(optionalMissingHumanoidHierarchySkeleton),
+  [],
+  "validateSkeleton should not require optional humanoid parent bones before checking hierarchy"
+);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 

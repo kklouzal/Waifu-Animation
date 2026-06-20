@@ -77,6 +77,66 @@ export function isHumanoidBoneName(value: unknown): value is HumanoidBoneName {
   return VRM_HUMANOID_BONE_SET.has(value);
 }
 
+const VRM_HUMANOID_ANCESTOR_RULES: readonly [child: HumanoidBoneName, ancestor: HumanoidBoneName][] = [
+  ["spine", "hips"],
+  ["chest", "spine"],
+  ["upperChest", "chest"],
+  ["neck", "spine"],
+  ["head", "spine"],
+  ["head", "neck"],
+  ["leftEye", "head"],
+  ["rightEye", "head"],
+  ["jaw", "head"],
+  ["leftShoulder", "spine"],
+  ["leftUpperArm", "spine"],
+  ["leftUpperArm", "leftShoulder"],
+  ["leftLowerArm", "leftUpperArm"],
+  ["leftHand", "leftLowerArm"],
+  ["rightShoulder", "spine"],
+  ["rightUpperArm", "spine"],
+  ["rightUpperArm", "rightShoulder"],
+  ["rightLowerArm", "rightUpperArm"],
+  ["rightHand", "rightLowerArm"],
+  ["leftUpperLeg", "hips"],
+  ["leftLowerLeg", "leftUpperLeg"],
+  ["leftFoot", "leftLowerLeg"],
+  ["leftToes", "leftFoot"],
+  ["rightUpperLeg", "hips"],
+  ["rightLowerLeg", "rightUpperLeg"],
+  ["rightFoot", "rightLowerLeg"],
+  ["rightToes", "rightFoot"],
+  ["leftThumbMetacarpal", "leftHand"],
+  ["leftThumbProximal", "leftThumbMetacarpal"],
+  ["leftThumbDistal", "leftThumbProximal"],
+  ["leftIndexProximal", "leftHand"],
+  ["leftIndexIntermediate", "leftIndexProximal"],
+  ["leftIndexDistal", "leftIndexIntermediate"],
+  ["leftMiddleProximal", "leftHand"],
+  ["leftMiddleIntermediate", "leftMiddleProximal"],
+  ["leftMiddleDistal", "leftMiddleIntermediate"],
+  ["leftRingProximal", "leftHand"],
+  ["leftRingIntermediate", "leftRingProximal"],
+  ["leftRingDistal", "leftRingIntermediate"],
+  ["leftLittleProximal", "leftHand"],
+  ["leftLittleIntermediate", "leftLittleProximal"],
+  ["leftLittleDistal", "leftLittleIntermediate"],
+  ["rightThumbMetacarpal", "rightHand"],
+  ["rightThumbProximal", "rightThumbMetacarpal"],
+  ["rightThumbDistal", "rightThumbProximal"],
+  ["rightIndexProximal", "rightHand"],
+  ["rightIndexIntermediate", "rightIndexProximal"],
+  ["rightIndexDistal", "rightIndexIntermediate"],
+  ["rightMiddleProximal", "rightHand"],
+  ["rightMiddleIntermediate", "rightMiddleProximal"],
+  ["rightMiddleDistal", "rightMiddleIntermediate"],
+  ["rightRingProximal", "rightHand"],
+  ["rightRingIntermediate", "rightRingProximal"],
+  ["rightRingDistal", "rightRingIntermediate"],
+  ["rightLittleProximal", "rightHand"],
+  ["rightLittleIntermediate", "rightLittleProximal"],
+  ["rightLittleDistal", "rightLittleIntermediate"]
+];
+
 export type JointDefinition = {
   name: string;
   parentIndex?: number;
@@ -233,8 +293,41 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
         issues.push({ message: `humanoid map entry ${bone} is stale` });
       }
     }
+    issues.push(...validateHumanoidHierarchy(skeleton, humanoid));
   }
   return issues;
+}
+
+function validateHumanoidHierarchy(skeleton: Skeleton, humanoid: ReadonlyMap<HumanoidBoneName, number>): SkeletonValidationIssue[] {
+  const issues: SkeletonValidationIssue[] = [];
+  for (const [childBone, ancestorBone] of VRM_HUMANOID_ANCESTOR_RULES) {
+    const childIndex = humanoid.get(childBone);
+    const ancestorIndex = humanoid.get(ancestorBone);
+    if (childIndex === undefined || ancestorIndex === undefined) continue;
+    const childJoint = skeleton.joints[childIndex];
+    const ancestorJoint = skeleton.joints[ancestorIndex];
+    if (!childJoint || !ancestorJoint || childJoint.humanoid !== childBone || ancestorJoint.humanoid !== ancestorBone) continue;
+    if (!isDescendantJoint(skeleton, childIndex, ancestorIndex)) {
+      issues.push({
+        index: childIndex,
+        joint: childJoint.name,
+        message: `humanoid bone ${childBone} must be a descendant of ${ancestorBone}`
+      });
+    }
+  }
+  return issues;
+}
+
+function isDescendantJoint(skeleton: Skeleton, childIndex: number, ancestorIndex: number): boolean {
+  let parentIndex = skeleton.joints[childIndex]?.parentIndex ?? NO_PARENT;
+  const visited = new Set<number>();
+  while (parentIndex !== NO_PARENT) {
+    if (parentIndex === ancestorIndex) return true;
+    if (!Number.isInteger(parentIndex) || parentIndex < 0 || parentIndex >= skeleton.joints.length || visited.has(parentIndex)) return false;
+    visited.add(parentIndex);
+    parentIndex = skeleton.joints[parentIndex]?.parentIndex ?? NO_PARENT;
+  }
+  return false;
 }
 
 function transformsEqual(a: Transform, b: Transform): boolean {
