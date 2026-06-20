@@ -15,6 +15,8 @@ import {
   subVec3
 } from "./math.js";
 
+const MIN_IK_REACH = 1e-5;
+
 export type TwoBoneIkInput = {
   root: Vec3;
   joint: Vec3;
@@ -42,26 +44,29 @@ export type TwoBoneIkCorrectionResult = TwoBoneIkResult & {
 };
 
 export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
-  const upperLength = Math.max(1e-5, lengthVec3(subVec3(input.joint, input.root)));
-  const lowerLength = Math.max(1e-5, lengthVec3(subVec3(input.end, input.joint)));
-  const physicalMinReach = Math.abs(upperLength - lowerLength) + 1e-5;
+  const safeInput = sanitizeTwoBoneIkInput(input);
+  const upperLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(safeInput.joint, safeInput.root), MIN_IK_REACH));
+  const lowerLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(safeInput.end, safeInput.joint), MIN_IK_REACH));
+  const physicalMinReach = Math.abs(upperLength - lowerLength);
+  const solveMinReach = Math.max(MIN_IK_REACH, physicalMinReach);
   const physicalMaxReach = upperLength + lowerLength;
-  const maxReach = physicalMaxReach * Math.min(1, finiteNonNegative(input.maxStretch, 0.998));
-  const rootToTarget = subVec3(input.target, input.root);
-  const targetDistance = lengthVec3(rootToTarget);
-  const clampedDistance = clamp(targetDistance, physicalMinReach, maxReach);
+  const softMaxReach = physicalMaxReach * Math.min(1, finiteNonNegative(safeInput.maxStretch, 0.998));
+  const maxReach = Math.max(solveMinReach, softMaxReach);
+  const rootToTarget = subVec3(safeInput.target, safeInput.root);
+  const targetDistance = finiteLength(rootToTarget, 0);
+  const clampedDistance = clamp(targetDistance, solveMinReach, maxReach);
   const physicalReachDistance = clamp(targetDistance, physicalMinReach, physicalMaxReach);
   const physicalClamped = targetDistance < physicalMinReach - 1e-4 || targetDistance > physicalMaxReach + 1e-4;
-  const stretchLimited = !physicalClamped && Math.abs(clampedDistance - targetDistance) > 1e-4;
-  const direction = normalizeVec3(rootToTarget, normalizeVec3(subVec3(input.end, input.root), [0, -1, 0]));
-  const pole = bendPlanePole(input.pole ?? subVec3(input.joint, input.root), direction);
+  const stretchLimited = targetDistance > MIN_IK_REACH && !physicalClamped && Math.abs(clampedDistance - targetDistance) > 1e-4;
+  const direction = normalizeVec3(rootToTarget, normalizeVec3(subVec3(safeInput.end, safeInput.root), [0, -1, 0]));
+  const pole = bendPlanePole(safeInput.pole ?? subVec3(safeInput.joint, safeInput.root), direction);
   const cosAngle = clamp((upperLength * upperLength + clampedDistance * clampedDistance - lowerLength * lowerLength) / (2 * upperLength * clampedDistance), -1, 1);
   const along = cosAngle * upperLength;
   const height = Math.sqrt(Math.max(0, upperLength * upperLength - along * along));
-  const newJoint = addVec3(addVec3(input.root, scaleVec3(direction, along)), scaleVec3(pole, height));
-  const newEnd = addVec3(input.root, scaleVec3(direction, clampedDistance));
+  const newJoint = addVec3(addVec3(safeInput.root, scaleVec3(direction, along)), scaleVec3(pole, height));
+  const newEnd = addVec3(safeInput.root, scaleVec3(direction, clampedDistance));
   return {
-    root: input.root,
+    root: safeInput.root,
     joint: newJoint,
     end: newEnd,
     targetReach: targetDistance <= 1e-5 ? 0 : physicalClamped ? physicalReachDistance / targetDistance : 1,
@@ -85,13 +90,14 @@ function fallbackPerpendicular(direction: Vec3): Vec3 {
 }
 
 export function solveTwoBoneIkCorrections(input: TwoBoneIkInput): TwoBoneIkCorrectionResult {
-  const solved = solveTwoBoneIk(input);
-  const originalUpper = normalizeVec3(subVec3(input.joint, input.root), [0, -1, 0]);
+  const safeInput = sanitizeTwoBoneIkInput(input);
+  const solved = solveTwoBoneIk(safeInput);
+  const originalUpper = normalizeVec3(subVec3(safeInput.joint, safeInput.root), [0, -1, 0]);
   const correctedUpper = normalizeVec3(subVec3(solved.joint, solved.root), originalUpper);
-  const pole = input.pole ?? [0, 0, 1];
+  const pole = safeInput.pole ?? [0, 0, 1];
   const rootCorrection = quatFromUnitVectors(originalUpper, correctedUpper, pole);
 
-  const originalLower = normalizeVec3(subVec3(input.end, input.joint), [0, -1, 0]);
+  const originalLower = normalizeVec3(subVec3(safeInput.end, safeInput.joint), [0, -1, 0]);
   const rootCorrectedLower = normalizeVec3(rotateVec3ByQuat(rootCorrection, originalLower), originalLower);
   const correctedLower = normalizeVec3(subVec3(solved.end, solved.joint), rootCorrectedLower);
   const jointCorrection = quatFromUnitVectors(rootCorrectedLower, correctedLower, pole);
@@ -102,6 +108,22 @@ export function solveTwoBoneIkCorrections(input: TwoBoneIkInput): TwoBoneIkCorre
     jointCorrection,
     correctedUpperDirection: correctedUpper,
     correctedLowerDirection: correctedLower
+  };
+}
+
+function sanitizeTwoBoneIkInput(input: TwoBoneIkInput): TwoBoneIkInput {
+  const root = finiteVec3(input.root, [0, 0, 0]);
+  const joint = finiteVec3(input.joint, addVec3(root, [0, -1, 0]));
+  const end = finiteVec3(input.end, addVec3(joint, [0, -1, 0]));
+  const target = finiteVec3(input.target, end);
+  const pole = input.pole === undefined ? undefined : finiteVec3(input.pole, subVec3(joint, root));
+  return {
+    root,
+    joint,
+    end,
+    target,
+    ...(pole === undefined ? {} : { pole }),
+    ...(input.maxStretch === undefined ? {} : { maxStretch: input.maxStretch })
   };
 }
 
@@ -158,20 +180,21 @@ export type FootPlantResult = {
 };
 
 export function computeAnkleTargetFromGround(contact: GroundContact, footHeight: number): Vec3 {
-  const normal = normalizeVec3(contact.normal ?? [0, 1, 0], [0, 1, 0]);
+  const point = finiteVec3(contact.point, [0, 0, 0]);
+  const normal = normalizeVec3(finiteVec3(contact.normal, [0, 1, 0]), [0, 1, 0]);
   const safeFootHeight = finiteNonNegative(footHeight, 0);
-  const rayStart = contact.rayStart ?? addVec3(contact.point, [0, Math.max(0.001, safeFootHeight + 0.5), 0]);
-  const ai = subVec3(rayStart, contact.point);
+  const rayStart = finiteVec3(contact.rayStart, addVec3(point, [0, Math.max(0.001, safeFootHeight + 0.5), 0]));
+  const ai = subVec3(rayStart, point);
   const abLength = dotVec3(ai, normal);
-  if (Math.abs(abLength) <= 1e-5) return addVec3(contact.point, scaleVec3(normal, safeFootHeight));
+  if (!Number.isFinite(abLength) || Math.abs(abLength) <= 1e-5) return addVec3(point, scaleVec3(normal, safeFootHeight));
 
   const projected = subVec3(rayStart, scaleVec3(normal, abLength));
-  const ib = subVec3(projected, contact.point);
-  const ibLength = lengthVec3(ib);
-  if (ibLength <= 1e-5) return addVec3(contact.point, scaleVec3(normal, safeFootHeight));
+  const ib = subVec3(projected, point);
+  const ibLength = finiteLength(ib, 0);
+  if (ibLength <= 1e-5) return addVec3(point, scaleVec3(normal, safeFootHeight));
 
   const ih = scaleVec3(ib, (ibLength * safeFootHeight) / abLength / ibLength);
-  return addVec3(addVec3(contact.point, ih), scaleVec3(normal, safeFootHeight));
+  return addVec3(addVec3(point, ih), scaleVec3(normal, safeFootHeight));
 }
 
 export function solveFootPlant(input: readonly FootPlantLegInput[], options: FootPlantOptions = {}): FootPlantResult {
@@ -183,10 +206,11 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   const maxAnkleCorrection = finiteNonNegative(options.maxAnkleCorrection, 0.5);
   const legs: FootPlantLegResult[] = [];
   const issues: string[] = [];
+  const sanitizedInput = input.map(sanitizeFootPlantLegInput);
   let lowestCorrection = 0;
   let reachPelvisCorrection = 0;
 
-  for (const leg of input) {
+  for (const leg of sanitizedInput) {
     const groundNormal = normalizeVec3(leg.ground?.normal ?? [0, 1, 0], [0, 1, 0]);
     if (!leg.ground) {
       legs.push({
@@ -207,12 +231,12 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
 
     const rawTarget = computeAnkleTargetFromGround(leg.ground, finiteNonNegative(leg.footHeight, defaultFootHeight));
     const rawOffset = subVec3(rawTarget, leg.ankle);
-    const rawDistance = lengthVec3(rawOffset);
+    const rawDistance = finiteLength(rawOffset, 0);
     const allowedCorrection = Math.min(finiteNonNegative(leg.maxAnkleCorrection, maxAnkleCorrection), maxAnkleCorrection);
-    const clamped = rawDistance > allowedCorrection && allowedCorrection > 0;
+    const clamped = rawDistance > allowedCorrection + 1e-6;
     const targetAnkle = clamped ? addVec3(leg.ankle, scaleVec3(normalizeVec3(rawOffset, [0, 0, 0]), allowedCorrection)) : rawTarget;
     const ankleOffset = subVec3(targetAnkle, leg.ankle);
-    const correctionDistance = lengthVec3(ankleOffset);
+    const correctionDistance = finiteLength(ankleOffset, 0);
     const downwardCorrection = Math.max(0, dotVec3(ankleOffset, down));
     lowestCorrection = Math.max(lowestCorrection, downwardCorrection);
     legs.push({
@@ -230,16 +254,16 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     if (clamped) issues.push(`${leg.id}: ankle correction clamped`);
   }
 
-  for (const result of legs) {
+  for (let i = 0; i < legs.length; i += 1) {
+    const result = legs[i]!;
     if (!result.planted) continue;
-    const leg = input.find((candidate) => candidate.id === result.id);
-    if (!leg) continue;
+    const leg = sanitizedInput[i]!;
     const influence = clamp01(leg.influence ?? defaultInfluence);
     if (influence <= 1e-5) continue;
     const configuredMaxStretch = leg.maxStretch ?? options.maxStretch;
     if (configuredMaxStretch === undefined) continue;
-    const upperLength = Math.max(1e-5, lengthVec3(subVec3(leg.knee, leg.hip)));
-    const lowerLength = Math.max(1e-5, lengthVec3(subVec3(leg.ankle, leg.knee)));
+    const upperLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(leg.knee, leg.hip), MIN_IK_REACH));
+    const lowerLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(leg.ankle, leg.knee), MIN_IK_REACH));
     const maxStretch = Math.min(1, finiteNonNegative(configuredMaxStretch, 0.998));
     const maxReach = (upperLength + lowerLength) * maxStretch;
     const target = lerpVec3(leg.ankle, result.targetAnkle, influence);
@@ -249,19 +273,19 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     const distance = lengthVec3(rootToTarget);
     const horizontalDistanceSquared = Math.max(0, distance * distance - downDistance * downDistance);
     const maxDownDistanceSquared = maxReach * maxReach - horizontalDistanceSquared;
-    if (maxDownDistanceSquared <= 0) continue;
-    const maxDownDistance = Math.sqrt(maxDownDistanceSquared);
+    if (maxDownDistanceSquared < -1e-8) continue;
+    const maxDownDistance = Math.sqrt(Math.max(0, maxDownDistanceSquared));
     reachPelvisCorrection = Math.max(reachPelvisCorrection, (downDistance - maxDownDistance) / influence);
   }
 
   const pelvisCorrection = Math.max(lowestCorrection * pelvisCompensation, reachPelvisCorrection);
-  const pelvisOffset = scaleVec3(down, Math.min(maxPelvisOffset, pelvisCorrection));
+  const pelvisOffset = pelvisCorrection <= 1e-12 ? ([0, 0, 0] as Vec3) : scaleVec3(down, Math.min(maxPelvisOffset, pelvisCorrection));
   let plantedCount = 0;
-  for (const result of legs) {
+  for (let i = 0; i < legs.length; i += 1) {
+    const result = legs[i]!;
     if (!result.planted) continue;
     plantedCount += 1;
-    const leg = input.find((candidate) => candidate.id === result.id);
-    if (!leg) continue;
+    const leg = sanitizedInput[i]!;
     const influence = clamp01(leg.influence ?? defaultInfluence);
     const root = addVec3(leg.hip, pelvisOffset);
     const joint = addVec3(leg.knee, pelvisOffset);
@@ -289,4 +313,41 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     legs,
     issues
   };
+}
+
+function sanitizeFootPlantLegInput(input: FootPlantLegInput): FootPlantLegInput {
+  const hip = finiteVec3(input.hip, [0, 0, 0]);
+  const knee = finiteVec3(input.knee, addVec3(hip, [0, -1, 0]));
+  const ankle = finiteVec3(input.ankle, addVec3(knee, [0, -1, 0]));
+  return {
+    ...input,
+    hip,
+    knee,
+    ankle,
+    ...(input.ground ? { ground: sanitizeGroundContact(input.ground, ankle) } : {})
+  };
+}
+
+function sanitizeGroundContact(input: GroundContact, pointFallback: Vec3): GroundContact {
+  const point = finiteVec3(input.point, pointFallback);
+  return {
+    point,
+    ...(input.normal === undefined ? {} : { normal: finiteVec3(input.normal, [0, 1, 0]) }),
+    ...(input.rayStart === undefined ? {} : { rayStart: finiteVec3(input.rayStart, addVec3(point, [0, 0.5, 0])) })
+  };
+}
+
+function finiteVec3(value: Vec3 | undefined, fallback: Vec3): Vec3 {
+  if (!value) return fallback;
+  if (value.every(Number.isFinite)) return value;
+  return [
+    Number.isFinite(value[0]) ? value[0] : fallback[0],
+    Number.isFinite(value[1]) ? value[1] : fallback[1],
+    Number.isFinite(value[2]) ? value[2] : fallback[2]
+  ];
+}
+
+function finiteLength(value: Vec3, fallback: number): number {
+  const length = lengthVec3(value);
+  return Number.isFinite(length) ? length : fallback;
 }

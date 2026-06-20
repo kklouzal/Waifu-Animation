@@ -3827,6 +3827,20 @@ assert.ok(ik.targetReach > 0.9);
 assert.ok(Number.isFinite(ik.joint[0]));
 const finiteIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [0, -1.5, 0], pole: [0, 0, 1], maxStretch: Number.NaN });
 assert.ok(finiteIk.joint.every(Number.isFinite), "IK should keep solved joints finite for non-finite stretch limits");
+const nonFiniteInputIk = solveTwoBoneIk({
+  root: [Number.NaN, 0, 0],
+  joint: [0, Number.NaN, 0],
+  end: [0, -2, Number.POSITIVE_INFINITY],
+  target: [0, -1.5, Number.NaN],
+  pole: [Number.NaN, Number.NaN, Number.NaN],
+  maxStretch: Number.NaN
+});
+assert.ok(nonFiniteInputIk.joint.every(Number.isFinite) && nonFiniteInputIk.end.every(Number.isFinite), "IK should repair non-finite chain and target inputs");
+assert.ok(Number.isFinite(nonFiniteInputIk.solvedReach), "IK reach reporting should stay finite for repaired non-finite inputs");
+const minimumReachIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -1.5, 0], target: [0, -0.5, 0], pole: [0, 0, 1], maxStretch: 1 });
+assert.equal(minimumReachIk.clamped, false, "exact minimum-reach targets should not be treated as clamped");
+assert.ok(minimumReachIk.solvedReach <= 1.000001, "minimum-reach solves must not report more than full target reach");
+assert.ok(Math.hypot(minimumReachIk.end[0], minimumReachIk.end[1] + 0.5, minimumReachIk.end[2]) < 1e-6, "minimum-reach solves should keep the endpoint on the target");
 const diagonalIk = solveTwoBoneIk({ root: [0, 0, 0], joint: [0, -1, 0], end: [0, -2, 0], target: [1, -1, 0], pole: [0, 0, 1], soften: 0 });
 assert.ok(
   Math.abs(Math.hypot(...diagonalIk.joint) - 1) < 1e-5,
@@ -3909,6 +3923,30 @@ const clampedFootPlant = solveFootPlant(
 );
 assert.equal(clampedFootPlant.legs[0]!.clamped, true);
 assert.ok(clampedFootPlant.legs[0]!.correctionDistance <= 0.1001);
+const zeroMaxAnkleCorrectionPlant = solveFootPlant(
+  [{ id: "left", hip: [0, 1, 0], knee: [0, 0.5, 0], ankle: [0, 0.2, 0], ground: { point: [0, 0, 0], normal: [0, 1, 0] } }],
+  { footHeight: 0.08, maxAnkleCorrection: 0 }
+);
+assert.equal(zeroMaxAnkleCorrectionPlant.legs[0]!.clamped, true, "zero max ankle correction should clamp any non-zero correction");
+assert.equal(zeroMaxAnkleCorrectionPlant.legs[0]!.correctionDistance, 0, "zero max ankle correction should leave the ankle target unchanged");
+assert.deepEqual(zeroMaxAnkleCorrectionPlant.pelvisOffset, [0, 0, 0]);
+const boundaryReachPlant = solveFootPlant(
+  [
+    {
+      id: "left",
+      hip: [0, 0, 0],
+      knee: [0, -1, 0],
+      ankle: [0, -2, 0],
+      ground: { point: [1, -1.08, 0], normal: [0, 1, 0], rayStart: [1, -0.5, 0] },
+      footHeight: 0.08,
+      maxAnkleCorrection: 2,
+      maxStretch: 0.5
+    }
+  ],
+  { footHeight: 0.08, maxAnkleCorrection: 2, maxPelvisOffset: 2, maxStretch: 0.5 }
+);
+assert.ok(boundaryReachPlant.pelvisOffset[1] < -0.999, "reach compensation should handle targets exactly on the horizontal reach boundary");
+assert.equal(boundaryReachPlant.legs[0]!.ik?.stretchLimited, false, "boundary reach compensation should avoid an artificial stretch-limited solve");
 const finiteFootPlant = solveFootPlant(
   [
     {
@@ -3926,6 +3964,23 @@ const finiteFootPlant = solveFootPlant(
 );
 assert.ok(finiteFootPlant.pelvisOffset.every(Number.isFinite), "foot plant pelvis offset should stay finite for non-finite options");
 assert.ok(finiteFootPlant.legs.every((leg) => leg.targetAnkle.every(Number.isFinite) && (leg.ik?.joint.every(Number.isFinite) ?? true)), "foot plant leg outputs should stay finite for non-finite options");
+const invalidInputFootPlant = solveFootPlant(
+  [
+    {
+      id: "left",
+      hip: [Number.NaN, 1, 0],
+      knee: [0, Number.NaN, 0],
+      ankle: [0, 0.1, Number.NaN],
+      ground: { point: [Number.NaN, 0, 0], normal: [Number.NaN, Number.NaN, Number.NaN], rayStart: [0, Number.NaN, 0] }
+    }
+  ],
+  { footHeight: 0.08, maxAnkleCorrection: 0.5, maxPelvisOffset: 0.5, maxStretch: 1 }
+);
+assert.ok(invalidInputFootPlant.pelvisOffset.every(Number.isFinite), "foot plant should repair non-finite pelvis input data");
+assert.ok(
+  invalidInputFootPlant.legs.every((leg) => leg.initialAnkle.every(Number.isFinite) && leg.targetAnkle.every(Number.isFinite) && (leg.ik?.end.every(Number.isFinite) ?? true)),
+  "foot plant should keep leg outputs finite for non-finite contact inputs"
+);
 
 const pelvisBone = new Object3D();
 pelvisBone.name = "hips";
@@ -3996,6 +4051,29 @@ const nonFiniteDeltaFootPlant = applyThreeFootPlantResult(footPlant, {
 });
 assert.equal(nonFiniteDeltaFootPlant.pelvisApplied, false, "Three foot plant damping should treat non-finite delta time as zero elapsed time");
 assert.deepEqual(nonFiniteDeltaFootPlant.pelvisOffsetLocal, [0, 0, 0]);
+const scaledRoot = new Object3D();
+scaledRoot.name = "scaledRoot";
+scaledRoot.scale.set(2, 2, 2);
+const scaledPelvis = new Object3D();
+scaledPelvis.name = "hips";
+scaledRoot.add(scaledPelvis);
+scaledRoot.updateMatrixWorld(true);
+const scaledPelvisBefore = scaledPelvis.getWorldPosition(new Vector3()).clone();
+const scaledFootPlantApply = applyThreeFootPlantResult(
+  { pelvisOffset: [0, -1, 0], plantedCount: 0, lowestCorrection: 1, legs: [], issues: [] },
+  {
+    resolveBone: (bone) => (bone === "hips" ? scaledPelvis : null),
+    pelvis: "hips",
+    legs: [],
+    applyPelvis: true,
+    applyLegIk: false
+  }
+);
+scaledRoot.updateMatrixWorld(true);
+const scaledPelvisAfter = scaledPelvis.getWorldPosition(new Vector3());
+assert.equal(scaledFootPlantApply.pelvisApplied, true);
+assert.ok(Math.abs(scaledFootPlantApply.pelvisOffsetLocal[1] + 0.5) < 1e-6, "world pelvis offsets should be converted through parent scale");
+assert.ok(Math.abs(scaledPelvisAfter.y - scaledPelvisBefore.y + 1) < 1e-6, "scaled parent transforms should not amplify world pelvis offsets");
 
 const anchoredReachRoot = new Object3D();
 anchoredReachRoot.name = "anchoredReachRoot";

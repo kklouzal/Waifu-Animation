@@ -822,7 +822,7 @@ export function clearThreeFootPlantOffsets(options: ThreeFootPlantClearOptions):
     const pelvis = options.resolveBone(options.pelvis);
     if (pelvis) {
       cleared = clearPreviousFootPlantPelvisOffset(pelvis) || cleared;
-      pelvis.updateMatrixWorld(true);
+      pelvis.updateWorldMatrix(true, true);
     } else {
       issues.push(`${options.pelvis}: missing pelvis bone`);
     }
@@ -850,7 +850,7 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
         pelvisOffsetLocal = worldOffsetToLocal(pelvis, result.pelvisOffset, amount);
         pelvis.position.add(tmpWorldDirection.set(pelvisOffsetLocal[0], pelvisOffsetLocal[1], pelvisOffsetLocal[2]));
         setPreviousFootPlantPelvisOffset(pelvis, pelvisOffsetLocal);
-        pelvis.updateMatrixWorld(true);
+        pelvis.updateWorldMatrix(true, true);
         pelvisApplied = true;
       }
     } else {
@@ -964,10 +964,14 @@ function clearPreviousFootPlantPelvisOffset(bone: Object3D): boolean {
 
 function worldOffsetToLocal(bone: Object3D, offset: Vec3, amount: number): Vec3 {
   tmpWorldDirection.set(offset[0] * amount, offset[1] * amount, offset[2] * amount);
+  if (!Number.isFinite(tmpWorldDirection.x) || !Number.isFinite(tmpWorldDirection.y) || !Number.isFinite(tmpWorldDirection.z)) return [0, 0, 0];
   const parent = bone.parent;
   if (parent) {
-    parent.getWorldQuaternion(tmpParentWorld).invert();
-    tmpWorldDirection.applyQuaternion(tmpParentWorld);
+    parent.getWorldPosition(tmpLocalDirection);
+    tmpWorldDirection.add(tmpLocalDirection);
+    parent.worldToLocal(tmpWorldDirection);
+    parent.worldToLocal(tmpLocalDirection);
+    tmpWorldDirection.sub(tmpLocalDirection);
   }
   return [tmpWorldDirection.x, tmpWorldDirection.y, tmpWorldDirection.z];
 }
@@ -1003,6 +1007,7 @@ function quatToThree(value: Quat): Quaternion {
 }
 
 function applyWorldQuaternionCorrection(bone: Object3D, correction: Quat, influence: number): boolean {
+  if (!correction.every(Number.isFinite)) return false;
   if (lengthVec3([correction[0], correction[1], correction[2]]) <= 1e-7 || influence <= 0) return false;
   bone.updateMatrixWorld(true);
   bone.getWorldQuaternion(tmpCurrentWorld);
