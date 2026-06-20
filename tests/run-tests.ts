@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AnimationMixer, LoopOnce, Object3D, Quaternion, Vector3 } from "three";
 import {
   AnimationRuntime,
+  AnimationSamplingContext,
   type AnimationManifest,
   type AnimationClip,
   type Pose,
@@ -93,8 +94,11 @@ import {
   sampleMotionTracks,
   sampleMotionTracksIntervalDelta,
   sampleClipToPose,
+  sampleClipToPoseAtRatio,
+  sampleClipToPoseWithContext,
   sampleRawUserTrack,
   sampleTrack,
+  getAnimationClipStats,
   sampleUserTrack,
   sanitizeQuaternionTrackValues,
   solveAimIk,
@@ -1547,6 +1551,115 @@ assert.ok(
 
 const sampled = sampleClipToPose(skeleton, nodClip, 0.5);
 assert.ok(sampled[2]!.rotation[0] > 0.1);
+
+const coherentSamplingClip: AnimationClip = {
+  id: "coherent-sampling",
+  name: "Coherent Sampling",
+  duration: 2,
+  loop: true,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "translation",
+      times: toFloat32Array([0, 0.5, 1, 1.5, 2]),
+      values: toFloat32Array([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0])
+    },
+    {
+      humanBone: "head",
+      property: "quaternion",
+      times: toFloat32Array([0, 2]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI)])
+    },
+    {
+      humanBone: "spine",
+      property: "scale",
+      times: toFloat32Array([0, 2]),
+      values: toFloat32Array([1, 1, 1, 2, 3, 4])
+    }
+  ]
+};
+const coherentSamplingContext = new AnimationSamplingContext(1);
+const coherentFirstPose = coherentSamplingContext.sampleRatio(skeleton, coherentSamplingClip, 0.125);
+assert.equal(coherentSamplingContext.snapshot().lastMode, "reset", "first coherent sample should reset the context for the animation");
+assert.equal(coherentSamplingContext.snapshot().maxTracks, coherentSamplingClip.tracks.length, "sampling context should resize to fit track count");
+assert.ok(Math.abs(coherentFirstPose[2]!.translation[0] - 0.5) < 1e-6, "ratio sampling should convert clamped ratios to clip time");
+const coherentReusePose = coherentSamplingContext.sampleRatio(skeleton, coherentSamplingClip, 0.2);
+const coherentReuseSnapshot = coherentSamplingContext.snapshot();
+assert.equal(coherentReuseSnapshot.lastMode, "coherent-forward", "increasing samples should use coherent forward mode");
+assert.ok(coherentReuseSnapshot.reusedTrackCount >= 1, "coherent forward sampling should reuse cached intervals when the sample stays inside them");
+assert.equal(coherentReuseSnapshot.searchedTrackCount, 0, "coherent forward sampling should avoid binary seeking inside cached intervals");
+assert.ok(Math.abs(coherentReusePose[2]!.translation[0] - 0.8) < 1e-6);
+coherentSamplingContext.sampleRatio(skeleton, coherentSamplingClip, 0.4);
+const coherentAdvanceSnapshot = coherentSamplingContext.snapshot();
+assert.equal(coherentAdvanceSnapshot.lastMode, "coherent-forward");
+assert.ok(coherentAdvanceSnapshot.advancedTrackCount >= 1, "coherent forward sampling should advance cached intervals when crossing keys");
+const coherentSeekPose = coherentSamplingContext.sampleRatio(skeleton, coherentSamplingClip, 0.1);
+const coherentSeekSnapshot = coherentSamplingContext.snapshot();
+assert.equal(coherentSeekSnapshot.lastMode, "seek", "backward sampling should seek instead of reusing stale forward intervals");
+assert.ok(coherentSeekSnapshot.searchedTrackCount >= 1, "backward sampling should refresh intervals with a bounded search");
+assert.ok(Math.abs(coherentSeekPose[2]!.translation[0] - 0.4) < 1e-6);
+const coherentLoopPose = coherentSamplingContext.sampleTime(skeleton, coherentSamplingClip, 2.25, { loop: true });
+assert.ok(Math.abs(coherentLoopPose[2]!.translation[0] - 0.5) < 1e-6, "time sampling with loop should preserve existing wrapping semantics");
+const ratioClampStartPose = sampleClipToPoseAtRatio(skeleton, coherentSamplingClip, Number.NaN);
+const ratioClampEndPose = sampleClipToPoseAtRatio(skeleton, coherentSamplingClip, 2);
+assert.deepEqual(ratioClampStartPose[2]!.translation, [0, 0, 0], "non-finite ratios should clamp to the first sample");
+assert.deepEqual(ratioClampEndPose[2]!.translation, [4, 0, 0], "out-of-range ratios should clamp to the last sample");
+const changedSamplingClip: AnimationClip = {
+  ...coherentSamplingClip,
+  id: "coherent-sampling-changed",
+  tracks: [
+    {
+      humanBone: "head",
+      property: "translation",
+      times: toFloat32Array([0, 2]),
+      values: toFloat32Array([10, 0, 0, 20, 0, 0])
+    }
+  ]
+};
+const beforeAnimationChangeInvalidations = coherentSamplingContext.snapshot().invalidationCount;
+const changedPose = coherentSamplingContext.sampleRatio(skeleton, changedSamplingClip, 0.5);
+const changedSnapshot = coherentSamplingContext.snapshot();
+assert.equal(changedSnapshot.lastMode, "reset", "sampling a different animation should invalidate cached intervals");
+assert.equal(changedSnapshot.invalidationCount, beforeAnimationChangeInvalidations + 1);
+assert.deepEqual(changedPose[2]!.translation, [15, 0, 0]);
+const contextFunctionPose = sampleClipToPoseWithContext(skeleton, coherentSamplingClip, 1, coherentSamplingContext, { loop: false });
+assert.deepEqual(contextFunctionPose[2]!.translation, [2, 0, 0], "standalone context sampling should match ordinary time sampling");
+
+const nonFiniteSamplingClip: AnimationClip = {
+  id: "non-finite-context-sampling",
+  duration: 1,
+  tracks: [
+    { humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([Number.NaN, Infinity, 1, 2, 3, 4]) },
+    { humanBone: "spine", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 0]) }
+  ]
+};
+const repairedContextPose = new AnimationSamplingContext().sampleTime(skeleton, nonFiniteSamplingClip, 0);
+assertFinitePose(repairedContextPose);
+assert.deepEqual(repairedContextPose[2]!.translation, [0, 0, 1], "context sampling should use the same finite vector repair path as sampleTrack");
+assert.deepEqual(repairedContextPose[1]!.rotation, [0, 0, 0, 1], "context sampling should repair non-normalizable rotation samples");
+
+const coherentSamplingStats = getAnimationClipStats(coherentSamplingClip, skeleton);
+assert.equal(coherentSamplingStats.duration, 2);
+assert.equal(coherentSamplingStats.trackCount, 3);
+assert.equal(coherentSamplingStats.jointCount, 2);
+assert.equal(coherentSamplingStats.soaTrackCount, 1);
+assert.equal(coherentSamplingStats.timepointCount, 5);
+assert.equal(coherentSamplingStats.translationTrackCount, 1);
+assert.equal(coherentSamplingStats.rotationTrackCount, 1);
+assert.equal(coherentSamplingStats.scaleTrackCount, 1);
+assert.equal(coherentSamplingStats.translationKeyCount, 5);
+assert.equal(coherentSamplingStats.rotationKeyCount, 2);
+assert.equal(coherentSamplingStats.scaleKeyCount, 2);
+assert.equal(coherentSamplingStats.totalKeyCount, 9);
+assert.deepEqual(
+  coherentSamplingStats.perTrack.map((track) => [track.track, track.normalizedProperty, track.keyCount, track.jointIndex]),
+  [
+    [0, "translation", 5, 2],
+    [1, "rotation", 2, 2],
+    [2, "scale", 2, 1]
+  ],
+  "clip stats should expose per-track key-controller metadata"
+);
 
 const motionSkeleton = createSkeleton([
   { name: "root" },
@@ -5095,6 +5208,14 @@ function assertFiniteEvaluation(evaluation: ReturnType<AnimationRuntime["evaluat
   }
   for (const matrix of evaluation.modelPose) {
     assert.ok(Array.from(matrix).every(Number.isFinite));
+  }
+}
+
+function assertFinitePose(pose: Pose): void {
+  for (const transform of pose) {
+    assert.ok(transform.translation.every(Number.isFinite));
+    assert.ok(transform.rotation.every(Number.isFinite));
+    assert.ok(transform.scale.every(Number.isFinite));
   }
 }
 
