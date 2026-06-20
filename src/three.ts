@@ -668,15 +668,15 @@ function createThreeLocomotionSideTargets(side: ThreeLocomotionArmSide, swing: n
   const sign = side === "left" ? 1 : -1;
   const sideSwing = sign * swing;
   return [
-    { bone: `${side}Shoulder`, rotation: [0.015, -sign * 0.018, sign * (0.026 + sideSwing * 0.014)], influence: influence * 0.72, speed },
-    { bone: `${side}UpperArm`, rotation: [0.26 + sideSwing * 0.18, sign * (0.055 + sideSwing * 0.03), sign * (1.64 + sideSwing * 0.05)], influence, speed: speed * 1.4 },
+    { bone: `${side}Shoulder`, rotation: [0.015, -sign * 0.018, sign * (0.026 + sideSwing * 0.018)], influence: influence * 0.72, speed },
+    { bone: `${side}UpperArm`, rotation: [0.26 + sideSwing * 0.24, sign * (0.055 + sideSwing * 0.04), sign * (1.64 + sideSwing * 0.065)], influence, speed: speed * 1.4 },
     {
       bone: `${side}LowerArm`,
-      rotation: [1.55 + Math.max(0, -sideSwing) * 0.24, sign * (0.42 + sideSwing * 0.05), sign * (-1.18 - Math.max(0, sideSwing) * 0.18)],
+      rotation: [1.55 + Math.max(0, -sideSwing) * 0.3, sign * (0.42 + sideSwing * 0.065), sign * (-1.18 - Math.max(0, sideSwing) * 0.22)],
       influence,
       speed: speed * 1.15
     },
-    { bone: `${side}Hand`, rotation: [0.16, sign * 0.08, sign * (-0.2 + sideSwing * 0.024)], influence: influence * 0.82, speed }
+    { bone: `${side}Hand`, rotation: [0.16, sign * 0.08, sign * (-0.2 + sideSwing * 0.035)], influence: influence * 0.82, speed }
   ];
 }
 
@@ -760,8 +760,9 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const sideSwing = side === "left" ? swing : -swing;
     const bodyForward = objectWorldHorizontalDirection(hips ?? upper.parent, [0, 0, -1], [0, 0, -1]);
     const sideOut = horizontalDirectionFrom(root, hip, scaleVec3(objectWorldHorizontalDirection(hips ?? upper.parent, [1, 0, 0], [1, 0, 0]), sign));
+    const phaseForward = sideSwing * Math.min(0.07, armLength * 0.14);
     const desiredUpperDirection = normalizeVec3(
-      addVec3(addVec3(scaleVec3(sideOut, 0.02), [0, -0.985, 0]), scaleVec3(bodyForward, 0.12 + sideSwing * 0.02)),
+      addVec3(addVec3(scaleVec3(sideOut, 0.02), [0, -0.982, 0]), scaleVec3(bodyForward, 0.12 + phaseForward * 0.55)),
       [0, -1, 0]
     );
     const upperCorrection = quatFromUnitVectors(normalizeVec3(subVec3(joint, root), desiredUpperDirection), desiredUpperDirection);
@@ -775,7 +776,7 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const desiredJoint = addVec3(correctedRoot, scaleVec3(desiredUpperDirection, upperLength));
     const handTarget = addVec3(
       addVec3([hip[0], correctedRoot[1] - armLength * 0.72, hip[2]], scaleVec3(sideOut, Math.min(0.038, shoulderWidth * 0.08))),
-      scaleVec3(bodyForward, 0.045 + sideSwing * 0.018)
+      scaleVec3(bodyForward, 0.045 + phaseForward)
     );
     const pole = normalizeVec3(subVec3(desiredJoint, correctedRoot), desiredUpperDirection);
     const ik = solveTwoBoneIkCorrections({
@@ -800,7 +801,7 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     lower.updateMatrixWorld(true);
     hand.updateMatrixWorld(true);
     const desiredLowerDirection = normalizeVec3(
-      addVec3(addVec3(scaleVec3(sideOut, -0.24), [0, -0.88, 0]), scaleVec3(bodyForward, -0.18 + sideSwing * 0.02)),
+      addVec3(addVec3(scaleVec3(sideOut, -0.24), [0, -0.88, 0]), scaleVec3(bodyForward, -0.18 + phaseForward * 0.45)),
       [0, -1, 0]
     );
     const finalLowerDirectionCorrection = quatFromUnitVectors(normalizeVec3(subVec3(objectWorldVec3(hand), objectWorldVec3(lower)), desiredLowerDirection), desiredLowerDirection);
