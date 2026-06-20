@@ -82,9 +82,15 @@ import {
   diagnoseRetargetingRestAxes,
   retargetQuaternionSample,
   retargetQuaternionTrackValues,
+  blendMotionDeltas,
   buildUserTrack,
+  extractRootMotion,
+  MotionAccumulator,
+  MotionSampler,
   sampleMotionCarrier,
   sampleMotionIntervalDelta,
+  sampleMotionTracks,
+  sampleMotionTracksIntervalDelta,
   sampleClipToPose,
   sampleRawUserTrack,
   sampleTrack,
@@ -1617,6 +1623,119 @@ assert.ok(
   repairedMotionDiagnostics.some((issue) => issue.property === "rotation" && issue.message === "rotation track quaternion values were repaired to finite defaults"),
   "motion carrier sampling should report non-finite rotation repairs"
 );
+
+const extractionClip: AnimationClip = {
+  id: "extract-root-motion",
+  duration: 1,
+  loop: true,
+  metadata: { rootMotionPolicy: "preserved" },
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0, 0.5, 1]), values: toFloat32Array([0, 0, 0, 5, 1, 2.5, 10, 2, 5]) },
+    {
+      joint: "root",
+      property: "rotation",
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)])
+    },
+    { joint: "spine", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0.25, 0]) }
+  ]
+};
+const extractedRootMotion = extractRootMotion(motionSkeleton, extractionClip, {
+  reference: "absolute",
+  translation: { axes: { x: true, y: false, z: true }, bake: true },
+  rotation: { mode: "yaw", bake: true },
+  bakedClipId: "extract-root-motion-in-place"
+});
+assert.equal(extractedRootMotion.motion.carrier.joint, "root", "root-motion extraction should report the resolved carrier");
+assert.ok(extractedRootMotion.motion.position, "root-motion extraction should emit a position motion track by default");
+assert.ok(extractedRootMotion.motion.rotation, "root-motion extraction should emit a yaw motion track by default");
+const extractedHalfMotion = sampleMotionTracks(extractedRootMotion.motion, 0.5);
+assert.ok(vectorNearlyEqual(extractedHalfMotion.transform.translation, [5, 0, 2.5], 1e-6), "extracted translation should honor the selected axis mask");
+assert.ok(
+  quaternionNearlyEqual(extractedHalfMotion.transform.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
+  "extracted rotation should isolate carrier yaw"
+);
+assert.deepEqual(
+  Array.from(extractionClip.tracks[0]!.values),
+  [0, 0, 0, 5, 1, 2.5, 10, 2, 5],
+  "root-motion extraction should not mutate the source clip"
+);
+assert.ok(extractedRootMotion.bakedClip, "baked root-motion extraction should return a cloned in-place clip");
+assert.notEqual(extractedRootMotion.bakedClip, extractionClip, "root-motion baking should clone rather than mutate the source clip");
+const bakedRootTranslation = extractedRootMotion.bakedClip!.tracks[0]!;
+assert.deepEqual(
+  Array.from(bakedRootTranslation.values),
+  [0, 0, 0, 0, 1, 0, 0, 2, 0],
+  "baked root-motion translation should remove selected axes and preserve unselected authored motion"
+);
+assert.ok(
+  quaternionNearlyEqual(sampleClipToPose(motionSkeleton, extractedRootMotion.bakedClip!, 1, { loop: false })[0]!.rotation, [0, 0, 0, 1], 1e-5),
+  "baked root-motion rotation should remove extracted yaw from the carrier track"
+);
+assert.deepEqual(
+  sampleClipToPose(motionSkeleton, extractedRootMotion.bakedClip!, 1, { loop: false })[2]!.translation,
+  [0, 0.25, 0],
+  "root-motion baking should leave unrelated tracks unchanged"
+);
+const wrappedExtractedDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 0.75, 2.25, { loop: true });
+assert.ok(vectorNearlyEqual(wrappedExtractedDelta.delta.translation, [15, 0, 7.5], 1e-5), "motion tracks should accumulate multi-loop forward deltas");
+assert.ok(
+  quaternionNearlyEqual(wrappedExtractedDelta.delta.rotation, quatFromAxisAngle([0, 1, 0], Math.PI * 0.75), 1e-5),
+  "motion tracks should accumulate multi-loop yaw deltas"
+);
+const backwardExtractedDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 0.25, -0.25, { loop: true });
+assert.ok(vectorNearlyEqual(backwardExtractedDelta.delta.translation, [-5, 0, -2.5], 1e-5), "motion tracks should support backward looping intervals");
+assert.ok(
+  quaternionNearlyEqual(backwardExtractedDelta.delta.rotation, quatFromAxisAngle([0, 1, 0], -Math.PI / 4), 1e-5),
+  "motion tracks should invert rotation for backward intervals"
+);
+const largeExtractedDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 0, 100.5, { loop: true });
+assert.ok(vectorNearlyEqual(largeExtractedDelta.delta.translation, [1005, 0, 502.5], 1e-4), "large looping motion intervals should avoid per-loop drift");
+assert.ok(largeExtractedDelta.delta.rotation.every(Number.isFinite), "large looping motion intervals should keep finite rotations");
+const clampedBackwardDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 0.75, 0.25, { loop: false });
+assert.ok(vectorNearlyEqual(clampedBackwardDelta.delta.translation, [-5, 0, -2.5], 1e-5), "non-looping motion tracks should clamp samples but preserve signed interval deltas");
+const motionSampler = new MotionSampler();
+motionSampler.update(extractedRootMotion.motion, 0, 0.5, { loop: true });
+assert.ok(vectorNearlyEqual(motionSampler.current.translation, [5, 0, 2.5], 1e-6), "motion sampler should accumulate its first interval");
+motionSampler.update(extractedRootMotion.motion, 0.5, 1.25, { loop: true });
+assert.ok(vectorNearlyEqual(motionSampler.current.translation, [12.5, 0, 6.25], 1e-5), "motion sampler should keep accumulating across wrapped intervals");
+const motionAccumulator = new MotionAccumulator();
+motionAccumulator.accumulateDelta({ translation: [2, 0, 0], rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4), scale: [1, 1, 1] });
+motionAccumulator.accumulateDelta({ translation: [3, 0, 0], rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4), scale: [1, 1, 1] });
+assert.ok(vectorNearlyEqual(motionAccumulator.current.translation, [5, 0, 0], 1e-6), "motion accumulator should compose translation deltas");
+assert.ok(
+  quaternionNearlyEqual(motionAccumulator.current.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 2), 1e-5),
+  "motion accumulator should compose rotation deltas"
+);
+const blendedMotion = blendMotionDeltas([
+  { weight: 3, delta: { translation: [10, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } },
+  { weight: 1, delta: { translation: [2, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } },
+  { weight: -5, delta: { translation: [100, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } }
+]);
+assert.ok(vectorNearlyEqual(blendedMotion.translation, [8, 0, 0], 1e-6), "motion delta blending should normalize positive weights and ignore negative weights");
+const preservedExtractionInspection = inspectClipAsset(
+  {
+    id: "preserved-extracted-root-motion",
+    label: "Preserved Extracted Root Motion",
+    url: "/preserved-extracted-root-motion.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "preserved" } }
+  },
+  extractionClip
+);
+assert.equal(preservedExtractionInspection.accepted, true, "root-motion extraction should not disturb preserved-policy source clips");
+const strippedExtraction = extractRootMotion(motionSkeleton, extractionClip, { reference: "absolute", translation: true, rotation: false, bake: true });
+const strippedExtractionInspection = inspectClipAsset(
+  {
+    id: "stripped-extracted-root-motion",
+    label: "Stripped Extracted Root Motion",
+    url: "/stripped-extracted-root-motion.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "stripped-to-in-place" } }
+  },
+  strippedExtraction.bakedClip!
+);
+assert.equal(strippedExtractionInspection.accepted, true, "baked all-axis root motion should satisfy stripped-to-in-place policy validation");
 
 const coreRetargetSourceRest = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
 const coreRetargetTargetRest = quatFromAxisAngle([0, 0, 1], Math.PI / 3);

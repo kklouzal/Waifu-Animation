@@ -1,7 +1,38 @@
-import { type AnimationClip, type SampleOptions, type SampleRepairDiagnostic, sampleClipToPose, sampleTime } from "./clip.js";
-import { type Transform, EPSILON, cloneTransform, euclideanModulo, identityTransform, invertQuat, multiplyQuat, scaleRatio, subVec3 } from "./math.js";
+import {
+  type AnimationClip,
+  type AnimationTrack,
+  type SampleOptions,
+  type SampleRepairDiagnostic,
+  normalizedTrackProperty,
+  resolveTrackJointIndex,
+  sampleClipToPose,
+  sampleTime
+} from "./clip.js";
+import {
+  type Quat,
+  type Transform,
+  type Vec3,
+  EPSILON,
+  addVec3,
+  clamp,
+  cloneQuat,
+  cloneTransform,
+  dotQuat,
+  euclideanModulo,
+  finiteNonNegative,
+  finiteSigned,
+  identityTransform,
+  invertQuat,
+  multiplyQuat,
+  normalizeQuat,
+  quatFromAxisAngle,
+  rotateVec3ByQuat,
+  scaleRatio,
+  subVec3
+} from "./math.js";
 import { readPoseTransformOrRest } from "./pose.js";
 import { type HumanoidBoneName, type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
+import { type RawFloat3Track, type RawQuaternionTrack, type UserTrack, buildUserTrack, sampleUserTrack } from "./tracks.js";
 
 export type MotionCarrier =
   | { jointIndex: number; joint?: never; humanBone?: never }
@@ -26,6 +57,95 @@ export type MotionIntervalDelta = {
   delta: Transform;
 };
 
+export type MotionExtractionReference = "absolute" | "skeleton" | "animation";
+
+export type MotionExtractionAxisMask = {
+  x?: boolean;
+  y?: boolean;
+  z?: boolean;
+};
+
+export type MotionRotationExtractionMode = "yaw" | "full";
+
+export type MotionTranslationExtractionOptions = {
+  axes?: MotionExtractionAxisMask;
+  reference?: MotionExtractionReference;
+  bake?: boolean;
+  loop?: boolean;
+};
+
+export type MotionRotationExtractionOptions = {
+  mode?: MotionRotationExtractionMode;
+  reference?: MotionExtractionReference;
+  bake?: boolean;
+  loop?: boolean;
+};
+
+export type ExtractRootMotionOptions = MotionSampleOptions & {
+  translation?: boolean | MotionTranslationExtractionOptions;
+  rotation?: false | MotionRotationExtractionMode | MotionRotationExtractionOptions;
+  reference?: MotionExtractionReference;
+  bake?: boolean;
+  loop?: boolean;
+  sampleTimes?: readonly number[];
+  bakedClipId?: string;
+};
+
+export type MotionTracks = {
+  duration: number;
+  loop?: boolean;
+  position?: UserTrack<"float3">;
+  rotation?: UserTrack<"quaternion">;
+};
+
+export type ExtractedRootMotion = MotionTracks & {
+  carrier: { jointIndex: number; joint: string };
+};
+
+export type RootMotionExtractionResult = {
+  motion: ExtractedRootMotion;
+  bakedClip?: AnimationClip;
+};
+
+export type MotionTrackSampleOptions = {
+  loop?: boolean;
+};
+
+export type MotionTrackSample = {
+  time: number;
+  ratio: number;
+  transform: Transform;
+};
+
+export type MotionTrackIntervalDelta = {
+  from: MotionTrackSample;
+  to: MotionTrackSample;
+  delta: Transform;
+};
+
+export type MotionAccumulatorUpdateOptions = {
+  pathRotation?: Quat;
+};
+
+export type MotionBlendLayer = {
+  weight: number;
+  delta: Transform;
+};
+
+type ResolvedTranslationExtraction = {
+  axes: Required<MotionExtractionAxisMask>;
+  reference: MotionExtractionReference;
+  bake: boolean;
+  loop: boolean;
+};
+
+type ResolvedRotationExtraction = {
+  mode: MotionRotationExtractionMode;
+  reference: MotionExtractionReference;
+  bake: boolean;
+  loop: boolean;
+};
+
 export function sampleMotionCarrier(skeleton: Skeleton, clip: AnimationClip, timeSeconds: number, options: MotionSampleOptions = {}): MotionSample {
   const diagnostics = options.diagnostics;
   const jointIndex = resolveMotionCarrierIndex(skeleton, options.carrier, diagnostics);
@@ -37,6 +157,63 @@ export function sampleMotionCarrier(skeleton: Skeleton, clip: AnimationClip, tim
     joint: skeleton.joints[jointIndex]?.name ?? "",
     time,
     transform: cloneTransform(readPoseTransformOrRest(skeleton, pose, jointIndex))
+  };
+}
+
+export function extractRootMotion(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  options: ExtractRootMotionOptions = {}
+): RootMotionExtractionResult {
+  const diagnostics = options.diagnostics;
+  const jointIndex = resolveMotionCarrierIndex(skeleton, options.carrier, diagnostics);
+  const joint = skeleton.joints[jointIndex]?.name ?? "";
+  const duration = finiteMotionDuration(clip.duration);
+  const sampleTimes = resolveMotionExtractionSampleTimes(skeleton, clip, jointIndex, options.sampleTimes);
+  const sampleOptions = motionSampleOptionsForExtraction(options);
+  const translationSettings = resolveTranslationExtraction(options);
+  const rotationSettings = resolveRotationExtraction(options);
+  const translationReference = resolveMotionReferenceTransform(skeleton, clip, jointIndex, translationSettings?.reference ?? options.reference ?? "skeleton", sampleOptions);
+  const rotationReference = resolveMotionReferenceTransform(skeleton, clip, jointIndex, rotationSettings?.reference ?? options.reference ?? "skeleton", sampleOptions);
+
+  const motion: ExtractedRootMotion = {
+    duration,
+    loop: options.loop ?? clip.loop ?? false,
+    carrier: { jointIndex, joint }
+  };
+
+  if (translationSettings) {
+    motion.position = buildUserTrack({
+      type: "float3",
+      name: `${clip.id}.${joint || "root"}.motion.position`,
+      keyframes: sampleTimes.map((time) => ({
+        ratio: motionSampleRatio(time, duration),
+        value: extractMotionTranslation(sampleMotionCarrier(skeleton, clip, time, sampleOptions).transform, translationReference, translationSettings.axes),
+        interpolation: "linear"
+      }))
+    } satisfies RawFloat3Track);
+    if (translationSettings.loop) loopMotionTrack(motion.position);
+  }
+
+  if (rotationSettings) {
+    motion.rotation = buildUserTrack({
+      type: "quaternion",
+      name: `${clip.id}.${joint || "root"}.motion.rotation`,
+      keyframes: sampleTimes.map((time) => ({
+        ratio: motionSampleRatio(time, duration),
+        value: extractMotionRotation(sampleMotionCarrier(skeleton, clip, time, sampleOptions).transform, rotationReference, rotationSettings.mode),
+        interpolation: "linear"
+      }))
+    } satisfies RawQuaternionTrack);
+    if (rotationSettings.loop) loopMotionTrack(motion.rotation);
+  }
+
+  const shouldBake = Boolean(translationSettings?.bake || rotationSettings?.bake);
+  if (!shouldBake) return { motion };
+
+  return {
+    motion,
+    bakedClip: bakeExtractedRootMotionClip(skeleton, clip, jointIndex, translationSettings, rotationSettings, translationReference, rotationReference, options.bakedClipId)
   };
 }
 
@@ -66,6 +243,169 @@ export function sampleMotionIntervalDelta(
     to,
     delta: sampleLoopingIntervalDelta(skeleton, clip, fromTime, toTime, options)
   };
+}
+
+export function sampleMotionTracks(motion: MotionTracks, timeSeconds: number, options: MotionTrackSampleOptions = {}): MotionTrackSample {
+  const duration = finiteMotionDuration(motion.duration);
+  const loop = options.loop ?? motion.loop ?? false;
+  const time = sampleMotionTrackTime(duration, timeSeconds, loop);
+  return {
+    time,
+    ratio: motionSampleRatio(time, duration),
+    transform: sampleMotionTracksAtLocalTime(motion, time)
+  };
+}
+
+export function sampleMotionTracksIntervalDelta(
+  motion: MotionTracks,
+  fromSeconds: number,
+  toSeconds: number,
+  options: MotionTrackSampleOptions = {}
+): MotionTrackIntervalDelta {
+  const fromTime = Number.isFinite(fromSeconds) ? fromSeconds : 0;
+  const toTime = Number.isFinite(toSeconds) ? toSeconds : 0;
+  const duration = finiteMotionDuration(motion.duration);
+  const loop = options.loop ?? motion.loop ?? false;
+  const from = sampleMotionTracks(motion, fromTime, { loop });
+  const to = sampleMotionTracks(motion, toTime, { loop });
+
+  if (Math.abs(toTime - fromTime) <= EPSILON || duration <= 0) {
+    return { from, to, delta: identityTransform() };
+  }
+
+  if (!loop) {
+    return { from, to, delta: sanitizeMotionTransform(carrierTransformDelta(from.transform, to.transform)) };
+  }
+
+  const delta = toTime > fromTime
+    ? sampleLoopingMotionTracksIntervalDelta(motion, fromTime, toTime)
+    : invertCarrierDelta(sampleLoopingMotionTracksIntervalDelta(motion, toTime, fromTime));
+  return { from, to, delta: sanitizeMotionTransform(delta) };
+}
+
+export class MotionAccumulator {
+  current: Transform;
+  delta: Transform;
+  rotationAccum: Quat;
+  last: Transform;
+
+  constructor(origin: Partial<Transform> = {}) {
+    const transform = cloneTransform(origin);
+    this.current = cloneTransform(transform);
+    this.delta = identityTransform();
+    this.rotationAccum = cloneQuat(undefined);
+    this.last = cloneTransform(transform);
+  }
+
+  accumulateDelta(delta: Transform, options: MotionAccumulatorUpdateOptions = {}): Transform {
+    const safeDelta = sanitizeMotionTransform(delta);
+    const pathRotation = normalizeQuat(cloneQuat(options.pathRotation));
+    const previous = cloneTransform(this.current);
+    this.rotationAccum = normalizeQuat(multiplyQuat(this.rotationAccum, pathRotation));
+    this.current = {
+      translation: addVec3(this.current.translation, rotateVec3ByQuat(this.rotationAccum, safeDelta.translation)),
+      rotation: multiplyQuat(multiplyQuat(this.current.rotation, safeDelta.rotation), pathRotation),
+      scale: [
+        this.current.scale[0] * safeDelta.scale[0],
+        this.current.scale[1] * safeDelta.scale[1],
+        this.current.scale[2] * safeDelta.scale[2]
+      ]
+    };
+    this.current = sanitizeMotionTransform(this.current);
+    this.delta = sanitizeMotionTransform(carrierTransformDelta(previous, this.current));
+    return cloneTransform(this.delta);
+  }
+
+  updateSample(sample: Transform, options: MotionAccumulatorUpdateOptions = {}): Transform {
+    const next = sanitizeMotionTransform(sample);
+    const delta = carrierTransformDelta(this.last, next);
+    const accumulated = this.accumulateDelta(delta, options);
+    this.last = next;
+    return accumulated;
+  }
+
+  resetOrigin(origin: Partial<Transform> = {}): void {
+    this.last = cloneTransform(origin);
+  }
+
+  teleport(origin: Partial<Transform> = {}): void {
+    const transform = cloneTransform(origin);
+    this.current = cloneTransform(transform);
+    this.last = cloneTransform(transform);
+    this.delta = identityTransform();
+    this.rotationAccum = cloneQuat(undefined);
+  }
+}
+
+export class MotionSampler {
+  readonly accumulator: MotionAccumulator;
+
+  constructor(origin: Partial<Transform> = {}) {
+    this.accumulator = new MotionAccumulator(origin);
+  }
+
+  get current(): Transform {
+    return this.accumulator.current;
+  }
+
+  get delta(): Transform {
+    return this.accumulator.delta;
+  }
+
+  update(
+    motion: MotionTracks,
+    fromSeconds: number,
+    toSeconds: number,
+    options: MotionTrackSampleOptions & MotionAccumulatorUpdateOptions = {}
+  ): MotionTrackIntervalDelta {
+    const interval = sampleMotionTracksIntervalDelta(motion, fromSeconds, toSeconds, options);
+    this.accumulator.accumulateDelta(interval.delta, options);
+    this.accumulator.resetOrigin(interval.to.transform);
+    return interval;
+  }
+
+  teleport(origin: Partial<Transform> = {}): void {
+    this.accumulator.teleport(origin);
+  }
+}
+
+export function blendMotionDeltas(layers: readonly MotionBlendLayer[]): Transform {
+  let totalWeight = 0;
+  for (const layer of layers) totalWeight += finiteNonNegative(layer.weight, 0);
+  if (totalWeight <= EPSILON) return identityTransform();
+
+  const translation: Vec3 = [0, 0, 0];
+  const rotationSum: Quat = [0, 0, 0, 0];
+  let firstRotation: Quat | undefined;
+
+  for (const layer of layers) {
+    const weight = finiteNonNegative(layer.weight, 0);
+    if (weight <= 0) continue;
+    const normalizedWeight = weight / totalWeight;
+    const delta = sanitizeMotionTransform(layer.delta);
+    translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
+    translation[1] += finiteSigned(delta.translation[1], 0) * normalizedWeight;
+    translation[2] += finiteSigned(delta.translation[2], 0) * normalizedWeight;
+
+    let rotation = normalizeQuat(delta.rotation);
+    const reference = dotQuat(rotationSum, rotationSum) > EPSILON ? rotationSum : firstRotation;
+    if (reference) {
+      if (dotQuat(reference, rotation) < 0) rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
+    } else if (dotQuat([0, 0, 0, 1], rotation) < 0) {
+      rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
+    }
+    firstRotation ??= rotation;
+    rotationSum[0] += rotation[0] * normalizedWeight;
+    rotationSum[1] += rotation[1] * normalizedWeight;
+    rotationSum[2] += rotation[2] * normalizedWeight;
+    rotationSum[3] += rotation[3] * normalizedWeight;
+  }
+
+  return sanitizeMotionTransform({
+    translation,
+    rotation: normalizeQuat(rotationSum),
+    scale: [1, 1, 1]
+  });
 }
 
 export function resolveMotionCarrierIndex(
@@ -152,4 +492,275 @@ function composeCarrierDelta(a: Transform, b: Transform): Transform {
     rotation: multiplyQuat(a.rotation, b.rotation),
     scale: [a.scale[0] * b.scale[0], a.scale[1] * b.scale[1], a.scale[2] * b.scale[2]]
   };
+}
+
+function resolveTranslationExtraction(options: ExtractRootMotionOptions): ResolvedTranslationExtraction | null {
+  if (options.translation === false) return null;
+  const channel = typeof options.translation === "object" ? options.translation : {};
+  return {
+    axes: {
+      x: channel.axes?.x ?? true,
+      y: channel.axes?.y ?? true,
+      z: channel.axes?.z ?? true
+    },
+    reference: channel.reference ?? options.reference ?? "skeleton",
+    bake: channel.bake ?? options.bake ?? false,
+    loop: channel.loop ?? false
+  };
+}
+
+function resolveRotationExtraction(options: ExtractRootMotionOptions): ResolvedRotationExtraction | null {
+  if (options.rotation === false) return null;
+  const channel = typeof options.rotation === "object" ? options.rotation : {};
+  const mode = options.rotation === "yaw" || options.rotation === "full" ? options.rotation : channel.mode ?? "yaw";
+  return {
+    mode,
+    reference: channel.reference ?? options.reference ?? "skeleton",
+    bake: channel.bake ?? options.bake ?? false,
+    loop: channel.loop ?? false
+  };
+}
+
+function motionSampleOptionsForExtraction(options: ExtractRootMotionOptions): MotionSampleOptions {
+  return {
+    ...(options.carrier ? { carrier: options.carrier } : {}),
+    ...(options.restPose ? { restPose: options.restPose } : {}),
+    ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}),
+    ...(options.sourceBasisQuaternion ? { sourceBasisQuaternion: options.sourceBasisQuaternion } : {}),
+    ...(options.targetRestChildDirection ? { targetRestChildDirection: options.targetRestChildDirection } : {}),
+    skipUnsupportedTracks: options.skipUnsupportedTracks ?? true,
+    loop: false
+  };
+}
+
+function resolveMotionExtractionSampleTimes(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  jointIndex: number,
+  requested: readonly number[] | undefined
+): number[] {
+  const duration = finiteMotionDuration(clip.duration);
+  const times = requested ? Array.from(requested) : collectCarrierTrackTimes(skeleton, clip, jointIndex);
+  times.push(0);
+  if (duration > 0) times.push(duration);
+  const clamped = times
+    .filter(Number.isFinite)
+    .map((time) => clamp(time, 0, duration))
+    .sort((a, b) => a - b);
+  const unique: number[] = [];
+  for (const time of clamped) {
+    const previous = unique[unique.length - 1];
+    if (previous === undefined || Math.abs(time - previous) > EPSILON) unique.push(time);
+  }
+  return unique.length > 0 ? unique : [0];
+}
+
+function collectCarrierTrackTimes(skeleton: Skeleton, clip: AnimationClip, jointIndex: number): number[] {
+  const times: number[] = [];
+  for (const track of clip.tracks) {
+    if (!isCarrierMotionTrack(skeleton, track, jointIndex)) continue;
+    times.push(...Array.from(track.times));
+  }
+  return times;
+}
+
+function isCarrierMotionTrack(skeleton: Skeleton, track: AnimationTrack, jointIndex: number): boolean {
+  if (resolveTrackJointIndex(skeleton, track) !== jointIndex) return false;
+  const property = normalizedTrackProperty(track.property);
+  return property === "translation" || property === "rotation";
+}
+
+function resolveMotionReferenceTransform(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  jointIndex: number,
+  reference: MotionExtractionReference,
+  options: MotionSampleOptions
+): Transform {
+  if (jointIndex < 0) return identityTransform();
+  if (reference === "absolute") return identityTransform();
+  if (reference === "animation") return sampleMotionCarrier(skeleton, clip, 0, options).transform;
+  return cloneTransform(readPoseTransformOrRest(skeleton, options.restPose ?? skeleton.restPose, jointIndex));
+}
+
+function extractMotionTranslation(sample: Transform, reference: Transform, axes: Required<MotionExtractionAxisMask>): Vec3 {
+  const delta = subVec3(sample.translation, reference.translation);
+  return [
+    axes.x ? finiteSigned(delta[0], 0) : 0,
+    axes.y ? finiteSigned(delta[1], 0) : 0,
+    axes.z ? finiteSigned(delta[2], 0) : 0
+  ];
+}
+
+function extractMotionRotation(sample: Transform, reference: Transform, mode: MotionRotationExtractionMode): Quat {
+  const delta = multiplyQuat(invertQuat(reference.rotation), sample.rotation);
+  return extractRotationDelta(delta, mode);
+}
+
+function extractRotationDelta(delta: Quat, mode: MotionRotationExtractionMode): Quat {
+  if (mode === "full") return normalizeQuat(delta);
+  const forward = rotateVec3ByQuat(delta, [0, 0, 1]);
+  const yaw = Math.atan2(finiteSigned(forward[0], 0), finiteSigned(forward[2], 1));
+  return quatFromAxisAngle([0, 1, 0], Number.isFinite(yaw) ? yaw : 0);
+}
+
+function loopMotionTrack<T extends "float3" | "quaternion">(track: UserTrack<T>): void {
+  if (track.ratios.length < 2) return;
+  const stride = track.type === "quaternion" ? 4 : 3;
+  const firstOffset = 0;
+  const lastOffset = (track.ratios.length - 1) * stride;
+  for (let component = 0; component < stride; component += 1) {
+    track.values[lastOffset + component] = track.values[firstOffset + component]!;
+  }
+}
+
+function bakeExtractedRootMotionClip(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  jointIndex: number,
+  translation: ResolvedTranslationExtraction | null,
+  rotation: ResolvedRotationExtraction | null,
+  translationReference: Transform,
+  rotationReference: Transform,
+  bakedClipId: string | undefined
+): AnimationClip {
+  return {
+    ...clip,
+    id: bakedClipId ?? `${clip.id}:baked-root-motion`,
+    tracks: clip.tracks.map((track) => bakeCarrierTrack(skeleton, track, jointIndex, translation, rotation, translationReference, rotationReference)),
+    ...(clip.metadata ? { metadata: { ...clip.metadata } } : {})
+  };
+}
+
+function bakeCarrierTrack(
+  skeleton: Skeleton,
+  track: AnimationTrack,
+  jointIndex: number,
+  translation: ResolvedTranslationExtraction | null,
+  rotation: ResolvedRotationExtraction | null,
+  translationReference: Transform,
+  rotationReference: Transform
+): AnimationTrack {
+  const property = normalizedTrackProperty(track.property);
+  const copy: AnimationTrack = {
+    ...track,
+    times: new Float32Array(track.times),
+    values: new Float32Array(track.values),
+    ...(track.sourceRestQuaternion ? { sourceRestQuaternion: new Float32Array(track.sourceRestQuaternion) } : {}),
+    ...(track.sourceRestChildDirection ? { sourceRestChildDirection: new Float32Array(track.sourceRestChildDirection) } : {})
+  };
+  if (jointIndex < 0 || resolveTrackJointIndex(skeleton, track) !== jointIndex) return copy;
+
+  if (property === "translation" && translation?.bake) {
+    for (let offset = 0; offset + 2 < copy.values.length; offset += 3) {
+      if (translation.axes.x) copy.values[offset] = translationReference.translation[0];
+      if (translation.axes.y) copy.values[offset + 1] = translationReference.translation[1];
+      if (translation.axes.z) copy.values[offset + 2] = translationReference.translation[2];
+    }
+  }
+
+  if (property === "rotation" && rotation?.bake) {
+    for (let offset = 0; offset + 3 < copy.values.length; offset += 4) {
+      const original = normalizeQuat([copy.values[offset]!, copy.values[offset + 1]!, copy.values[offset + 2]!, copy.values[offset + 3]!]);
+      const delta = multiplyQuat(invertQuat(rotationReference.rotation), original);
+      const extracted = extractRotationDelta(delta, rotation.mode);
+      const bakedDelta = multiplyQuat(invertQuat(extracted), delta);
+      const baked = multiplyQuat(rotationReference.rotation, bakedDelta);
+      copy.values.set(baked, offset);
+    }
+  }
+
+  return copy;
+}
+
+function sampleMotionTrackTime(duration: number, timeSeconds: number, loop: boolean): number {
+  const time = Number.isFinite(timeSeconds) ? timeSeconds : 0;
+  if (duration <= 0) return 0;
+  return loop ? euclideanModulo(time, duration) : clamp(time, 0, duration);
+}
+
+function sampleMotionTracksAtLocalTime(motion: MotionTracks, localTime: number): Transform {
+  const duration = finiteMotionDuration(motion.duration);
+  const ratio = motionSampleRatio(sampleMotionTrackTime(duration, localTime, false), duration);
+  return sanitizeMotionTransform({
+    translation: motion.position ? sampleUserTrack(motion.position, ratio) as Vec3 : [0, 0, 0],
+    rotation: motion.rotation ? sampleUserTrack(motion.rotation, ratio) as Quat : [0, 0, 0, 1],
+    scale: [1, 1, 1]
+  });
+}
+
+function sampleLoopingMotionTracksIntervalDelta(motion: MotionTracks, fromSeconds: number, toSeconds: number): Transform {
+  const duration = finiteMotionDuration(motion.duration);
+  let remaining = toSeconds - fromSeconds;
+  if (duration <= 0 || !Number.isFinite(remaining) || remaining <= EPSILON) return identityTransform();
+
+  let accumulated = identityTransform();
+  let startLocal = euclideanModulo(fromSeconds, duration);
+  if (duration - startLocal <= EPSILON) startLocal = 0;
+
+  const firstSpan = Math.min(remaining, duration - startLocal);
+  if (firstSpan > EPSILON) {
+    const endLocal = startLocal + firstSpan;
+    accumulated = composeCarrierDelta(
+      accumulated,
+      carrierTransformDelta(
+        sampleMotionTracksAtLocalTime(motion, startLocal),
+        sampleMotionTracksAtLocalTime(motion, Math.abs(endLocal - duration) <= EPSILON ? duration : endLocal)
+      )
+    );
+    remaining -= firstSpan;
+  }
+
+  if (remaining > EPSILON) {
+    const fullLoops = Math.floor((remaining + EPSILON) / duration);
+    if (fullLoops > 0) {
+      accumulated = composeCarrierDelta(
+        accumulated,
+        repeatCarrierDelta(carrierTransformDelta(sampleMotionTracksAtLocalTime(motion, 0), sampleMotionTracksAtLocalTime(motion, duration)), fullLoops)
+      );
+      remaining -= fullLoops * duration;
+    }
+  }
+
+  if (remaining > EPSILON) {
+    accumulated = composeCarrierDelta(
+      accumulated,
+      carrierTransformDelta(sampleMotionTracksAtLocalTime(motion, 0), sampleMotionTracksAtLocalTime(motion, remaining))
+    );
+  }
+
+  return sanitizeMotionTransform(accumulated);
+}
+
+function repeatCarrierDelta(delta: Transform, count: number): Transform {
+  let remaining = Number.isSafeInteger(count) && count > 0 ? count : 0;
+  let result = identityTransform();
+  let power = sanitizeMotionTransform(delta);
+  while (remaining > 0) {
+    if (remaining % 2 === 1) result = composeCarrierDelta(result, power);
+    remaining = Math.floor(remaining / 2);
+    if (remaining > 0) power = composeCarrierDelta(power, power);
+  }
+  return sanitizeMotionTransform(result);
+}
+
+function invertCarrierDelta(delta: Transform): Transform {
+  return sanitizeMotionTransform({
+    translation: [-delta.translation[0], -delta.translation[1], -delta.translation[2]],
+    rotation: invertQuat(delta.rotation),
+    scale: [scaleRatio(1, delta.scale[0]), scaleRatio(1, delta.scale[1]), scaleRatio(1, delta.scale[2])]
+  });
+}
+
+function motionSampleRatio(time: number, duration: number): number {
+  if (duration <= 0) return 0;
+  return clamp(time / duration, 0, 1);
+}
+
+function finiteMotionDuration(duration: number): number {
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
+function sanitizeMotionTransform(transform: Transform): Transform {
+  return cloneTransform(transform);
 }
