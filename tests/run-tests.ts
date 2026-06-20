@@ -2421,6 +2421,16 @@ assert.deepEqual(
   ).map((track) => track.name),
   ["head.quaternion"]
 );
+const globalThumbMaskRule = /thumb/gi;
+assert.deepEqual(
+  filterTracksByNamePolicy(
+    [{ name: "leftThumbProximal.quaternion" }, { name: "rightThumbDistal.quaternion" }, { name: "head.quaternion" }],
+    { exclude: [globalThumbMaskRule] }
+  ).map((track) => track.name),
+  ["head.quaternion"],
+  "global regex track masks should not leak lastIndex state between tracks"
+);
+assert.equal(globalThumbMaskRule.lastIndex, 0, "global regex track masks should leave caller regex state deterministic");
 
 assert.deepEqual(
   filterTracksByNamePolicy(
@@ -2448,6 +2458,25 @@ assert.deepEqual(
 );
 
 const baseAuthoredClip = makeAuthoredLoopClip("base-authored-upper", ["hips.position", "spine", "leftShoulder", "rightUpperArm", "leftHand", "rightIndexProximal", "leftUpperLeg"]);
+const sourcePropertyPolicyClip: AnimationClip = {
+  id: "source-property-policy",
+  duration: 1,
+  tracks: [
+    { humanBone: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+    { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) },
+    { humanBone: "hips", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }
+  ]
+};
+assert.deepEqual(
+  applySourceTrackPolicy(sourcePropertyPolicyClip, { include: [/^head\.quaternion$/] }).tracks.map((track) => `${track.humanBone ?? track.joint}.${track.property}`),
+  ["head.rotation"],
+  "source track regex rules should match Three-facing quaternion source names before UUID binding"
+);
+assert.deepEqual(
+  applySourceTrackPolicy(sourcePropertyPolicyClip, { exclude: [/^head\.position$/] }).tracks.map((track) => `${track.humanBone ?? track.joint}.${track.property}`),
+  ["head.rotation", "hips.translation"],
+  "source track regex rules should distinguish properties on the same source bone"
+);
 assert.deepEqual(
   applySourceTrackPolicy(baseAuthoredClip, AUTHORED_BASE_SOURCE_TRACK_POLICY).tracks.map((track) => track.humanBone ?? track.joint),
   ["hips", "spine", "leftShoulder", "rightUpperArm", "leftHand", "leftUpperLeg"],
@@ -2506,6 +2535,21 @@ assert.deepEqual(
     "rightFoot.quaternion"
   ],
   "source root translation policy should remove hips translation before runtime tracks are renamed to UUIDs"
+);
+const rootCarrierSourcePolicyClip: AnimationClip = {
+  id: "root-carrier-source-policy",
+  duration: 1,
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) },
+    { joint: "pelvis", property: "position", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) },
+    { humanBone: "hips", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) },
+    { humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) }
+  ]
+};
+assert.deepEqual(
+  applySourceTrackPolicy(rootCarrierSourcePolicyClip, ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY).tracks.map((track) => `${track.humanBone ?? track.joint}.${track.property}`),
+  ["head.quaternion"],
+  "source root translation policy should strip root, hips, and pelvis translation carriers"
 );
 assert.equal(locomotionAuthoredClip.tracks.length, 11, "source track policy should not mutate the original clip");
 
@@ -4219,6 +4263,51 @@ assert.equal(
   strippedHipsTranslationClip.tracks.some((track) => track.name === `${hipsTranslationBone.uuid}.position`),
   false,
   "stripped-to-in-place runtime clips should still remove root carrier position tracks"
+);
+const namedRootCarrierRuntimeRoot = new Object3D();
+const rootTranslationBone = new Object3D();
+rootTranslationBone.name = "root";
+const pelvisTranslationBone = new Object3D();
+pelvisTranslationBone.name = "pelvis";
+namedRootCarrierRuntimeRoot.add(rootTranslationBone);
+namedRootCarrierRuntimeRoot.add(pelvisTranslationBone);
+const namedRootCarrierSourceClip: AnimationClip = {
+  id: "named-root-carrier-translation-source",
+  duration: 1,
+  loop: true,
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0.25, 0, 0]) },
+    { joint: "pelvis", property: "position", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 0.25]) }
+  ]
+};
+const strippedNamedRootCarrierClip = createThreeAnimationClip(namedRootCarrierSourceClip, {
+  resolveBone: (bone) => {
+    if (bone === "root") return rootTranslationBone;
+    if (bone === "pelvis") return pelvisTranslationBone;
+    return null;
+  }
+});
+assert.equal(
+  strippedNamedRootCarrierClip.tracks.some((track) => track.name === `${rootTranslationBone.uuid}.position` || track.name === `${pelvisTranslationBone.uuid}.position`),
+  true,
+  "root carrier fixture should bind root and pelvis position tracks before runtime policy stripping"
+);
+createThreeRuntimeClipsForEntry(
+  {
+    id: "stripped-named-root-carrier-translation",
+    label: "Stripped Named Root Carrier Translation",
+    url: "/stripped-named-root-carrier-translation.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true,
+    source: { rootMotion: { policy: "stripped-to-in-place" } }
+  },
+  new AnimationMixer(namedRootCarrierRuntimeRoot),
+  strippedNamedRootCarrierClip
+);
+assert.equal(
+  strippedNamedRootCarrierClip.tracks.some((track) => track.name === `${rootTranslationBone.uuid}.position` || track.name === `${pelvisTranslationBone.uuid}.position`),
+  false,
+  "stripped-to-in-place runtime clips should remove root and pelvis position tracks after UUID binding"
 );
 
 assert.equal(calculateThreeRuntimeStartTime(-1, { startTime: 4 }), 0);
