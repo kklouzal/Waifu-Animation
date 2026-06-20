@@ -22,7 +22,7 @@ const FINGER_TRACK_RULE = /(thumb|index|middle|ring|little)/i;
 const ARM_SOURCE_TRACK_RULE = /^(left|right)(Shoulder|UpperArm|LowerArm|Hand)/;
 const FINGER_SOURCE_TRACK_RULE = /^(left|right)(Thumb|Index|Middle|Ring|Little)/;
 
-function matchesRule(name: string, rule: TrackNameRule): boolean {
+export function trackNameMatchesRule(name: string, rule: TrackNameRule): boolean {
   return typeof rule === "string" ? name.includes(rule) : rule.test(name);
 }
 
@@ -32,7 +32,7 @@ function sourceTrackName(track: AnimationTrack): string {
 
 function matchesSourceRule(track: AnimationTrack, rule: SourceTrackRule): boolean {
   if (typeof rule === "function") return rule(track);
-  return matchesRule(sourceTrackName(track), rule);
+  return trackNameMatchesRule(sourceTrackName(track), rule);
 }
 
 function policyAllows<TRule>(policy: { include?: TRule[]; exclude?: TRule[] }, matches: (rule: TRule) => boolean): boolean {
@@ -46,7 +46,7 @@ function policyAllows<TRule>(policy: { include?: TRule[]; exclude?: TRule[] }, m
 }
 
 export function trackNameAllowed(name: string, policy: TrackMaskPolicy): boolean {
-  return policyAllows(policy, (rule) => matchesRule(name, rule));
+  return policyAllows(policy, (rule) => trackNameMatchesRule(name, rule));
 }
 
 export function filterTracksByNamePolicy<T extends TrackLike>(tracks: readonly T[], policy: TrackMaskPolicy): T[] {

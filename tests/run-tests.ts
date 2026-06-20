@@ -3156,6 +3156,50 @@ assert.ok(
   quaternionNearlyEqual(retargetedNonUnitTrack.values, [0, 0, 0, 1], 1e-5),
   "retargeted quaternion tracks should normalize non-unit source samples without changing their rotation"
 );
+const childDirectionMetadataDelta = quatFromAxisAngle([1, 0, 0], Math.PI / 3);
+const childDirectionMetadataRetargeted = retargetQuaternionSample(
+  [0, 0, 0, 1],
+  [0, 0, 0, 1],
+  childDirectionMetadataDelta,
+  "leftUpperArm",
+  undefined,
+  [0, 1, 0],
+  [1, 0, 0]
+);
+assert.ok(
+  quaternionNearlyEqual(childDirectionMetadataRetargeted, childDirectionMetadataDelta, 1e-5),
+  "source/target child-direction metadata must not silently conjugate local rotation deltas"
+);
+const targetChildDirectionHingeDelta = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
+const targetChildDirectionHingeRetargeted = retargetQuaternionSample(
+  [0, 0, 0, 1],
+  [0, 0, 0, 1],
+  targetChildDirectionHingeDelta,
+  "leftLowerLeg",
+  undefined,
+  undefined,
+  [0, -1, 0]
+);
+assert.ok(
+  quaternionNearlyEqual(targetChildDirectionHingeRetargeted, targetChildDirectionHingeDelta, 1e-5),
+  "target child direction alone must not trigger hidden hinge-axis remapping"
+);
+const explicitSourceBasis = quatFromUnitVectors([0, 0, 1], [1, 0, 0]);
+const explicitBasisDelta = quatFromAxisAngle([0, 0, 1], Math.PI / 5);
+const explicitBasisExpected = multiplyQuat(multiplyQuat(explicitSourceBasis, explicitBasisDelta), invertQuat(explicitSourceBasis));
+const explicitBasisWithChildDirections = retargetQuaternionSample(
+  [0, 0, 0, 1],
+  [0, 0, 0, 1],
+  explicitBasisDelta,
+  "leftLowerLeg",
+  explicitSourceBasis,
+  [0, 1, 0],
+  [1, 0, 0]
+);
+assert.ok(
+  quaternionNearlyEqual(explicitBasisWithChildDirections, explicitBasisExpected, 1e-5),
+  "explicit source-basis correction must not be overridden by child-direction metadata"
+);
 
 const mismatchedBasisSourceRest = quatFromAxisAngle([0, 0, 1], Math.PI / 2);
 const mismatchedBasisTargetRest = [0, 0, 0, 1] as const;
@@ -3989,6 +4033,79 @@ const runtimeClips = createThreeRuntimeClipsForEntry(
 assert.equal(runtimeClips.length, 2);
 assert.equal(runtimeClips[0]!.lane, "base");
 assert.equal(runtimeClips[1]!.instance, 1);
+
+const hipsTranslationRuntimeRoot = new Object3D();
+const hipsTranslationBone = new Object3D();
+hipsTranslationBone.name = "hips";
+hipsTranslationRuntimeRoot.add(hipsTranslationBone);
+const hipsTranslationSourceClip: AnimationClip = {
+  id: "hips-translation-source",
+  duration: 1,
+  loop: true,
+  tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0.25, 0]) }]
+};
+const preservedHipsTranslationClip = createThreeAnimationClip(hipsTranslationSourceClip, {
+  resolveBone: (humanBone) => (humanBone === "hips" ? hipsTranslationBone : null)
+});
+createThreeRuntimeClipsForEntry(
+  {
+    id: "preserved-hips-translation",
+    label: "Preserved Hips Translation",
+    url: "/preserved-hips-translation.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true,
+    source: { rootMotion: { policy: "preserved" } }
+  },
+  new AnimationMixer(hipsTranslationRuntimeRoot),
+  preservedHipsTranslationClip
+);
+assert.equal(
+  preservedHipsTranslationClip.tracks.some((track) => track.name === `${hipsTranslationBone.uuid}.position`),
+  true,
+  "preserved root-motion runtime clips should keep hips position tracks for the Three mixer"
+);
+const metadataPreservedHipsTranslationClip = createThreeAnimationClip(
+  { ...hipsTranslationSourceClip, id: "metadata-preserved-hips-translation", metadata: { rootMotionPolicy: "preserved" } },
+  {
+    resolveBone: (humanBone) => (humanBone === "hips" ? hipsTranslationBone : null)
+  }
+);
+createThreeRuntimeClipsForEntry(
+  {
+    id: "metadata-preserved-hips-translation",
+    label: "Metadata Preserved Hips Translation",
+    url: "/metadata-preserved-hips-translation.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true
+  },
+  new AnimationMixer(hipsTranslationRuntimeRoot),
+  metadataPreservedHipsTranslationClip
+);
+assert.equal(
+  metadataPreservedHipsTranslationClip.tracks.some((track) => track.name === `${hipsTranslationBone.uuid}.position`),
+  true,
+  "clip metadata rootMotionPolicy=preserved should survive Three binding and keep hips position tracks"
+);
+const strippedHipsTranslationClip = createThreeAnimationClip(hipsTranslationSourceClip, {
+  resolveBone: (humanBone) => (humanBone === "hips" ? hipsTranslationBone : null)
+});
+createThreeRuntimeClipsForEntry(
+  {
+    id: "stripped-hips-translation",
+    label: "Stripped Hips Translation",
+    url: "/stripped-hips-translation.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    loop: true,
+    source: { rootMotion: { policy: "stripped-to-in-place" } }
+  },
+  new AnimationMixer(hipsTranslationRuntimeRoot),
+  strippedHipsTranslationClip
+);
+assert.equal(
+  strippedHipsTranslationClip.tracks.some((track) => track.name === `${hipsTranslationBone.uuid}.position`),
+  false,
+  "stripped-to-in-place runtime clips should still remove root carrier position tracks"
+);
 
 assert.equal(calculateThreeRuntimeStartTime(-1, { startTime: 4 }), 0);
 assert.equal(calculateThreeRuntimeStartTime(2, { startTime: -0.25 }), 0);

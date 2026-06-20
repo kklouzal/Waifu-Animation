@@ -14,13 +14,13 @@ import {
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
 import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, dampValue, euclideanModulo, finiteNonNegative, isFiniteNumber, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
-import { type AnimationManifestEntry } from "./manifest.js";
+import { type AnimationManifestEntry, type RootMotionPolicy, readRootMotionPolicy } from "./manifest.js";
 import {
   AUTHORED_BASE_TRACK_POLICY,
   OVERLAY_UPPER_BODY_TRACK_POLICY,
   ROOT_TRANSLATION_EXCLUDE_POLICY,
   type TrackMaskPolicy,
-  filterTracksByNamePolicy
+  trackNameMatchesRule
 } from "./masks.js";
 import { retargetQuaternionTrackValues } from "./retargeting.js";
 
@@ -264,10 +264,13 @@ const tmpIdentity = new Quaternion();
 const tmpEuler = new Euler(0, 0, 0, "XYZ");
 const tmpWorldDirection = new Vector3();
 const tmpLocalDirection = new Vector3();
+const THREE_ROOT_MOTION_POLICY_USER_DATA = "waifuAnimationRootMotionPolicy";
+const THREE_TRACK_SOURCE_NAMES_USER_DATA = "waifuAnimationTrackSourceNames";
 
 export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnimationClipOptions): ThreeAnimationClip {
   const playback = resolvePlaybackWindow(clip, options.playback, options.minimumDuration ?? 0.1);
   let runtimeDuration = playback.end - playback.start;
+  const trackSourceNames: Record<string, string> = {};
   const tracks = clip.tracks.flatMap((track) => {
     const boneName = track.humanBone ?? track.joint;
     if (!boneName) return [];
@@ -300,17 +303,25 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
       if (invalidSamples > 0) {
         options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, invalidSamples);
       }
-      return [new QuaternionKeyframeTrack(`${bone.uuid}.quaternion`, Float32Array.from(sampleWindow.times), Float32Array.from(values))];
+      const threeTrack = new QuaternionKeyframeTrack(`${bone.uuid}.quaternion`, Float32Array.from(sampleWindow.times), Float32Array.from(values));
+      trackSourceNames[threeTrack.name] = `${String(boneName)}.quaternion`;
+      return [threeTrack];
     }
 
     const targetProperty = property === "translation" ? "position" : "scale";
-    return [new VectorKeyframeTrack(`${bone.uuid}.${targetProperty}`, Float32Array.from(sampleWindow.times), Float32Array.from(sampleWindow.values))];
+    const threeTrack = new VectorKeyframeTrack(`${bone.uuid}.${targetProperty}`, Float32Array.from(sampleWindow.times), Float32Array.from(sampleWindow.values));
+    trackSourceNames[threeTrack.name] = `${String(boneName)}.${targetProperty}`;
+    return [threeTrack];
   });
 
   if (tracks.length === 0) {
     options.logger?.warn("animation clip has no mapped runtime tracks", options.id ?? clip.id);
   }
-  return new ThreeAnimationClip(options.id ?? clip.id, runtimeDuration, tracks);
+  const threeClip = new ThreeAnimationClip(options.id ?? clip.id, runtimeDuration, tracks);
+  threeClip.userData[THREE_TRACK_SOURCE_NAMES_USER_DATA] = trackSourceNames;
+  const rootMotionPolicy = readAnimationClipRootMotionPolicy(clip);
+  if (rootMotionPolicy) threeClip.userData[THREE_ROOT_MOTION_POLICY_USER_DATA] = rootMotionPolicy;
+  return threeClip;
 }
 
 export function sliceAnimationTrackWindow(track: AnimationTrack, start: number, end: number): TrackSampleWindow {
@@ -333,9 +344,41 @@ export function sliceAnimationTrackWindow(track: AnimationTrack, start: number, 
 
 export function applyThreeTrackPolicy(clip: ThreeAnimationClip, policy: TrackMaskPolicy): ThreeAnimationClip {
   const initialTrackCount = clip.tracks.length;
-  clip.tracks = filterTracksByNamePolicy(clip.tracks, policy) as KeyframeTrack[];
+  const sourceNames = readThreeTrackSourceNames(clip);
+  clip.tracks = clip.tracks.filter((track) => threeTrackAllowed(track, policy, sourceNames[track.name])) as KeyframeTrack[];
+  writeThreeTrackSourceNames(clip, sourceNames);
   if (clip.tracks.length !== initialTrackCount) clip.resetDuration();
   return clip;
+}
+
+function readThreeTrackSourceNames(clip: ThreeAnimationClip): Record<string, string> {
+  const raw = clip.userData[THREE_TRACK_SOURCE_NAMES_USER_DATA];
+  if (!raw || typeof raw !== "object") return {};
+  const sourceNames: Record<string, string> = {};
+  for (const [trackName, sourceName] of Object.entries(raw)) {
+    if (typeof sourceName === "string") sourceNames[trackName] = sourceName;
+  }
+  return sourceNames;
+}
+
+function writeThreeTrackSourceNames(clip: ThreeAnimationClip, sourceNames: Record<string, string>): void {
+  const retained = new Set(clip.tracks.map((track) => track.name));
+  const filtered: Record<string, string> = {};
+  for (const [trackName, sourceName] of Object.entries(sourceNames)) {
+    if (retained.has(trackName)) filtered[trackName] = sourceName;
+  }
+  clip.userData[THREE_TRACK_SOURCE_NAMES_USER_DATA] = filtered;
+}
+
+function threeTrackAllowed(track: KeyframeTrack, policy: TrackMaskPolicy, sourceName: string | undefined): boolean {
+  const names = sourceName && sourceName !== track.name ? [track.name, sourceName] : [track.name];
+  if (policy.include && policy.include.length > 0 && !policy.include.some((rule) => names.some((name) => trackNameMatchesRule(name, rule)))) {
+    return false;
+  }
+  if (policy.exclude?.some((rule) => names.some((name) => trackNameMatchesRule(name, rule)))) {
+    return false;
+  }
+  return true;
 }
 
 export function createThreeRuntimeClip<TEntry extends AnimationManifestEntry>(
@@ -364,7 +407,7 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
   mixer: AnimationMixer,
   animationClip: ThreeAnimationClip
 ): ThreeRuntimeClip<TEntry>[] {
-  applyThreeTrackPolicy(animationClip, ROOT_TRANSLATION_EXCLUDE_POLICY);
+  if (shouldStripRuntimeRootTranslation(entry, animationClip)) applyThreeTrackPolicy(animationClip, ROOT_TRANSLATION_EXCLUDE_POLICY);
   if (entry.loop === false) {
     applyThreeTrackPolicy(animationClip, OVERLAY_UPPER_BODY_TRACK_POLICY);
     animationClip.name = `${entry.id}:overlay`;
@@ -376,6 +419,26 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
   const secondClip = animationClip.clone();
   secondClip.name = `${entry.id}:base:b`;
   return [createThreeRuntimeClip(entry, mixer, animationClip, "base", 0), createThreeRuntimeClip(entry, mixer, secondClip, "base", 1)];
+}
+
+function readAnimationClipRootMotionPolicy(clip: AnimationClip): RootMotionPolicy | null {
+  const policy = clip.metadata?.rootMotionPolicy;
+  return isRootMotionPolicy(policy) ? policy : null;
+}
+
+function readThreeRuntimeRootMotionPolicy(entry: AnimationManifestEntry, animationClip: ThreeAnimationClip): RootMotionPolicy | null {
+  const entryPolicy = readRootMotionPolicy(entry);
+  if (entryPolicy) return entryPolicy;
+  const clipPolicy = animationClip.userData[THREE_ROOT_MOTION_POLICY_USER_DATA];
+  return isRootMotionPolicy(clipPolicy) ? clipPolicy : null;
+}
+
+function shouldStripRuntimeRootTranslation(entry: AnimationManifestEntry, animationClip: ThreeAnimationClip): boolean {
+  return readThreeRuntimeRootMotionPolicy(entry, animationClip) === "stripped-to-in-place";
+}
+
+function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {
+  return value === "none" || value === "preserved" || value === "stripped-to-in-place";
 }
 
 export function configureThreeRuntimeAction(action: AnimationAction): AnimationAction {

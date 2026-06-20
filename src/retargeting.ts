@@ -3,14 +3,12 @@ import {
   type Quat,
   type Vec3,
   cloneNormalizedQuat,
-  crossVec3,
   ensureShortestQuat,
   invertQuat,
   lengthVec3,
   multiplyQuat,
   normalizeQuat,
   normalizeVec3,
-  quatFromUnitVectors,
   rotateVec3ByQuat,
   subVec3
 } from "./math.js";
@@ -76,32 +74,14 @@ export function retargetQuaternionSample(
   const dstRest = normalizeQuat(targetRest);
   const srcSample = normalizeQuat(sourceSample, srcRest);
   void humanBone;
+  void sourceRestChildDirection;
+  void targetRestChildDirection;
   let sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
-  const hingeBasis = hingeAxisBasis(humanBone, sourceDelta, targetRestChildDirection);
-  const restBasis = hingeBasis ?? restChildDirectionBasis(sourceRestChildDirection, targetRestChildDirection);
-  if (sourceBasis || restBasis) {
-    const basis = restBasis ?? cloneNormalizedQuat(sourceBasis);
+  if (sourceBasis) {
+    const basis = cloneNormalizedQuat(sourceBasis);
     sourceDelta = multiplyQuat(multiplyQuat(basis, sourceDelta), invertQuat(basis));
   }
   return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
-}
-
-function hingeAxisBasis(humanBone: string | undefined, sourceDelta: Quat, targetRestChildDirection: ArrayLike<number> | null | undefined): Quat | null {
-  if (!humanBone || !targetRestChildDirection || !isHingeBoneName(humanBone)) return null;
-  const sourceAxis = normalizeVec3([sourceDelta[0], sourceDelta[1], sourceDelta[2]]);
-  if (lengthVec3(sourceAxis) <= EPSILON) return null;
-  const targetChild = normalizeVec3([targetRestChildDirection[0] ?? 0, targetRestChildDirection[1] ?? 0, targetRestChildDirection[2] ?? 0]);
-  const sagittalDelta: Vec3 = [0, 0, targetSagittalSign(humanBone)];
-  const targetAxis = normalizeVec3(crossVec3(targetChild, sagittalDelta), [1, 0, 0]);
-  return quatFromUnitVectors(sourceAxis, targetAxis);
-}
-
-function targetSagittalSign(humanBone: string): number {
-  return humanBone.startsWith("right") ? 1 : -1;
-}
-
-function isHingeBoneName(humanBone: string): boolean {
-  return humanBone === "leftLowerLeg" || humanBone === "rightLowerLeg" || humanBone === "leftLowerArm" || humanBone === "rightLowerArm";
 }
 
 export function retargetQuaternionTrackValues(
@@ -133,16 +113,6 @@ export function retargetQuaternionTrackValues(
     previous = retargeted;
   }
   return { values: output, invalidSamples };
-}
-
-function restChildDirectionBasis(
-  sourceRestChildDirection: ArrayLike<number> | null | undefined,
-  targetRestChildDirection: ArrayLike<number> | null | undefined
-): Quat | null {
-  if (!sourceRestChildDirection || !targetRestChildDirection) return null;
-  const source = normalizeVec3([sourceRestChildDirection[0] ?? 0, sourceRestChildDirection[1] ?? 0, sourceRestChildDirection[2] ?? 0]);
-  const target = normalizeVec3([targetRestChildDirection[0] ?? 0, targetRestChildDirection[1] ?? 0, targetRestChildDirection[2] ?? 0]);
-  return quatFromUnitVectors(source, target);
 }
 
 export function diagnoseRetargetingRestAxes(
