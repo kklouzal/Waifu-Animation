@@ -1,4 +1,4 @@
-import { type Quat, type Transform, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Quat, type Transform, type Vec3, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
 import { type Pose, readPoseTransformOrRest } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
@@ -13,6 +13,7 @@ export type AnimationTrack = {
   times: Float32Array;
   values: Float32Array;
   sourceRestQuaternion?: Float32Array;
+  sourceRestChildDirection?: Float32Array;
 };
 
 export type AnimationClip = {
@@ -41,6 +42,7 @@ export type SampleOptions = {
   restPose?: readonly Transform[];
   diagnostics?: SampleRepairDiagnostic[];
   sourceBasisQuaternion?: (humanBone: string, jointIndex: number) => ArrayLike<number> | null | undefined;
+  targetRestChildDirection?: (humanBone: string, jointIndex: number) => ArrayLike<number> | null | undefined;
   /** Skip structurally unsupported external channels after validation has reported them. */
   skipUnsupportedTracks?: boolean;
 };
@@ -82,6 +84,7 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
       issues.push({ track: index, joint: String(jointName), property: track.property, message: "track does not map to skeleton" });
     }
     validateSourceRestQuaternion(issues, track, index, String(jointName ?? ""), property);
+    validateSourceRestChildDirection(issues, track, index, String(jointName ?? ""), property);
     const channel = resolvedTrackChannel(skeleton, track, jointIndex, property);
     if (channel) {
       const existing = resolvedChannels.get(channel.key);
@@ -117,6 +120,32 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     validateRotationTrackQuaternions(issues, track, index, String(jointName ?? ""), property);
   }
   return issues;
+}
+
+function validateSourceRestChildDirection(
+  issues: ClipValidationIssue[],
+  track: AnimationTrack,
+  index: number,
+  jointName: string,
+  property: NormalizedTrackProperty
+): void {
+  const direction = track.sourceRestChildDirection;
+  if (!direction) return;
+  if (property !== "rotation") {
+    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection is only valid on rotation tracks" });
+    return;
+  }
+  if (direction.length !== 3) {
+    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection must contain exactly 3 values" });
+    return;
+  }
+  if (!Array.from(direction).every(Number.isFinite)) {
+    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection values must be finite" });
+    return;
+  }
+  if (Math.hypot(direction[0]!, direction[1]!, direction[2]!) <= EPSILON) {
+    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection must be normalizable" });
+  }
 }
 
 function validateRotationTrackQuaternions(
@@ -285,8 +314,16 @@ function retargetSampledRotation(
     targetRest,
     sampled,
     boneName,
-    options.sourceBasisQuaternion?.(boneName, jointIndex) ?? undefined
+    options.sourceBasisQuaternion?.(boneName, jointIndex) ?? undefined,
+    readTrackSourceRestChildDirection(track),
+    options.targetRestChildDirection?.(boneName, jointIndex) ?? undefined
   );
+}
+
+function readTrackSourceRestChildDirection(track: AnimationTrack): Vec3 | undefined {
+  const direction = track.sourceRestChildDirection;
+  if (!direction || direction.length !== 3) return undefined;
+  return cloneVec3(direction);
 }
 
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {

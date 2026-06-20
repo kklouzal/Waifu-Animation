@@ -77,6 +77,7 @@ import {
   rotateVec3ByQuat,
   multiplyQuat,
   invertQuat,
+  diagnoseRetargetingRestAxes,
   retargetQuaternionSample,
   retargetQuaternionTrackValues,
   sampleMotionCarrier,
@@ -1575,6 +1576,77 @@ const rightElbowForward = signedJointOffset(
 );
 assert.ok(leftElbowForward > 0.12, `left elbow should flex to the authored forward bend plane, got ${leftElbowForward.toFixed(4)}`);
 assert.ok(rightElbowForward > 0.12, `right elbow should flex to the authored forward bend plane, got ${rightElbowForward.toFixed(4)}`);
+
+const fullAnatomicalSkeleton = createSkeleton([
+  { name: "hips", humanoid: "hips", rest: { translation: [0, 1, 0] } },
+  { name: "spine", parentName: "hips", humanoid: "spine", rest: { translation: [0, 0.28, 0] } },
+  { name: "chest", parentName: "spine", humanoid: "chest", rest: { translation: [0, 0.28, 0] } },
+  { name: "neck", parentName: "chest", humanoid: "neck", rest: { translation: [0, 0.24, 0] } },
+  { name: "head", parentName: "neck", humanoid: "head", rest: { translation: [0, 0.18, 0] } },
+  { name: "leftShoulder", parentName: "chest", humanoid: "leftShoulder", rest: { translation: [-0.12, 0.18, 0] } },
+  { name: "leftUpperArm", parentName: "leftShoulder", humanoid: "leftUpperArm", rest: { translation: [-0.2, 0, 0] } },
+  { name: "leftLowerArm", parentName: "leftUpperArm", humanoid: "leftLowerArm", rest: { translation: [-0.36, 0, 0] } },
+  { name: "leftHand", parentName: "leftLowerArm", humanoid: "leftHand", rest: { translation: [-0.32, 0, 0] } },
+  { name: "rightShoulder", parentName: "chest", humanoid: "rightShoulder", rest: { translation: [0.12, 0.18, 0] } },
+  { name: "rightUpperArm", parentName: "rightShoulder", humanoid: "rightUpperArm", rest: { translation: [0.2, 0, 0] } },
+  { name: "rightLowerArm", parentName: "rightUpperArm", humanoid: "rightLowerArm", rest: { translation: [0.36, 0, 0] } },
+  { name: "rightHand", parentName: "rightLowerArm", humanoid: "rightHand", rest: { translation: [0.32, 0, 0] } },
+  { name: "leftUpperLeg", parentName: "hips", humanoid: "leftUpperLeg", rest: { translation: [-0.12, -0.12, 0] } },
+  { name: "leftLowerLeg", parentName: "leftUpperLeg", humanoid: "leftLowerLeg", rest: { translation: [0, -0.46, 0] } },
+  { name: "leftFoot", parentName: "leftLowerLeg", humanoid: "leftFoot", rest: { translation: [0, -0.46, 0] } },
+  { name: "leftToes", parentName: "leftFoot", humanoid: "leftToes", rest: { translation: [0, 0, 0.18] } },
+  { name: "rightUpperLeg", parentName: "hips", humanoid: "rightUpperLeg", rest: { translation: [0.12, -0.12, 0] } },
+  { name: "rightLowerLeg", parentName: "rightUpperLeg", humanoid: "rightLowerLeg", rest: { translation: [0, -0.46, 0] } },
+  { name: "rightFoot", parentName: "rightLowerLeg", humanoid: "rightFoot", rest: { translation: [0, -0.46, 0] } },
+  { name: "rightToes", parentName: "rightFoot", humanoid: "rightToes", rest: { translation: [0, 0, 0.18] } }
+]);
+const fullAnatomicalClip: AnimationClip = {
+  id: "full-anatomical-known-local-rotations",
+  duration: 1,
+  tracks: [
+    { humanBone: "hips", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 10)]) },
+    { humanBone: "spine", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([1, 0, 0], Math.PI / 12)]) },
+    { humanBone: "neck", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], -Math.PI / 10)]) },
+    { humanBone: "leftShoulder", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 0, 1], Math.PI / 8)]) },
+    { humanBone: "rightShoulder", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 0, 1], -Math.PI / 8)]) },
+    { humanBone: "leftLowerArm", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...leftElbowFlexion]) },
+    { humanBone: "rightLowerArm", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...rightElbowFlexion]) },
+    { humanBone: "leftHand", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], -Math.PI / 9)]) },
+    { humanBone: "rightHand", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 9)]) },
+    { humanBone: "leftLowerLeg", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...anatomicalKneeFlexion]) },
+    { humanBone: "rightLowerLeg", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...anatomicalKneeFlexion]) },
+    { humanBone: "leftFoot", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([1, 0, 0], -Math.PI / 10)]) },
+    { humanBone: "rightFoot", property: "quaternion", sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]), times: toFloat32Array([0, 1]), values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([1, 0, 0], -Math.PI / 10)]) }
+  ]
+};
+const fullAnatomicalPose = sampleClipToPose(fullAnatomicalSkeleton, fullAnatomicalClip, 1);
+assert.ok(modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "head")[2]! > 0.08, "spine rotation should propagate through neck/head in model space");
+assert.ok(modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "leftUpperArm")[1]! < modelPoint(fullAnatomicalSkeleton, fullAnatomicalSkeleton.restPose, "leftUpperArm")[1]!, "left shoulder should lower the upper arm rather than swap sides");
+assert.ok(modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "rightUpperArm")[1]! < modelPoint(fullAnatomicalSkeleton, fullAnatomicalSkeleton.restPose, "rightUpperArm")[1]!, "right shoulder should lower the upper arm rather than swap sides");
+assert.ok(
+  signedJointOffset(
+    modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "leftUpperArm"),
+    modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "leftLowerArm"),
+    modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "leftHand"),
+    [0, 0, 1]
+  ) > 0.12,
+  "left elbow and wrist should bend into the expected forward model-space plane"
+);
+assert.ok(modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "leftHand")[0]! < 0, "left wrist/hand should remain on the left side");
+assert.ok(modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "rightHand")[0]! > 0, "right wrist/hand should remain on the right side");
+assert.ok(modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "leftToes")[2]! < modelPoint(fullAnatomicalSkeleton, fullAnatomicalSkeleton.restPose, "leftToes")[2]!, "left ankle/foot should plantarflex toes backward under the known local rotation");
+assert.ok(modelPoint(fullAnatomicalSkeleton, fullAnatomicalPose, "rightToes")[2]! < modelPoint(fullAnatomicalSkeleton, fullAnatomicalSkeleton.restPose, "rightToes")[2]!, "right ankle/foot should plantarflex toes backward under the known local rotation");
+const fullAnatomicalDiagnostics = diagnoseRetargetingRestAxes(fullAnatomicalSkeleton, fullAnatomicalClip);
+assert.equal(fullAnatomicalDiagnostics.find((entry) => entry.humanBone === "leftLowerLeg")?.hingePlane, "sagittal", "diagnostic should classify left knee flexion as sagittal");
+assert.equal(fullAnatomicalDiagnostics.find((entry) => entry.humanBone === "rightLowerLeg")?.hingePlane, "sagittal", "diagnostic should classify right knee flexion as sagittal");
+assert.equal(fullAnatomicalDiagnostics.find((entry) => entry.humanBone === "leftLowerArm")?.hingePlane, "sagittal", "diagnostic should classify left elbow flexion as sagittal");
+assert.equal(fullAnatomicalDiagnostics.find((entry) => entry.humanBone === "rightLowerArm")?.hingePlane, "sagittal", "diagnostic should classify right elbow flexion as sagittal");
+const unsupportedDiagnostics = diagnoseRetargetingRestAxes(fullAnatomicalSkeleton);
+assert.match(
+  unsupportedDiagnostics.find((entry) => entry.humanBone === "leftLowerLeg")?.issue ?? "",
+  /missing source rest quaternion/,
+  "diagnostic should prove when actual source rest data is missing instead of pretending hinge retargeting is supported"
+);
 
 const malformedFallbackClip: AnimationClip = {
   id: "malformed-fallbacks",
