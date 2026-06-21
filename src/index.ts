@@ -6,6 +6,7 @@ export * from "./clip.js";
 export * from "./tracks.js";
 export * from "./motion.js";
 export * from "./skinning.js";
+export * from "./baked.js";
 export * from "./binary.js";
 export * from "./runtime.js";
 export * from "./masks.js";

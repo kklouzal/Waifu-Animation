@@ -11,9 +11,11 @@ import {
   VectorKeyframeTrack,
   type AnimationAction,
   type AnimationMixer,
+  type InstancedMesh,
   type KeyframeTrack,
   type Object3D
 } from "three";
+import { type MatrixLike, type RigidInstanceMatrixOptions, updateRigidInstanceMatrixBuffer } from "./baked.js";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
 import { type Quat, type Vec3, addVec3, clamp, clamp01, crossVec3, dampAlpha, dampValue, euclideanModulo, finiteNonNegative, isFiniteNumber, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
@@ -328,6 +330,15 @@ export type ThreeSkinningDebugGeometryOptions = ThreeSkinningDebugSegmentsOption
   markNeedsUpdate?: boolean;
 };
 
+export type ThreeRigidInstanceMatrixTarget = InstancedMesh | BufferAttribute | Float32Array | number[];
+
+export type ThreeRigidInstanceMatricesOptions = RigidInstanceMatrixOptions & {
+  offset?: number;
+  stride?: number;
+  markNeedsUpdate?: boolean;
+  updateMeshCount?: boolean;
+};
+
 const tmpCorrection = new Quaternion();
 const tmpCurrentWorld = new Quaternion();
 const tmpTargetWorld = new Quaternion();
@@ -344,6 +355,32 @@ const DEFAULT_THREE_SKINNING_ATTRIBUTE_NAMES = {
   normal: "normal",
   tangent: "tangent"
 } as const;
+
+export function updateThreeRigidInstanceMatrices(
+  target: ThreeRigidInstanceMatrixTarget,
+  modelMatrices: readonly MatrixLike[],
+  options: ThreeRigidInstanceMatricesOptions = {}
+): number {
+  const requestedCount = resolveThreeRigidInstanceCount(modelMatrices, options);
+  if (isThreeInstancedMeshTarget(target)) {
+    const count = Math.min(requestedCount, target.instanceMatrix.count);
+    updateRigidInstanceMatrixBuffer(modelMatrices, target.instanceMatrix.array as Float32Array | number[], { ...options, count });
+    if (options.updateMeshCount ?? true) target.count = count;
+    markThreeAttributeUpdated(target.instanceMatrix, options.markNeedsUpdate);
+    return count;
+  }
+
+  if (target instanceof BufferAttribute) {
+    const count = Math.min(requestedCount, resolveThreeRigidInstanceBufferCapacity(target.array, options, target.count));
+    updateRigidInstanceMatrixBuffer(modelMatrices, target.array as Float32Array | number[], { ...options, count });
+    markThreeAttributeUpdated(target, options.markNeedsUpdate);
+    return count;
+  }
+
+  const count = Math.min(requestedCount, resolveThreeRigidInstanceBufferCapacity(target, options));
+  updateRigidInstanceMatrixBuffer(modelMatrices, target, { ...options, count });
+  return count;
+}
 
 export function skinThreeBufferGeometry(geometry: BufferGeometry, options: ThreeSkinningBufferGeometryOptions = {}): ThreeSkinningBufferGeometryResult {
   const sourceGeometry = options.sourceGeometry ?? geometry;
@@ -576,6 +613,27 @@ function copyThreeAttributeRemainder(source: BufferAttribute, target: BufferAttr
 
 function markThreeAttributeUpdated(attribute: BufferAttribute, markNeedsUpdate: boolean | undefined): void {
   if (markNeedsUpdate ?? true) attribute.needsUpdate = true;
+}
+
+function isThreeInstancedMeshTarget(target: ThreeRigidInstanceMatrixTarget): target is InstancedMesh {
+  return typeof target === "object" && target !== null && "instanceMatrix" in target && (target as { instanceMatrix?: unknown }).instanceMatrix instanceof BufferAttribute;
+}
+
+function resolveThreeRigidInstanceCount(modelMatrices: readonly MatrixLike[], options: Pick<ThreeRigidInstanceMatricesOptions, "count" | "jointIndices">): number {
+  const fallback = options.jointIndices ? options.jointIndices.length : modelMatrices.length;
+  if (options.count === undefined) return Math.max(0, Math.floor(fallback));
+  return Number.isInteger(options.count) && options.count >= 0 ? options.count : 0;
+}
+
+function resolveThreeRigidInstanceBufferCapacity(
+  buffer: ArrayLike<number>,
+  options: Pick<ThreeRigidInstanceMatricesOptions, "offset" | "stride">,
+  attributeCount?: number
+): number {
+  const offset = sanitizeNonNegativeInteger(options.offset, 0);
+  const stride = sanitizePositiveInteger(options.stride, 16);
+  const componentCapacity = buffer.length >= offset + 16 ? Math.floor((buffer.length - offset - 16) / stride) + 1 : 0;
+  return attributeCount === undefined ? componentCapacity : Math.min(componentCapacity, Math.max(0, Math.floor(attributeCount)));
 }
 
 function resolveThreeDebugSource(source: SkinningNumericArray | BufferAttribute | undefined, offset: number | undefined, stride: number | undefined): ThreeDebugSource {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AnimationMixer, BufferGeometry, Float32BufferAttribute, LoopOnce, Object3D, Quaternion, Vector3 } from "three";
+import { AnimationMixer, BoxGeometry, BufferGeometry, Float32BufferAttribute, InstancedMesh, LoopOnce, MeshBasicMaterial, Object3D, Quaternion, Vector3 } from "three";
 import {
   AnimationRuntime,
   AnimationSamplingContext,
@@ -29,6 +29,7 @@ import {
   applyThreeFootPlantResult,
   applyThreeLocomotionUpperBodyPosture,
   applyThreePresenceTargets,
+  buildRigidInstanceMatrices,
   buildThreeSkinningDebugSegments,
   calculateThreeBaseLoopSeamWindow,
   calculateThreeBaseLoopTransitionWeights,
@@ -36,6 +37,7 @@ import {
   calculateThreeRuntimeStartTime,
   clearThreeFootPlantOffsets,
   computeLocomotionBlendWeights,
+  computeRigidInstanceBounds,
   blendPoses,
   breathingWeight,
   clamp01,
@@ -63,6 +65,7 @@ import {
   readActiveThreeRuntimeClipSnapshots,
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
+  resolveBakedCameraJointIndex,
   skinThreeBufferGeometry,
   additiveDeltaPose,
   createRawAnimation,
@@ -94,6 +97,8 @@ import {
   iterateRawSkeletonDepthFirst,
   localToModelPose,
   updateLocalToModelPoseRange,
+  updateRigidInstanceMatrixBuffer,
+  updateThreeRigidInstanceMatrices,
   multiplyMat4,
   normalizeQuat,
   normalizeTransform,
@@ -120,6 +125,7 @@ import {
   createFixedRateSamplingTimes,
   extractRootMotion,
   extractRawAnimationTimePoints,
+  getBakedCameraJointOverride,
   getRawUserTrackStats,
   getPackedRuntimeAnimationStats,
   MotionAccumulator,
@@ -4185,6 +4191,78 @@ assert.ok(
 const models = localToModelPose(skeleton, sampled);
 assert.equal(models.length, skeleton.joints.length);
 assert.equal(models[0]![13], 1);
+
+const bakedSkeleton = createSkeleton([
+  { name: "box_a", parentIndex: NO_PARENT, rest: { translation: [1, 0, 0], scale: [2, 2, 2] } },
+  { name: "render_Camera", parentIndex: NO_PARENT, rest: { translation: [0, 10, 20], scale: [0.1, 0.1, 0.1] } },
+  { name: "box_b", parentIndex: NO_PARENT, rest: { translation: [-2, 3, 0], scale: [1, 4, 1] } }
+]);
+const bakedModels = localToModelPose(bakedSkeleton, bakedSkeleton.restPose);
+assert.equal(resolveBakedCameraJointIndex(bakedSkeleton), 1, "baked camera lookup should find a camera joint by default name text");
+assert.equal(
+  resolveBakedCameraJointIndex(bakedSkeleton, { predicate: (joint) => joint.name === "render_Camera" }),
+  1,
+  "baked camera lookup should support caller predicates"
+);
+const bakedCameraOverride = getBakedCameraJointOverride(bakedSkeleton, bakedModels);
+assert.equal(bakedCameraOverride?.jointName, "render_Camera", "baked camera override should report resolved joint metadata");
+assertMat4NearlyEqual(bakedCameraOverride!.matrix, bakedModels[1]!, 1e-6, "baked camera override should clone the joint model matrix");
+assert.equal(
+  getBakedCameraJointOverride(bakedSkeleton, [bakedModels[0]!, new Float32Array([Number.NaN]), bakedModels[2]!])?.matrix,
+  undefined,
+  "baked camera override should not return a non-finite candidate without an explicit fallback"
+);
+
+const bakedRigidMatrices = buildRigidInstanceMatrices(bakedModels, { jointIndices: [0, 2] });
+assert.equal(bakedRigidMatrices.length, 2, "baked rigid helpers should build one matrix per selected joint");
+assertMat4NearlyEqual(bakedRigidMatrices[0]!, bakedModels[0]!, 1e-6, "baked rigid matrices should preserve animated scale columns");
+assert.equal(bakedRigidMatrices[0]![0], 2, "baked rigid matrices should keep x scale from the joint model matrix");
+assert.equal(bakedRigidMatrices[0]![5], 2, "baked rigid matrices should keep y scale from the joint model matrix");
+assert.equal(bakedRigidMatrices[1]![5], 4, "baked rigid matrices should keep per-joint non-uniform scale");
+const rigidFallback = composeMat4({ translation: [7, 8, 9], rotation: [0, 0, 0, 1], scale: [1, 1, 1] });
+const repairedRigidMatrices = buildRigidInstanceMatrices([new Float32Array([Number.NaN])], { fallbackMatrix: rigidFallback });
+assertMat4NearlyEqual(repairedRigidMatrices[0]!, rigidFallback, 1e-6, "baked rigid helpers should repair missing/non-finite model matrices with a finite fallback");
+const rigidMatrixBuffer = new Float32Array(32);
+updateRigidInstanceMatrixBuffer(bakedModels, rigidMatrixBuffer, { jointIndices: [0, 2] });
+assert.ok(
+  vectorNearlyEqual(Array.from(rigidMatrixBuffer.slice(0, 16)), Array.from(bakedModels[0]!), 1e-6),
+  "baked rigid buffer helper should write the first selected matrix"
+);
+assert.ok(
+  vectorNearlyEqual(Array.from(rigidMatrixBuffer.slice(16, 32)), Array.from(bakedModels[2]!), 1e-6),
+  "baked rigid buffer helper should write the second selected matrix"
+);
+const rigidBounds = computeRigidInstanceBounds(bakedModels, { jointIndices: [0, 2] });
+assert.equal(rigidBounds.empty, false, "baked rigid bounds should report non-empty selected instances");
+assert.equal(rigidBounds.instanceCount, 2, "baked rigid bounds should report selected instance count");
+assert.ok(vectorNearlyEqual(rigidBounds.min, [-2.5, -1, -1], 1e-6), "baked rigid bounds should include translated and scaled unit cube minimums");
+assert.ok(vectorNearlyEqual(rigidBounds.max, [2, 5, 1], 1e-6), "baked rigid bounds should include translated and scaled unit cube maximums");
+
+const threeRigidMesh = new InstancedMesh(new BoxGeometry(1, 1, 1), new MeshBasicMaterial(), 2);
+const threeRigidMeshVersion = threeRigidMesh.instanceMatrix.version;
+assert.equal(
+  updateThreeRigidInstanceMatrices(threeRigidMesh, bakedModels, { jointIndices: [0, 2] }),
+  2,
+  "three baked rigid helper should update selected InstancedMesh entries"
+);
+assert.equal(threeRigidMesh.count, 2, "three baked rigid helper should keep the active InstancedMesh count aligned");
+assert.equal(threeRigidMesh.instanceMatrix.version, threeRigidMeshVersion + 1, "three baked rigid helper should mark InstancedMesh instance matrices for upload");
+assert.ok(
+  vectorNearlyEqual(Array.from(threeRigidMesh.instanceMatrix.array.slice(0, 16)), Array.from(bakedModels[0]!), 1e-6),
+  "three baked rigid helper should write the first InstancedMesh matrix"
+);
+const threeRigidAttribute = new Float32BufferAttribute(new Float32Array(32), 16);
+const threeRigidAttributeVersion = threeRigidAttribute.version;
+assert.equal(
+  updateThreeRigidInstanceMatrices(threeRigidAttribute, bakedModels, { jointIndices: [0, 2] }),
+  2,
+  "three baked rigid helper should update standalone instanced matrix buffers"
+);
+assert.equal(threeRigidAttribute.version, threeRigidAttributeVersion + 1, "three baked rigid helper should mark matrix buffer attributes for upload");
+assert.ok(
+  vectorNearlyEqual(Array.from(threeRigidAttribute.array.slice(16, 32)), Array.from(bakedModels[2]!), 1e-6),
+  "three baked rigid helper should write matrix buffers in instance order"
+);
 
 const skinningIdentityMatrix = composeMat4(identityTransform());
 const identitySkin = skinVertices({
