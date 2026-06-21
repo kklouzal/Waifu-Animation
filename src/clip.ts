@@ -1,4 +1,5 @@
-import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, ONE_VEC3, addVec3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, dotQuat, ensureShortestQuat, euclideanModulo, lerpVec3, multiplyQuat, normalizeQuat, slerpQuat, transformDelta } from "./math.js";
+import { type Quat, type Transform, type Vec3, EPSILON, ONE_VEC3, addVec3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, dotQuat, ensureShortestQuat, euclideanModulo, lerpVec3, multiplyQuat, normalizeQuat, slerpQuat, transformDelta } from "./math.js";
+import { mat4Translation } from "./numeric-helpers.js";
 import { type Pose, readPoseTransformOrRest } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import { type HumanoidBoneName, type Skeleton, createRestPose, isHumanoidBoneName, localToModelPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
@@ -2333,15 +2334,6 @@ function createModelSpaceComparablePose(skeleton: Skeleton, localPose: readonly 
 
 function multiplyVec3Components(a: Vec3, b: Vec3): Vec3 {
   return [a[0] * b[0], a[1] * b[1], a[2] * b[2]];
-}
-
-function mat4Translation(matrix: Mat4): Vec3 {
-  return [finiteMat4Value(matrix, 12, 0), finiteMat4Value(matrix, 13, 0), finiteMat4Value(matrix, 14, 0)];
-}
-
-function finiteMat4Value(matrix: Mat4, index: number, fallback: number): number {
-  const value = matrix[index];
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function vec3Error(a: readonly [number, number, number], b: readonly [number, number, number]): number {

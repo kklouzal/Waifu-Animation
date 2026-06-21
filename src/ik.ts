@@ -24,6 +24,7 @@ import {
   scaleVec3,
   subVec3
 } from "./math.js";
+import { finiteMat4Value, isFiniteMat4, mat4Translation as matrixTranslation } from "./numeric-helpers.js";
 import { type HumanoidBoneName, type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex, updateLocalToModelPoseRange } from "./skeleton.js";
 
 const MIN_IK_REACH = 1e-5;
@@ -778,14 +779,6 @@ function localCorrectionToModel(joint: AimJointSpace, localCorrection: Quat): Qu
   return multiplyQuat(multiplyQuat(joint.rotation, localCorrection), invertQuat(joint.rotation));
 }
 
-function matrixTranslation(matrix: Mat4): Vec3 {
-  return [finiteMat4Value(matrix, 12, 0), finiteMat4Value(matrix, 13, 0), finiteMat4Value(matrix, 14, 0)];
-}
-
-function isFiniteMat4(matrix: Mat4): boolean {
-  return matrix.length >= 16 && Array.from(matrix).slice(0, 16).every(Number.isFinite);
-}
-
 function rotationFromMat4(matrix: Mat4): Quat {
   const xAxis = normalizeVec3([finiteMat4Value(matrix, 0, 1), finiteMat4Value(matrix, 1, 0), finiteMat4Value(matrix, 2, 0)], [1, 0, 0]);
   const yInput = normalizeVec3([finiteMat4Value(matrix, 4, 0), finiteMat4Value(matrix, 5, 1), finiteMat4Value(matrix, 6, 0)], [0, 1, 0]);
@@ -842,11 +835,6 @@ function inverseTransformVector(matrix: Mat4, vector: Vec3): Vec3 {
     (c10 * vector[0] + c11 * vector[1] + c12 * vector[2]) * invDet,
     (c20 * vector[0] + c21 * vector[1] + c22 * vector[2]) * invDet
   ];
-}
-
-function finiteMat4Value(matrix: Mat4, index: number, fallback: number): number {
-  const value = matrix[index];
-  return Number.isFinite(value) ? value! : fallback;
 }
 
 export type GroundContact = {

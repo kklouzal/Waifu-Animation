@@ -1,4 +1,11 @@
 import { type Mat4, type Vec3, transformPoint } from "./math.js";
+import {
+  cloneFiniteMat4,
+  cloneFiniteVec3,
+  isFiniteMat4,
+  sanitizeNonNegativeIntegerWithFlooredFallbackOrZero,
+  sanitizePositiveIntegerWithFlooredFallback
+} from "./numeric-helpers.js";
 import { NO_PARENT, type JointReference, type Skeleton, type SkeletonJoint, resolveJointIndex } from "./skeleton.js";
 
 export type BakedCameraJointPredicate = (joint: SkeletonJoint, index: number, skeleton: Skeleton) => boolean;
@@ -54,7 +61,6 @@ export type RigidInstanceBounds = {
   instanceCount: number;
 };
 
-const IDENTITY_MAT4 = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) as Mat4;
 const UNIT_CUBE_MIN: Vec3 = [-0.5, -0.5, -0.5];
 const UNIT_CUBE_MAX: Vec3 = [0.5, 0.5, 0.5];
 
@@ -87,11 +93,11 @@ export function getBakedCameraJointOverride(
   const jointIndex = resolveBakedCameraJointIndex(skeleton, options);
   if (jointIndex < 0 || jointIndex >= skeleton.joints.length) return undefined;
   const source = modelMatrices[jointIndex];
-  if (!isFiniteMat4(source) && options.fallbackMatrix === undefined) return undefined;
+  if (!isFiniteMat4(source, { requireIntegerLength: true }) && options.fallbackMatrix === undefined) return undefined;
   return {
     jointIndex,
     jointName: skeleton.joints[jointIndex]!.name,
-    matrix: cloneFiniteMat4(source, options.fallbackMatrix)
+    matrix: cloneFiniteMat4(source, { fallback: options.fallbackMatrix, requireIntegerLength: true })
   };
 }
 
@@ -120,8 +126,8 @@ export function updateRigidInstanceMatrixBuffer(
   out: RigidInstanceMatrixBuffer,
   options: RigidInstanceMatrixBufferOptions = {}
 ): RigidInstanceMatrixBuffer {
-  const offset = sanitizeNonNegativeInteger(options.offset, 0);
-  const stride = sanitizePositiveInteger(options.stride, 16);
+  const offset = sanitizeNonNegativeIntegerWithFlooredFallbackOrZero(options.offset, 0);
+  const stride = sanitizePositiveIntegerWithFlooredFallback(options.stride, 16);
   const count = resolveRigidInstanceCount(modelMatrices, options);
   const requiredLength = count > 0 ? offset + (count - 1) * stride + 16 : 0;
   if (out instanceof Float32Array && out.length < requiredLength) {
@@ -188,27 +194,13 @@ function resolveRigidInstanceMatrix(
 ): Mat4 {
   const sourceIndex = options.jointIndices?.[outputIndex] ?? outputIndex;
   const source = Number.isInteger(sourceIndex) && sourceIndex >= 0 ? modelMatrices[sourceIndex] : undefined;
-  return cloneFiniteMat4(source, options.fallbackMatrix);
+  return cloneFiniteMat4(source, { fallback: options.fallbackMatrix, requireIntegerLength: true });
 }
 
 function resolveRigidInstanceCount(modelMatrices: readonly MatrixLike[], options: Pick<RigidInstanceMatrixOptions, "count" | "jointIndices">): number {
   const fallback = options.jointIndices ? options.jointIndices.length : modelMatrices.length;
-  const count = sanitizeNonNegativeInteger(options.count, fallback);
+  const count = sanitizeNonNegativeIntegerWithFlooredFallbackOrZero(options.count, fallback);
   return Math.min(count, fallback);
-}
-
-function cloneFiniteMat4(matrix: MatrixLike | undefined, fallback: MatrixLike | undefined): Mat4 {
-  if (isFiniteMat4(matrix)) return new Float32Array(Array.from({ length: 16 }, (_, index) => matrix[index]!)) as Mat4;
-  if (isFiniteMat4(fallback)) return new Float32Array(Array.from({ length: 16 }, (_, index) => fallback[index]!)) as Mat4;
-  return new Float32Array(IDENTITY_MAT4) as Mat4;
-}
-
-function isFiniteMat4(matrix: MatrixLike | undefined): matrix is MatrixLike {
-  if (!matrix || !Number.isInteger(matrix.length) || matrix.length < 16) return false;
-  for (let index = 0; index < 16; index += 1) {
-    if (!Number.isFinite(matrix[index])) return false;
-  }
-  return true;
 }
 
 function resolveLocalBounds(min: Vec3 | undefined, max: Vec3 | undefined): { min: Vec3; max: Vec3 } {
@@ -226,25 +218,4 @@ function resolveLocalBounds(min: Vec3 | undefined, max: Vec3 | undefined): { min
       Math.max(resolvedMin[2], resolvedMax[2])
     ]
   };
-}
-
-function cloneFiniteVec3(value: Vec3 | undefined, fallback: Vec3): Vec3 {
-  const x = value?.[0];
-  const y = value?.[1];
-  const z = value?.[2];
-  return [
-    Number.isFinite(x) ? x! : fallback[0],
-    Number.isFinite(y) ? y! : fallback[1],
-    Number.isFinite(z) ? z! : fallback[2]
-  ];
-}
-
-function sanitizeNonNegativeInteger(value: number | undefined, fallback: number): number {
-  if (value === undefined) return Math.max(0, Math.floor(fallback));
-  return Number.isInteger(value) && value >= 0 ? value : 0;
-}
-
-function sanitizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (value === undefined) return Math.max(1, Math.floor(fallback));
-  return Number.isInteger(value) && value > 0 ? value : Math.max(1, Math.floor(fallback));
 }

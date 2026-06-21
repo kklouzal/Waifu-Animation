@@ -1,3 +1,5 @@
+import { cloneFiniteVec3 } from "./numeric-helpers.js";
+
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 export type Mat4 = Float32Array;
@@ -96,13 +98,6 @@ export function vec3(x = 0, y = 0, z = 0): Vec3 {
 
 export function cloneVec3(value: ArrayLike<number> | undefined, fallback: Vec3 = ZERO_VEC3): Vec3 {
   return [value?.[0] ?? fallback[0], value?.[1] ?? fallback[1], value?.[2] ?? fallback[2]];
-}
-
-function cloneFiniteVec3(value: ArrayLike<number> | undefined, fallback: Vec3): Vec3 {
-  const x = value?.[0] ?? fallback[0];
-  const y = value?.[1] ?? fallback[1];
-  const z = value?.[2] ?? fallback[2];
-  return [isFiniteNumber(x) ? x : fallback[0], isFiniteNumber(y) ? y : fallback[1], isFiniteNumber(z) ? z : fallback[2]];
 }
 
 export function addVec3(a: Vec3, b: Vec3): Vec3 {

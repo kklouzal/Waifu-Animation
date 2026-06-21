@@ -1,4 +1,5 @@
 import { type Mat4, multiplyMat4 } from "./math.js";
+import { cloneFiniteMat4, isFiniteMat4, sanitizeNonNegativeInteger, sanitizePositiveInteger } from "./numeric-helpers.js";
 
 export type SkinningNumericArray = ArrayLike<number>;
 export type SkinningMutableArray = Float32Array | number[];
@@ -116,12 +117,12 @@ export function validateSkinningJob(job: SkinningJob): SkinningValidationIssue[]
   if (job.jointIndices === undefined && vertexCount > 0) {
     issues.push({ field: "jointIndices", message: "skinning joint indices are missing; joint 0 fallback will be used" });
   } else {
-    validateIndexedBuffer(job.jointIndices, sanitizeInteger(job.jointIndexOffset, 0), sanitizePositiveInteger(job.jointIndexStride, influences), "jointIndices", issues);
+    validateIndexedBuffer(job.jointIndices, sanitizeNonNegativeInteger(job.jointIndexOffset, 0), sanitizePositiveInteger(job.jointIndexStride, influences), "jointIndices", issues);
     validateInfluenceBounds(
       job.jointIndices,
       vertexCount,
       influences,
-      sanitizeInteger(job.jointIndexOffset, 0),
+      sanitizeNonNegativeInteger(job.jointIndexOffset, 0),
       sanitizePositiveInteger(job.jointIndexStride, influences),
       "jointIndices",
       issues
@@ -132,12 +133,12 @@ export function validateSkinningJob(job: SkinningJob): SkinningValidationIssue[]
     if (job.jointWeights === undefined && vertexCount > 0) {
       issues.push({ field: "jointWeights", message: "skinning joint weights are missing; zero/restored fallback weights will be used" });
     }
-    validateIndexedBuffer(job.jointWeights, sanitizeInteger(job.jointWeightOffset, 0), sanitizeNonNegativeInteger(job.jointWeightStride, defaultWeightStride), "jointWeights", issues);
+    validateIndexedBuffer(job.jointWeights, sanitizeNonNegativeInteger(job.jointWeightOffset, 0), sanitizeNonNegativeInteger(job.jointWeightStride, defaultWeightStride), "jointWeights", issues);
     validateInfluenceBounds(
       job.jointWeights,
       vertexCount,
       defaultWeightStride,
-      sanitizeInteger(job.jointWeightOffset, 0),
+      sanitizeNonNegativeInteger(job.jointWeightOffset, 0),
       sanitizeNonNegativeInteger(job.jointWeightStride, defaultWeightStride),
       "jointWeights",
       issues
@@ -196,10 +197,10 @@ export function skinVertices(job: SkinningJob): SkinningResult {
   const positionOut = resolveAttributeOutput(job.outPositions, vertexCount);
   const normalOut = normalIn ? resolveAttributeOutput(job.outNormals, vertexCount) : null;
   const tangentOut = tangentIn ? resolveAttributeOutput(job.outTangents, vertexCount) : null;
-  const jointIndexOffset = sanitizeInteger(job.jointIndexOffset, 0);
+  const jointIndexOffset = sanitizeNonNegativeInteger(job.jointIndexOffset, 0);
   const jointIndexStride = sanitizePositiveInteger(job.jointIndexStride, influences);
   const defaultWeightStride = weightMode === "explicit" ? influences : Math.max(0, influences - 1);
-  const jointWeightOffset = sanitizeInteger(job.jointWeightOffset, 0);
+  const jointWeightOffset = sanitizeNonNegativeInteger(job.jointWeightOffset, 0);
   const jointWeightStride = sanitizeNonNegativeInteger(job.jointWeightStride, defaultWeightStride);
 
   for (let vertex = 0; vertex < vertexCount; vertex += 1) {
@@ -385,13 +386,13 @@ function inferVec3Count(data: SkinningNumericArray, offset: number, stride: numb
 function resolveAttributeInput(input: SkinningAttributeInput): Required<SkinningAttributeInput> {
   return {
     data: input.data,
-    offset: sanitizeInteger(input.offset, 0),
+    offset: sanitizeNonNegativeInteger(input.offset, 0),
     stride: Math.max(3, sanitizePositiveInteger(input.stride, 3))
   };
 }
 
 function resolveAttributeOutput(output: SkinningAttributeOutput | undefined, vertexCount: number): Required<SkinningAttributeOutput> {
-  const offset = sanitizeInteger(output?.offset, 0);
+  const offset = sanitizeNonNegativeInteger(output?.offset, 0);
   const stride = Math.max(3, sanitizePositiveInteger(output?.stride, 3));
   const requiredLength = vertexCount <= 0 ? offset : offset + (vertexCount - 1) * stride + 3;
   const reusable = output?.data;
@@ -409,36 +410,11 @@ function writeVec3(data: SkinningMutableArray, offset: number, x: number, y: num
   data[offset + 2] = finiteOr(z, 0);
 }
 
-function cloneFiniteMat4(matrix: SkinningNumericArray | undefined): Mat4 {
-  if (!isFiniteMat4(matrix)) return new Float32Array(IDENTITY_MAT4) as Mat4;
-  return new Float32Array(Array.from({ length: 16 }, (_, index) => matrix[index]!)) as Mat4;
-}
-
-function isFiniteMat4(matrix: SkinningNumericArray | undefined): matrix is SkinningNumericArray {
-  if (!matrix || matrix.length < 16) return false;
-  for (let index = 0; index < 16; index += 1) {
-    if (!Number.isFinite(matrix[index])) return false;
-  }
-  return true;
-}
-
 function sanitizePaletteIndex(value: number | undefined, paletteLength: number): number {
   if (paletteLength <= 0 || !Number.isInteger(value)) return 0;
   const index = value as number;
   if (index < 0 || index >= paletteLength) return 0;
   return index;
-}
-
-function sanitizeInteger(value: number | undefined, fallback: number): number {
-  return Number.isInteger(value) && value! >= 0 ? value! : fallback;
-}
-
-function sanitizePositiveInteger(value: number | undefined, fallback: number): number {
-  return Number.isInteger(value) && value! > 0 ? value! : fallback;
-}
-
-function sanitizeNonNegativeInteger(value: number | undefined, fallback: number): number {
-  return Number.isInteger(value) && value! >= 0 ? value! : fallback;
 }
 
 function finiteOr(value: number | undefined, fallback: number): number {

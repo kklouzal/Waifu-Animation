@@ -29,6 +29,7 @@ import {
 } from "./masks.js";
 import { retargetQuaternionTrackValues } from "./retargeting.js";
 import { type SkinningJob, type SkinningNumericArray, type SkinningResult, skinVertices } from "./skinning.js";
+import { sanitizeNonNegativeInteger, sanitizePositiveInteger } from "./numeric-helpers.js";
 
 export type ThreeBoneResolver = (humanBone: string) => Object3D | null | undefined;
 
@@ -695,14 +696,6 @@ function writeThreeDebugSegment(
   out[cursor + 4] = origin[1] + direction[1] * scale;
   out[cursor + 5] = origin[2] + direction[2] * scale;
   return cursor + 6;
-}
-
-function sanitizeNonNegativeInteger(value: number | undefined, fallback: number): number {
-  return Number.isInteger(value) && value! >= 0 ? value! : fallback;
-}
-
-function sanitizePositiveInteger(value: number | undefined, fallback: number): number {
-  return Number.isInteger(value) && value! > 0 ? value! : fallback;
 }
 
 function finitePositive(value: number | undefined, fallback: number): number {
