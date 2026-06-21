@@ -3359,6 +3359,40 @@ assert.ok(
   vectorNearlyEqual(sampleMotionTracks(unevenClipLoopDistribution.motion, 0.1).transform.translation, [0, 0, 0], 1e-6),
   "clip root-motion loop distribution should spread endpoint drift by key time instead of key ordinal"
 );
+const loopedRotationBakeClip: AnimationClip = {
+  id: "looped-rotation-bake-order",
+  duration: 1,
+  loop: true,
+  tracks: [
+    {
+      joint: "root",
+      property: "rotation",
+      times: toFloat32Array([0, 0.5, 1]),
+      values: sanitizeQuaternionTrackValues([
+        0,
+        0,
+        0,
+        1,
+        ...quatFromAxisAngle([0, 1, 0], Math.PI / 2),
+        ...quatFromAxisAngle([0, 1, 0], Math.PI)
+      ])
+    }
+  ]
+};
+const loopedRotationBake = extractRootMotion(motionSkeleton, loopedRotationBakeClip, {
+  reference: "absolute",
+  translation: false,
+  rotation: { mode: "yaw", bake: true, loop: true }
+});
+assert.ok(loopedRotationBake.bakedClip, "looped clip root-motion rotation baking should still return a baked clip");
+assert.ok(
+  quaternionNearlyEqual(sampleClipToPose(motionSkeleton, loopedRotationBake.bakedClip!, 0.5, { loop: false })[0]!.rotation, [0, 0, 0, 1], 1e-5),
+  "clip root-motion baking should strip the original carrier rotation before loopifying the exported motion track"
+);
+assert.ok(
+  quaternionNearlyEqual(sampleMotionTracks(loopedRotationBake.motion, 0.5).transform.rotation, [0, 0, 0, 1], 1e-5),
+  "clip root-motion loop distribution should still loopify the returned motion rotation track"
+);
 const unevenRawLoopDistribution = extractRawRootMotion(
   motionSkeleton,
   createRawAnimation({

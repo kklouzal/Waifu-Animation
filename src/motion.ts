@@ -205,7 +205,6 @@ export function extractRootMotion(
         interpolation: "linear"
       }))
     } satisfies RawFloat3Track);
-    if (translationSettings.loop) loopMotionTrack(motion.position);
   }
 
   if (rotationSettings) {
@@ -218,15 +217,11 @@ export function extractRootMotion(
         interpolation: "linear"
       }))
     } satisfies RawQuaternionTrack);
-    if (rotationSettings.loop) loopMotionTrack(motion.rotation);
   }
 
   const shouldBake = Boolean(translationSettings?.bake || rotationSettings?.bake);
-  if (!shouldBake) return { motion };
-
-  return {
-    motion,
-    bakedClip: bakeExtractedRootMotionClip(
+  const bakedClip = shouldBake
+    ? bakeExtractedRootMotionClip(
       skeleton,
       clip,
       jointIndex,
@@ -237,7 +232,12 @@ export function extractRootMotion(
       motion.rotation,
       options.bakedClipId
     )
-  };
+    : undefined;
+
+  if (translationSettings?.loop && motion.position) loopMotionTrack(motion.position);
+  if (rotationSettings?.loop && motion.rotation) loopMotionTrack(motion.rotation);
+
+  return bakedClip ? { motion, bakedClip } : { motion };
 }
 
 export function extractRawRootMotion(
