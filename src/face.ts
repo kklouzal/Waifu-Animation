@@ -22,10 +22,11 @@ export function zeroVisemes(): VisemeWeights {
 
 export function limitVisemeStack(values: VisemeWeights, maxTotal: number): VisemeWeights {
   const safeMaxTotal = finiteNonNegative(maxTotal, 0);
-  const total = VISEME_NAMES.reduce((sum, name) => sum + values[name], 0);
-  if (total <= safeMaxTotal || total <= 0) return { ...values };
+  const sanitized = visemeWeights((name) => clamp01(values[name]));
+  const total = VISEME_NAMES.reduce((sum, name) => sum + sanitized[name], 0);
+  if (total <= safeMaxTotal || total <= 0) return sanitized;
   const scale = safeMaxTotal / total;
-  return visemeWeights((name) => values[name] * scale);
+  return visemeWeights((name) => sanitized[name] * scale);
 }
 
 export class VisemeMixer {
@@ -210,9 +211,9 @@ export function composeFacialExpressions(input: FacialExpressionInput & { viseme
   const speechSmile = talking ? 1 : 0.26;
   const smile = clamp01(warmSmile + cueSmile * 0.42 + (emotion === "happy" || emotion === "amused" ? (0.12 + energy * 0.16) * speechSmile : 0));
   const thoughtful = emotion === "thinking" || state === "thinking" ? 0.18 + cueThinking * 0.16 : 0;
+  const visemes = input.visemes ? visemeWeights((name) => clamp01(input.visemes?.[name] ?? 0)) : zeroVisemes();
   return {
-    ...zeroVisemes(),
-    ...(input.visemes ?? {}),
+    ...visemes,
     blink: clamp01(input.blink ?? 0),
     happy: smile,
     surprised: emotion === "surprised" ? 0.35 + energy * 0.35 : 0,

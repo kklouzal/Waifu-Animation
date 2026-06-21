@@ -1,4 +1,4 @@
-import { decodeAnimationBinary } from "./binary.js";
+import { WAIFU_ANIMATION_BINARY_FORMAT, decodeAnimationBinary } from "./binary.js";
 import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, resolveTrackJointIndex, sampleTrack, trackStride, validateClip } from "./clip.js";
 import {
   type AnimationManifest,
@@ -59,7 +59,12 @@ export async function validateAnimationManifestAssets(
   fetchAsset: AnimationAssetFetch,
   options: AnimationAssetValidationOptions = {}
 ): Promise<AnimationAssetValidationReport> {
-  const entries = await Promise.all(manifest.clips.map((entry) => validateAnimationManifestEntry(entry, fetchAsset, options)));
+  const structuralIssues = inspectManifestStructure(manifest);
+  const entries = await Promise.all(
+    manifest.clips.map((entry, index) =>
+      validateAnimationManifestEntryWithStructure(entry, fetchAsset, options, structuralIssues.get(index) ?? [])
+    )
+  );
   const statusCounts = countValidationStatuses(entries);
   return {
     generatedAt: (options.now ?? new Date()).toISOString(),
@@ -76,6 +81,16 @@ export async function validateAnimationManifestEntry(
   fetchAsset: AnimationAssetFetch,
   options: AnimationAssetValidationOptions = {}
 ): Promise<AnimationAssetValidationEntry> {
+  return validateAnimationManifestEntryWithStructure(entry, fetchAsset, options, inspectManifestEntryStructure(entry));
+}
+
+async function validateAnimationManifestEntryWithStructure(
+  entry: AnimationManifestEntry,
+  fetchAsset: AnimationAssetFetch,
+  options: AnimationAssetValidationOptions,
+  structuralIssues: AnimationAssetValidationIssue[]
+): Promise<AnimationAssetValidationEntry> {
+  if (structuralIssues.length > 0) return buildRejectedEntry(entry, structuralIssues);
   try {
     const clip = decodeAnimationBinary(await fetchAsset(entry.url), entry.id);
     return inspectAnimationAsset(entry, clip, options.skeleton);
@@ -87,7 +102,12 @@ export async function validateAnimationManifestEntry(
 export function inspectAnimationAsset(entry: AnimationManifestEntry, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationEntry {
   const clipIssues = validateClip(clip, skeleton).map((issue) => toAssetIssue(entry.id, issue));
   const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(entry.id, issue));
-  const issues = dedupeIssues([...clipIssues, ...manifestInspection, ...inspectSemanticAsset(entry, clip, skeleton)]);
+  const issues = dedupeIssues([
+    ...inspectManifestEntryStructure(entry),
+    ...clipIssues,
+    ...manifestInspection,
+    ...inspectSemanticAsset(entry, clip, skeleton)
+  ]);
   const requestedStatus = entry.validation?.status;
   let status: AssetValidationStatus;
   if (requestedStatus === "quarantined") {
@@ -238,6 +258,45 @@ function dedupeIssues(issues: AnimationAssetValidationIssue[]): AnimationAssetVa
     seen.add(key);
     return true;
   });
+}
+
+function inspectManifestStructure(manifest: AnimationManifest): Map<number, AnimationAssetValidationIssue[]> {
+  const duplicateIds = duplicatedManifestIds(manifest.clips);
+  const issues = new Map<number, AnimationAssetValidationIssue[]>();
+  for (let index = 0; index < manifest.clips.length; index += 1) {
+    const entry = manifest.clips[index]!;
+    const entryIssues = inspectManifestEntryStructure(entry);
+    if (entry.id && duplicateIds.has(entry.id)) {
+      entryIssues.push({ id: entry.id, severity: "error", message: `duplicate clip id ${entry.id}` });
+    }
+    if (entryIssues.length > 0) issues.set(index, entryIssues);
+  }
+  return issues;
+}
+
+function inspectManifestEntryStructure(entry: AnimationManifestEntry): AnimationAssetValidationIssue[] {
+  const id = entry.id || "<unknown>";
+  const issues: AnimationAssetValidationIssue[] = [];
+  if (!entry.id) issues.push({ id, severity: "error", message: "manifest entry is missing id" });
+  if (!entry.url) issues.push({ id, severity: "error", message: `${id} is missing url` });
+  if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) {
+    issues.push({ id, severity: "error", message: `${id} has unsupported format ${String(entry.format)}` });
+  }
+  if (entry.validation?.status === "accepted" && entry.validation.reason) {
+    issues.push({ id, severity: "error", message: `${id} is accepted but still has rejection reason` });
+  }
+  return issues;
+}
+
+function duplicatedManifestIds(entries: readonly AnimationManifestEntry[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.id) continue;
+    if (seen.has(entry.id)) duplicates.add(entry.id);
+    else seen.add(entry.id);
+  }
+  return duplicates;
 }
 
 function countValidationStatuses(entries: AnimationAssetValidationEntry[]): Record<AssetValidationStatus, number> {

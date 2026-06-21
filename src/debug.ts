@@ -1,4 +1,4 @@
-import { type Transform, dotQuat } from "./math.js";
+import { type Quat, type Transform, dotQuat, normalizeQuat } from "./math.js";
 import { type PoseValidationIssue, validatePose } from "./pose.js";
 import { type Skeleton } from "./skeleton.js";
 
@@ -27,8 +27,8 @@ export function poseRotationMetric(a: readonly Transform[], b: readonly Transfor
   let sum = 0;
   let max = 0;
   for (let index = 0; index < length; index += 1) {
-    const aq = a[index]!.rotation;
-    const bq = b[index]!.rotation;
+    const aq = normalizedMetricRotation(a[index]!.rotation);
+    const bq = normalizedMetricRotation(b[index]!.rotation);
     const dot = Math.abs(dotQuat(aq, bq));
     const delta = 2 * Math.acos(Math.min(1, dot));
     sum += delta * delta;
@@ -92,8 +92,12 @@ function finishMetricAccumulator(metric: MetricAccumulator, samples: number, ske
 }
 
 function rotationDelta(a: Transform, b: Transform): number {
-  const dot = Math.abs(dotQuat(a.rotation, b.rotation));
+  const dot = Math.abs(dotQuat(normalizedMetricRotation(a.rotation), normalizedMetricRotation(b.rotation)));
   return 2 * Math.acos(Math.min(1, dot));
+}
+
+function normalizedMetricRotation(rotation: Quat): Quat {
+  return normalizeQuat(rotation);
 }
 
 function vec3Delta(a: readonly [number, number, number], b: readonly [number, number, number]): number {

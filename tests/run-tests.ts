@@ -38,6 +38,7 @@ import {
   blendPoses,
   breathingWeight,
   clamp01,
+  composeFacialExpressions,
   composeMat4,
   computeBoundAttachmentTransform,
   computeBoundAttachmentTransforms,
@@ -1719,6 +1720,66 @@ assert.equal(quarantinedAssetValidationReport.rejected, 0);
 assert.equal(quarantinedAssetValidationReport.quarantined, 1);
 assert.equal(quarantinedAssetValidationReport.entries[0]!.status, "quarantined");
 assert.equal(quarantinedAssetValidationReport.entries[0]!.accepted, false);
+
+const unsupportedFormatAssetEntry = {
+  id: "unsupported-format-asset",
+  label: "Unsupported Format Asset",
+  url: "/unsupported-format-asset.json",
+  format: "json"
+};
+const unsupportedFormatAssetInspection = inspectAnimationAsset(
+  unsupportedFormatAssetEntry,
+  nodClip,
+  skeleton
+);
+assert.equal(unsupportedFormatAssetInspection.status, "rejected");
+assert.ok(
+  unsupportedFormatAssetInspection.issues.some((issue) => issue.message === "unsupported-format-asset has unsupported format json"),
+  "inspectAnimationAsset should reject manifest entries whose declared format cannot be decoded as waifuanim binaries"
+);
+const structurallyRejectedAssetFetches: string[] = [];
+const structuralAssetValidationReport = await validateAnimationManifestAssets(
+  {
+    version: 1,
+    clips: [
+      unsupportedFormatAssetEntry,
+      { id: "duplicate-asset", label: "Duplicate Asset A", url: "/duplicate-a.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+      { id: "duplicate-asset", label: "Duplicate Asset B", url: "/duplicate-b.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+      {
+        id: "accepted-reason-asset",
+        label: "Accepted Reason Asset",
+        url: "/accepted-reason-asset.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        validation: { status: "accepted", reason: "stale rejection reason" }
+      },
+      { id: "valid-asset", label: "Valid Asset", url: "/valid-asset.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }
+    ]
+  },
+  async (url) => {
+    structurallyRejectedAssetFetches.push(url);
+    return encodeAnimationBinary(nodClip);
+  },
+  { skeleton }
+);
+assert.deepEqual(
+  structurallyRejectedAssetFetches,
+  ["/valid-asset.waifuanim.bin"],
+  "asset report validation should not fetch entries already rejected by manifest structure"
+);
+assert.equal(structuralAssetValidationReport.accepted, 1);
+assert.equal(structuralAssetValidationReport.rejected, 4);
+assert.equal(structuralAssetValidationReport.quarantined, 0);
+const duplicateStructuralIssues = structuralAssetValidationReport.entries
+  .slice(1, 3)
+  .every((entry) => entry.issues.some((issue) => issue.message === "duplicate clip id duplicate-asset"));
+assert.ok(
+  duplicateStructuralIssues,
+  "asset report validation should reject all duplicate manifest ids before classifying binaries"
+);
+assert.ok(
+  structuralAssetValidationReport.entries[3]!.issues.some((issue) => issue.message === "accepted-reason-asset is accepted but still has rejection reason"),
+  "asset report validation should not accept entries whose manifest still carries a rejection reason"
+);
 
 const duplicateResolvedChannelClip: AnimationClip = {
   id: "duplicate-resolved-channel",
@@ -6319,6 +6380,15 @@ visemes.setTarget({ aa: 0.4, ou: 0.4 });
 const mixed = visemes.update(1 / 30);
 assert.ok(mixed.aa + mixed.ou <= 0.4001);
 assert.deepEqual(limitVisemeStack({ aa: 0.2, ih: 0.2, ou: 0.2, ee: 0.2, oh: 0.2 }, Number.NaN), zeroVisemes());
+const hostileLimitedVisemes = limitVisemeStack({ aa: Number.NaN, ih: -1, ou: 2, ee: 0.5, oh: Number.POSITIVE_INFINITY }, 1);
+assert.ok(
+  Object.values(hostileLimitedVisemes).every((value) => Number.isFinite(value) && value >= 0 && value <= 1),
+  "limitVisemeStack should sanitize hostile viseme weights before normalization"
+);
+assert.ok(
+  Object.values(hostileLimitedVisemes).reduce((sum, value) => sum + value, 0) <= 1.000001,
+  "limitVisemeStack should keep sanitized hostile viseme totals under the requested maximum"
+);
 const invalidVisemes = new VisemeMixer({ maxTotal: Number.NaN });
 invalidVisemes.setTarget({ aa: 1, ih: 1 });
 assert.ok(Object.values(invalidVisemes.update(Number.NaN)).every(Number.isFinite), "viseme mixer should keep weights finite for non-finite timing and limits");
@@ -6342,6 +6412,21 @@ const partialReleaseMixed = partialReleaseVisemes.update(1 / 30);
 assert.ok(partialReleaseMixed.ih < beforePartialRelease.ih, "partial viseme release maps should fall back for unspecified visemes");
 assert.ok(Math.abs(partialReleaseMixed.aa - beforePartialRelease.aa * (1 - dampAlpha(40, 1 / 30))) < 1e-6, "partial viseme release maps should respect specified speeds");
 assert.ok(Math.abs(partialReleaseMixed.ih - beforePartialRelease.ih * (1 - dampAlpha(20, 1 / 30))) < 1e-6, "partial viseme release maps should use the default release speed");
+const hostileComposedExpressions = composeFacialExpressions({
+  visemes: { aa: Number.NaN, ih: -0.5, ou: 2, ee: 0.4, oh: Number.POSITIVE_INFINITY },
+  blink: Number.NaN,
+  energy: Number.POSITIVE_INFINITY,
+  rapport: Number.NEGATIVE_INFINITY,
+  cueSmile: Number.NaN
+});
+const facialScalarNames = ["aa", "ih", "ou", "ee", "oh", "blink"];
+assert.ok(
+  facialScalarNames.every((name) => {
+    const value = hostileComposedExpressions[name]!;
+    return Number.isFinite(value) && value >= 0 && value <= 1;
+  }),
+  "composeFacialExpressions should clamp direct viseme/blink inputs to finite morph weights"
+);
 
 const blink = new BlinkScheduler("test", 0);
 assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
@@ -6382,6 +6467,13 @@ assert.equal(
   0,
   "pose rotation metrics should treat sign-opposite quaternions as equivalent rotations"
 );
+const nonUnitRotationPose = clonePose(skeleton.restPose);
+nonUnitRotationPose[2]!.rotation = [0, 2, 0, 2];
+const nonUnitRotationMetric = poseRotationMetric(skeleton.restPose, nonUnitRotationPose);
+assert.ok(
+  nonUnitRotationMetric.maxRotationDelta > 1.56 && nonUnitRotationMetric.maxRotationDelta < 1.58,
+  "pose rotation metrics should normalize finite non-unit quaternions before measuring angular error"
+);
 const poseDeltaA = clonePose(skeleton.restPose);
 const poseDeltaB = clonePose(skeleton.restPose);
 poseDeltaB[1]!.translation = [0, 2, 0];
@@ -6398,6 +6490,12 @@ assert.equal(poseDelta.scale.maxIndex, 3);
 assert.equal(poseDelta.scale.maxJoint, "leftUpperArm");
 assert.ok(Math.abs(poseDelta.translation.rms - 1) < 1e-12);
 assert.ok(Math.abs(poseDelta.scale.rms - 1) < 1e-12);
+const nonUnitPoseDelta = poseDeltaMetric(skeleton.restPose, nonUnitRotationPose, skeleton);
+assert.ok(
+  nonUnitPoseDelta.rotation.max > 1.56 && nonUnitPoseDelta.rotation.max < 1.58,
+  "pose delta metrics should not report zero rotation error for finite non-unit quaternions"
+);
+assert.equal(nonUnitPoseDelta.rotation.maxJoint, "head");
 
 const headBone = new Object3D();
 headBone.name = "normalizedHead";
