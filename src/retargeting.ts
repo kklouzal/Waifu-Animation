@@ -155,7 +155,7 @@ export function diagnoseRetargetingRestAxes(
             targetChildDirection
           )
         : undefined;
-    const retargetedChildDirection = retargeted && targetChildDirection ? rotateVec3ByQuat(retargeted, targetChildDirection) : undefined;
+    const retargetedChildDirection = retargeted && childIndex >= 0 ? retargetedModelDirection(skeleton, jointIndex, childIndex, retargeted) : undefined;
     const hingePlane = classifyHingePlane(humanBone, targetChildDirection, retargetedChildDirection);
     const issue = diagnosticIssue(humanBone, childBone, targetChildDirection, sourceRestQuaternion, retargetedChildDirection, hingePlane);
     return [
@@ -191,17 +191,25 @@ function modelDirection(modelPose: ReturnType<typeof localToModelPose>, parent: 
 
 function strongestQuaternionSample(values: ArrayLike<number>, fallback: Quat): Quat | undefined {
   if (values.length < 4) return undefined;
-  let strongest = cloneNormalizedQuat(values, fallback);
+  const rest = cloneNormalizedQuat(fallback);
+  const inverseRest = invertQuat(rest);
+  let strongest = cloneNormalizedQuat(values, rest);
   let strongestAngle = -1;
   for (let offset = 0; offset + 3 < values.length; offset += 4) {
-    const sample = normalizeQuat([values[offset] ?? 0, values[offset + 1] ?? 0, values[offset + 2] ?? 0, values[offset + 3] ?? 1], fallback);
-    const angle = 2 * Math.acos(Math.min(1, Math.abs(sample[3])));
+    const sample = normalizeQuat([values[offset] ?? 0, values[offset + 1] ?? 0, values[offset + 2] ?? 0, values[offset + 3] ?? 1], rest);
+    const delta = multiplyQuat(inverseRest, sample);
+    const angle = 2 * Math.acos(Math.min(1, Math.abs(delta[3])));
     if (angle > strongestAngle) {
       strongest = sample;
       strongestAngle = angle;
     }
   }
   return strongest;
+}
+
+function retargetedModelDirection(skeleton: Skeleton, jointIndex: number, childIndex: number, rotation: Quat): Vec3 | undefined {
+  const pose = skeleton.restPose.map((transform, index) => (index === jointIndex ? { ...transform, rotation } : transform));
+  return modelDirection(localToModelPose(skeleton, pose), jointIndex, childIndex);
 }
 
 function classifyHingePlane(humanBone: HumanoidBoneName, restDirection: Vec3 | undefined, movedDirection: Vec3 | undefined): RetargetingHingePlane {

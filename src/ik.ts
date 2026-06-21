@@ -1193,8 +1193,10 @@ function resolveOzzFootIkLegs(input: OzzFootIkOptions, issues: string[]): Resolv
 }
 
 function resolveOzzFootIkContact(input: OzzFootIkOptions, leg: ResolvedOzzFootIkLeg, ankle: Vec3): { ground?: GroundContact } {
-  const configured = input.contacts?.[leg.id];
-  if (configured) return { ground: configured };
+  if (input.contacts && Object.prototype.hasOwnProperty.call(input.contacts, leg.id)) {
+    const configured = input.contacts[leg.id];
+    return configured ? { ground: configured } : {};
+  }
   const rayHeight = finiteNonNegative(input.rayHeight, 0.5);
   const direction = normalizeVec3(input.down ?? [0, -1, 0], [0, -1, 0]);
   const ray: OzzFootIkRay = {

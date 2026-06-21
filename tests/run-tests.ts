@@ -3567,6 +3567,12 @@ function modelPoint(skeleton: Skeleton, pose: Pose, joint: string): [number, num
   return transformPoint(localToModelPose(skeleton, pose)[index]!, [0, 0, 0]);
 }
 
+function modelDirectionBetween(skeleton: Skeleton, pose: Pose, parent: string, child: string): [number, number, number] {
+  const a = modelPoint(skeleton, pose, parent);
+  const b = modelPoint(skeleton, pose, child);
+  return normalizeVec3([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
+}
+
 function signedJointOffset(a: [number, number, number], b: [number, number, number], c: [number, number, number], axis: [number, number, number]): number {
   const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]] as [number, number, number];
   const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]] as [number, number, number];
@@ -3753,6 +3759,63 @@ assert.match(
   unsupportedDiagnostics.find((entry) => entry.humanBone === "leftLowerLeg")?.issue ?? "",
   /missing source rest quaternion/,
   "diagnostic should prove when actual source rest data is missing instead of pretending hinge retargeting is supported"
+);
+const diagnosticSourceRest = quatFromAxisAngle([1, 0, 0], (170 * Math.PI) / 180);
+const diagnosticLocalFlexion = quatFromAxisAngle([1, 0, 0], -Math.PI / 3);
+const diagnosticFlexedSample = multiplyQuat(diagnosticSourceRest, diagnosticLocalFlexion);
+const diagnosticRestDominatedSkeleton = createSkeleton([
+  { name: "upper", humanoid: "leftUpperLeg" },
+  { name: "lower", parentName: "upper", humanoid: "leftLowerLeg", rest: { translation: [0, -1, 0] } },
+  { name: "foot", parentName: "lower", humanoid: "leftFoot", rest: { translation: [0, -1, 0] } }
+]);
+const diagnosticRestDominatedClip: AnimationClip = {
+  id: "diagnostic-rest-relative-strongest-sample",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "leftLowerLeg",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array(diagnosticSourceRest),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([...diagnosticSourceRest, ...diagnosticFlexedSample])
+    }
+  ]
+};
+assert.equal(
+  diagnoseRetargetingRestAxes(diagnosticRestDominatedSkeleton, diagnosticRestDominatedClip, { bones: ["leftLowerLeg"] })[0]?.hingePlane,
+  "sagittal",
+  "diagnostic should choose the strongest rest-relative local motion instead of the largest absolute source rotation"
+);
+const diagnosticTargetRest = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+const diagnosticTargetDelta = quatFromAxisAngle([1, 0, 0], Math.PI / 4);
+const diagnosticTargetSample = multiplyQuat(diagnosticTargetRest, diagnosticTargetDelta);
+const diagnosticTargetRestSkeleton = createSkeleton([
+  { name: "upper", humanoid: "leftUpperLeg" },
+  { name: "lower", parentName: "upper", humanoid: "leftLowerLeg", rest: { translation: [0, -1, 0], rotation: diagnosticTargetRest } },
+  { name: "foot", parentName: "lower", humanoid: "leftFoot", rest: { translation: [0, -1, 0] } }
+]);
+const diagnosticTargetRestClip: AnimationClip = {
+  id: "diagnostic-target-rest-model-direction",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "leftLowerLeg",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array(diagnosticTargetRest),
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([...diagnosticTargetRest, ...diagnosticTargetSample])
+    }
+  ]
+};
+const diagnosticTargetRestPose = sampleClipToPose(diagnosticTargetRestSkeleton, diagnosticTargetRestClip, 1);
+const diagnosticTargetRestEntry = diagnoseRetargetingRestAxes(diagnosticTargetRestSkeleton, diagnosticTargetRestClip, { bones: ["leftLowerLeg"] })[0]!;
+assert.ok(
+  vectorNearlyEqual(
+    diagnosticTargetRestEntry.retargetedChildDirection ?? [0, 0, 0],
+    modelDirectionBetween(diagnosticTargetRestSkeleton, diagnosticTargetRestPose, "lower", "foot"),
+    1e-5
+  ),
+  "diagnostic retargeted child direction should match sampled model-space pose for non-identity target rest rotations"
 );
 
 const malformedFallbackClip: AnimationClip = {
@@ -6408,6 +6471,18 @@ assert.deepEqual(
 );
 assert.ok(ozzFootIkRays.every((ray) => ray.start[1] > ray.ankle[1]), "Ozz-style foot IK wrapper should cast down from above each ankle by default");
 assert.ok(ozzFootIk.legs.every((leg) => leg.ankleAim?.jointCorrection.every(Number.isFinite)), "Ozz-style foot IK wrapper should include finite ankle aim corrections for planted feet");
+const suppressedContactRays: string[] = [];
+const suppressedContactOzzFootIk = solveOzzFootIk({
+  skeleton: ozzFootIkSkeleton,
+  modelPose: ozzFootIkModels,
+  contacts: { left: null, right: undefined },
+  raycast: (ray) => {
+    suppressedContactRays.push(ray.id);
+    return { point: [ray.ankle[0], 0, ray.ankle[2]], normal: [0, 1, 0] };
+  }
+});
+assert.equal(suppressedContactOzzFootIk.plantedCount, 0, "explicit empty Ozz foot IK contacts should suppress fallback floor hits");
+assert.deepEqual(suppressedContactRays, [], "explicit null/undefined Ozz foot IK contacts should not fall through to raycasts");
 const missingOzzFootIk = solveOzzFootIk({
   skeleton: ozzFootIkSkeleton,
   modelPose: ozzFootIkModels,
