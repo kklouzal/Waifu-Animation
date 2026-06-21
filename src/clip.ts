@@ -1595,6 +1595,7 @@ function validateAnimationOptimizerOptions(issues: RawAnimationValidationIssue[]
     }
   }
   validateAnimationOptimizerTolerance(issues, options.hierarchyWeight, "animation optimizer hierarchyWeight");
+  validateAnimationOptimizerSampleErrorOptions(issues, options);
   const jointTolerances = options.jointTolerances;
   if (jointTolerances === undefined) return;
   if (typeof jointTolerances !== "object" || jointTolerances === null) {
@@ -1613,6 +1614,35 @@ function validateAnimationOptimizerOptions(issues: RawAnimationValidationIssue[]
     if (tolerance.weight !== undefined && tolerance.weight <= 0) {
       issues.push({ joint, message: "animation optimizer joint weight must be positive" });
     }
+  }
+}
+
+function validateAnimationOptimizerSampleErrorOptions(issues: RawAnimationValidationIssue[], options: AnimationOptimizerOptions): void {
+  const sampleError = options.sampleError;
+  if (sampleError === undefined || sampleError === false) return;
+  if (!options.skeleton) {
+    issues.push({ message: "animation optimizer sampleError requires a skeleton" });
+  }
+  if (sampleError === true) return;
+  if (typeof sampleError !== "object" || sampleError === null) {
+    issues.push({ message: "animation optimizer sampleError must be a boolean or object" });
+    return;
+  }
+  if (sampleError.sampleFrequency !== undefined && (!Number.isFinite(sampleError.sampleFrequency) || sampleError.sampleFrequency <= 0)) {
+    issues.push({ message: "animation optimizer sampleError sampleFrequency must be positive and finite" });
+  }
+  if (sampleError.sampleTimes !== undefined) {
+    if (!Array.isArray(sampleError.sampleTimes)) {
+      issues.push({ message: "animation optimizer sampleError sampleTimes must be an array" });
+    } else if (sampleError.sampleTimes.some((time) => !Number.isFinite(time))) {
+      issues.push({ message: "animation optimizer sampleError sampleTimes must contain finite values" });
+    }
+  }
+  if (sampleError.loop !== undefined && typeof sampleError.loop !== "boolean") {
+    issues.push({ message: "animation optimizer sampleError loop must be a boolean" });
+  }
+  if (sampleError.includeModelSpace !== undefined && typeof sampleError.includeModelSpace !== "boolean") {
+    issues.push({ message: "animation optimizer sampleError includeModelSpace must be a boolean" });
   }
 }
 
@@ -1659,15 +1689,36 @@ function optimizeValidatedRawAnimation(rawAnimation: RawAnimation, options: Anim
   if (rawAnimation.name !== undefined) optimized.name = rawAnimation.name;
   if (rawAnimation.loop !== undefined) optimized.loop = rawAnimation.loop;
   if (rawAnimation.metadata !== undefined) optimized.metadata = { ...rawAnimation.metadata };
+  const stats: AnimationOptimizationStats = {
+    inputKeyCount,
+    outputKeyCount,
+    removedKeyCount: inputKeyCount - outputKeyCount,
+    channels
+  };
+  if (options.skeleton && options.sampleError !== undefined && options.sampleError !== false) {
+    stats.sampleError = compareAnimationSampleError(rawAnimation, optimized, createOptimizerSampleErrorOptions(options));
+  }
   return {
     rawAnimation: optimized,
-    stats: {
-      inputKeyCount,
-      outputKeyCount,
-      removedKeyCount: inputKeyCount - outputKeyCount,
-      channels
-    }
+    stats
   };
+}
+
+function createOptimizerSampleErrorOptions(options: AnimationOptimizerOptions): AnimationSampleErrorOptions {
+  if (!options.skeleton) throw new Error("animation optimizer sampleError requires a skeleton");
+  const sampleError = options.sampleError;
+  const compareOptions: AnimationSampleErrorOptions = {
+    skeleton: options.skeleton,
+    includeModelSpace: true
+  };
+  if (typeof sampleError === "object" && sampleError !== null) {
+    if (sampleError.sampleTimes !== undefined) compareOptions.sampleTimes = sampleError.sampleTimes;
+    if (sampleError.sampleFrequency !== undefined) compareOptions.sampleFrequency = sampleError.sampleFrequency;
+    if (sampleError.loop !== undefined) compareOptions.loop = sampleError.loop;
+    if (sampleError.restPose !== undefined) compareOptions.restPose = sampleError.restPose;
+    if (sampleError.includeModelSpace !== undefined) compareOptions.includeModelSpace = sampleError.includeModelSpace;
+  }
+  return compareOptions;
 }
 
 function optimizeRawAnimationVec3Keys(
@@ -2017,6 +2068,22 @@ type AnimationSampleErrorAccumulator = {
   maxJointIndex?: number;
 };
 
+type ModelSpaceComparableTransform = {
+  position: Vec3;
+  rotation: Quat;
+  scale: Vec3;
+};
+
+type ModelSpaceJointSampleErrorAccumulator = {
+  position: AnimationSampleErrorAccumulator;
+  rotation: AnimationSampleErrorAccumulator;
+  scale: AnimationSampleErrorAccumulator;
+};
+
+type ModelSpaceSampleErrorAccumulator = ModelSpaceJointSampleErrorAccumulator & {
+  joints: ModelSpaceJointSampleErrorAccumulator[];
+};
+
 function assertValidAnimationSampleSource(source: RawAnimation | AnimationClip, skeleton: Skeleton, label: string): void {
   if (isRawAnimationSampleSource(source)) {
     const issues = validateRawAnimation(source, skeleton);
@@ -2066,6 +2133,19 @@ function createSampleErrorAccumulator(): AnimationSampleErrorAccumulator {
   return { sum: 0, max: 0 };
 }
 
+function createModelSpaceSampleErrorAccumulator(skeleton: Skeleton): ModelSpaceSampleErrorAccumulator {
+  return {
+    position: createSampleErrorAccumulator(),
+    rotation: createSampleErrorAccumulator(),
+    scale: createSampleErrorAccumulator(),
+    joints: Array.from({ length: skeleton.joints.length }, () => ({
+      position: createSampleErrorAccumulator(),
+      rotation: createSampleErrorAccumulator(),
+      scale: createSampleErrorAccumulator()
+    }))
+  };
+}
+
 function pushSampleError(accumulator: AnimationSampleErrorAccumulator, error: number, sample: number, time: number, jointIndex: number): void {
   accumulator.sum += error * error;
   if (error > accumulator.max) {
@@ -2073,6 +2153,32 @@ function pushSampleError(accumulator: AnimationSampleErrorAccumulator, error: nu
     accumulator.maxSample = sample;
     accumulator.maxTime = time;
     accumulator.maxJointIndex = jointIndex;
+  }
+}
+
+function pushModelSpaceSampleError(
+  accumulator: ModelSpaceSampleErrorAccumulator,
+  skeleton: Skeleton,
+  referencePose: readonly Transform[],
+  candidatePose: readonly Transform[],
+  sampleIndex: number,
+  time: number
+): void {
+  const referenceModel = createModelSpaceComparablePose(skeleton, referencePose);
+  const candidateModel = createModelSpaceComparablePose(skeleton, candidatePose);
+  for (let jointIndex = 0; jointIndex < skeleton.joints.length; jointIndex += 1) {
+    const reference = referenceModel[jointIndex]!;
+    const candidate = candidateModel[jointIndex]!;
+    const positionError = vec3Error(reference.position, candidate.position);
+    const rotationError = quaternionAngleError(reference.rotation, candidate.rotation);
+    const scaleError = vec3Error(reference.scale, candidate.scale);
+    pushSampleError(accumulator.position, positionError, sampleIndex, time, jointIndex);
+    pushSampleError(accumulator.rotation, rotationError, sampleIndex, time, jointIndex);
+    pushSampleError(accumulator.scale, scaleError, sampleIndex, time, jointIndex);
+    const joint = accumulator.joints[jointIndex]!;
+    pushSampleError(joint.position, positionError, sampleIndex, time, jointIndex);
+    pushSampleError(joint.rotation, rotationError, sampleIndex, time, jointIndex);
+    pushSampleError(joint.scale, scaleError, sampleIndex, time, jointIndex);
   }
 }
 
@@ -2089,6 +2195,62 @@ function finishSampleErrorAccumulator(accumulator: AnimationSampleErrorAccumulat
     if (joint !== undefined) metric.maxJoint = joint.name;
   }
   return metric;
+}
+
+function finishModelSpaceSampleErrorAccumulator(
+  accumulator: ModelSpaceSampleErrorAccumulator,
+  sampleCount: number,
+  jointSampleCount: number,
+  times: readonly number[],
+  skeleton: Skeleton
+): AnimationModelSpaceSampleErrorReport {
+  return {
+    sampleCount,
+    jointSampleCount,
+    times,
+    position: finishSampleErrorAccumulator(accumulator.position, jointSampleCount, skeleton),
+    rotation: finishSampleErrorAccumulator(accumulator.rotation, jointSampleCount, skeleton),
+    scale: finishSampleErrorAccumulator(accumulator.scale, jointSampleCount, skeleton),
+    joints: accumulator.joints.map((joint, jointIndex): AnimationModelSpaceJointSampleError => ({
+      jointIndex,
+      joint: skeleton.joints[jointIndex]?.name ?? String(jointIndex),
+      position: finishSampleErrorAccumulator(joint.position, sampleCount, skeleton),
+      rotation: finishSampleErrorAccumulator(joint.rotation, sampleCount, skeleton),
+      scale: finishSampleErrorAccumulator(joint.scale, sampleCount, skeleton)
+    }))
+  };
+}
+
+function createModelSpaceComparablePose(skeleton: Skeleton, localPose: readonly Transform[]): ModelSpaceComparableTransform[] {
+  const modelPose = localToModelPose(skeleton, localPose);
+  const output: ModelSpaceComparableTransform[] = [];
+  for (let jointIndex = 0; jointIndex < skeleton.joints.length; jointIndex += 1) {
+    const local = readPoseTransformOrRest(skeleton, localPose, jointIndex);
+    const parentIndex = skeleton.joints[jointIndex]!.parentIndex;
+    const parent = parentIndex >= 0 ? output[parentIndex] : undefined;
+    if (parentIndex >= 0 && !parent) throw new Error(`model pose for parent ${parentIndex} must be available before comparing joint ${jointIndex}`);
+    const scale = parent ? multiplyVec3Components(parent.scale, local.scale) : cloneVec3(local.scale, ONE_VEC3);
+    const rotation = parent ? multiplyQuat(parent.rotation, local.rotation) : normalizeQuat(cloneQuat(local.rotation));
+    output[jointIndex] = {
+      position: mat4Translation(modelPose[jointIndex]!),
+      rotation,
+      scale
+    };
+  }
+  return output;
+}
+
+function multiplyVec3Components(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] * b[0], a[1] * b[1], a[2] * b[2]];
+}
+
+function mat4Translation(matrix: Mat4): Vec3 {
+  return [finiteMat4Value(matrix, 12, 0), finiteMat4Value(matrix, 13, 0), finiteMat4Value(matrix, 14, 0)];
+}
+
+function finiteMat4Value(matrix: Mat4, index: number, fallback: number): number {
+  const value = matrix[index];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function vec3Error(a: readonly [number, number, number], b: readonly [number, number, number]): number {

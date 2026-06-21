@@ -138,6 +138,7 @@ import {
   getAnimationClipStats,
   sampleUserTrack,
   compareAnimationSampleError,
+  compareAnimationModelSpaceSampleError,
   sanitizeQuaternionTrackValues,
   SkeletonBuilder,
   applyAimIkChildToParentChainToPose,
@@ -1073,6 +1074,110 @@ if (rawOptimizerResult.ok) {
 assert.equal(JSON.stringify(rawOptimizerSource), rawOptimizerSourceSnapshot, "raw animation optimization should not mutate source raw animation data");
 const optimizedRawViaFunction = optimizeRawAnimation(rawOptimizerSource, { skeleton, tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 } });
 assert.equal(optimizedRawViaFunction.tracks[0]!.translations.length, 2, "optimizeRawAnimation should expose the same reduction path");
+
+const propagatedErrorSkeleton = createSkeleton([
+  { name: "root" },
+  { name: "child", parentName: "root", rest: { translation: [1, 0, 0] } },
+  { name: "tip", parentName: "child", rest: { translation: [1, 0, 0] } }
+]);
+const propagatedReferenceRaw = createRawAnimation({
+  id: "propagated-reference",
+  duration: 1,
+  tracks: [
+    {
+      joint: "root",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 1, value: [0, 0, 0] }
+      ],
+      rotations: [
+        { time: 0, value: [0, 0, 0, 1] },
+        { time: 1, value: [0, 0, 0, 1] }
+      ]
+    }
+  ]
+});
+const propagatedCandidateRaw = createRawAnimation({
+  id: "propagated-candidate",
+  duration: 1,
+  tracks: [
+    {
+      joint: "root",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 1, value: [0, 1, 0] }
+      ],
+      rotations: [
+        { time: 0, value: [0, 0, 0, 1] },
+        { time: 1, value: quatFromAxisAngle([0, 0, 1], Math.PI / 2) }
+      ]
+    }
+  ]
+});
+const propagatedSampleError = compareAnimationSampleError(propagatedReferenceRaw, propagatedCandidateRaw, {
+  skeleton: propagatedErrorSkeleton,
+  sampleTimes: [1],
+  includeModelSpace: true
+});
+assert.ok(propagatedSampleError.modelSpace, "sample-error comparison should include model-space diagnostics when requested");
+assert.equal(propagatedSampleError.modelSpace!.position.maxJoint, "tip", "propagated model-space position error should identify the farthest affected descendant");
+assert.ok(
+  propagatedSampleError.modelSpace!.joints[1]!.position.max > propagatedSampleError.translation.max,
+  "parent translation/rotation should produce model-space position error on an unchanged child joint"
+);
+assert.ok(
+  propagatedSampleError.modelSpace!.joints[2]!.position.max > propagatedSampleError.modelSpace!.joints[1]!.position.max,
+  "parent rotation should accumulate larger propagated model-space position error on farther descendants"
+);
+assert.ok(
+  propagatedSampleError.modelSpace!.joints[2]!.rotation.max >= propagatedSampleError.rotation.max,
+  "descendant model-space rotation error should inherit parent rotation differences"
+);
+assertFiniteAnimationSampleError(propagatedSampleError, "propagated model-space raw/raw sample error");
+
+const propagatedCandidateClip = buildAnimationFromRawAnimation(propagatedCandidateRaw, propagatedErrorSkeleton);
+const propagatedRuntimeModelError = compareAnimationModelSpaceSampleError(propagatedReferenceRaw, propagatedCandidateClip, {
+  skeleton: propagatedErrorSkeleton,
+  sampleTimes: [1]
+});
+assert.equal(propagatedRuntimeModelError.position.maxJoint, "tip", "raw/runtime model-space comparison should preserve descendant max-joint diagnostics");
+assertFiniteModelSpaceSampleError(propagatedRuntimeModelError, "propagated raw/runtime model-space sample error");
+
+const propagatedReferenceClip = buildAnimationFromRawAnimation(propagatedReferenceRaw, propagatedErrorSkeleton);
+const identicalRawError = compareAnimationSampleError(propagatedReferenceRaw, propagatedReferenceRaw, {
+  skeleton: propagatedErrorSkeleton,
+  sampleFrequency: 4,
+  includeModelSpace: true
+});
+assert.equal(identicalRawError.translation.max, 0, "identical raw sample comparison should have zero local translation error");
+assert.equal(identicalRawError.rotation.max, 0, "identical raw sample comparison should have zero local rotation error");
+assert.equal(identicalRawError.scale.max, 0, "identical raw sample comparison should have zero local scale error");
+assert.equal(identicalRawError.modelSpace!.position.max, 0, "identical raw sample comparison should have zero model-space position error");
+assert.equal(identicalRawError.modelSpace!.rotation.max, 0, "identical raw sample comparison should have zero model-space rotation error");
+assert.equal(identicalRawError.modelSpace!.scale.max, 0, "identical raw sample comparison should have zero model-space scale error");
+assertFiniteAnimationSampleError(identicalRawError, "identical raw model-space sample error");
+
+const identicalRuntimeError = compareAnimationSampleError(propagatedReferenceClip, propagatedReferenceClip, {
+  skeleton: propagatedErrorSkeleton,
+  sampleFrequency: 4,
+  includeModelSpace: true
+});
+assert.equal(identicalRuntimeError.modelSpace!.position.max, 0, "identical runtime clip comparison should have zero model-space position error");
+assert.equal(identicalRuntimeError.modelSpace!.rotation.max, 0, "identical runtime clip comparison should have zero model-space rotation error");
+assert.equal(identicalRuntimeError.modelSpace!.scale.max, 0, "identical runtime clip comparison should have zero model-space scale error");
+assertFiniteAnimationSampleError(identicalRuntimeError, "identical runtime model-space sample error");
+
+const optimizedRawWithSampleDiagnostics = tryOptimizeRawAnimation(rawOptimizerSource, {
+  skeleton,
+  tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 },
+  sampleError: { sampleFrequency: 8 }
+});
+assert.equal(optimizedRawWithSampleDiagnostics.ok, true, "AnimationOptimizer should attach optional sample-error diagnostics for valid input");
+if (optimizedRawWithSampleDiagnostics.ok) {
+  assert.ok(optimizedRawWithSampleDiagnostics.stats.sampleError?.modelSpace, "optimizer sample diagnostics should include propagated model-space error by default");
+  assert.ok(optimizedRawWithSampleDiagnostics.stats.sampleError!.modelSpace!.position.max < 1e-5);
+  assertFiniteAnimationSampleError(optimizedRawWithSampleDiagnostics.stats.sampleError!, "optimizer model-space sample diagnostics");
+}
 
 const rawOptimizerShortestQuaternion = createRawAnimation({
   id: "raw-optimizer-shortest-quaternion",
@@ -6683,6 +6788,58 @@ function assertMat4NearlyEqual(actual: readonly number[], expected: readonly num
   for (let index = 0; index < 16; index += 1) {
     assert.ok(Math.abs(actual[index]! - expected[index]!) <= tolerance, `${message}: matrix value ${index} expected ${expected[index]} got ${actual[index]}`);
   }
+}
+
+function assertFiniteAnimationSampleError(
+  report: {
+    translation: { rms: number; max: number };
+    rotation: { rms: number; max: number };
+    scale: { rms: number; max: number };
+    modelSpace?: {
+      position: { rms: number; max: number };
+      rotation: { rms: number; max: number };
+      scale: { rms: number; max: number };
+      joints: readonly {
+        position: { rms: number; max: number };
+        rotation: { rms: number; max: number };
+        scale: { rms: number; max: number };
+      }[];
+    };
+  },
+  label: string
+): void {
+  assertFiniteSampleErrorMetric(report.translation, `${label} local translation`);
+  assertFiniteSampleErrorMetric(report.rotation, `${label} local rotation`);
+  assertFiniteSampleErrorMetric(report.scale, `${label} local scale`);
+  if (report.modelSpace) assertFiniteModelSpaceSampleError(report.modelSpace, label);
+}
+
+function assertFiniteModelSpaceSampleError(
+  report: {
+    position: { rms: number; max: number };
+    rotation: { rms: number; max: number };
+    scale: { rms: number; max: number };
+    joints: readonly {
+      position: { rms: number; max: number };
+      rotation: { rms: number; max: number };
+      scale: { rms: number; max: number };
+    }[];
+  },
+  label: string
+): void {
+  assertFiniteSampleErrorMetric(report.position, `${label} model position`);
+  assertFiniteSampleErrorMetric(report.rotation, `${label} model rotation`);
+  assertFiniteSampleErrorMetric(report.scale, `${label} model scale`);
+  for (const joint of report.joints) {
+    assertFiniteSampleErrorMetric(joint.position, `${label} per-joint model position`);
+    assertFiniteSampleErrorMetric(joint.rotation, `${label} per-joint model rotation`);
+    assertFiniteSampleErrorMetric(joint.scale, `${label} per-joint model scale`);
+  }
+}
+
+function assertFiniteSampleErrorMetric(metric: { rms: number; max: number }, label: string): void {
+  assert.ok(Number.isFinite(metric.rms), `${label} RMS should be finite`);
+  assert.ok(Number.isFinite(metric.max), `${label} max should be finite`);
 }
 
 function quaternionNearlyEqual(actual: readonly number[], expected: readonly number[], tolerance: number): boolean {
