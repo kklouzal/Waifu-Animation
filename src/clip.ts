@@ -25,6 +25,60 @@ export type AnimationClip = {
   metadata?: Record<string, unknown>;
 };
 
+export type RawAnimationVec3KeyDefinition = {
+  time: number;
+  value: ArrayLike<number>;
+};
+
+export type RawAnimationQuaternionKeyDefinition = {
+  time: number;
+  value: ArrayLike<number>;
+};
+
+export type RawAnimationVec3Key = {
+  time: number;
+  value: Vec3;
+};
+
+export type RawAnimationQuaternionKey = {
+  time: number;
+  value: Quat;
+};
+
+export type RawAnimationJointTrackDefinition = {
+  joint?: string;
+  humanBone?: HumanoidBoneName | string;
+  translations?: readonly RawAnimationVec3KeyDefinition[];
+  rotations?: readonly RawAnimationQuaternionKeyDefinition[];
+  scales?: readonly RawAnimationVec3KeyDefinition[];
+};
+
+export type RawAnimationJointTrack = {
+  joint?: string;
+  humanBone?: HumanoidBoneName | string;
+  translations: RawAnimationVec3Key[];
+  rotations: RawAnimationQuaternionKey[];
+  scales: RawAnimationVec3Key[];
+};
+
+export type RawAnimationDefinition = {
+  id: string;
+  name?: string;
+  duration: number;
+  loop?: boolean;
+  tracks?: readonly RawAnimationJointTrackDefinition[];
+  metadata?: Record<string, unknown>;
+};
+
+export type RawAnimation = {
+  id: string;
+  name?: string;
+  duration: number;
+  loop?: boolean;
+  tracks: RawAnimationJointTrack[];
+  metadata?: Record<string, unknown>;
+};
+
 export type ClipValidationIssue = {
   track?: number;
   joint?: string;
@@ -32,6 +86,19 @@ export type ClipValidationIssue = {
   property?: string;
   message: string;
 };
+
+export type RawAnimationValidationIssue = {
+  track?: number;
+  key?: number;
+  joint?: string;
+  index?: number;
+  property?: NormalizedTrackProperty;
+  message: string;
+};
+
+export type AnimationBuildResult =
+  | { ok: true; clip: AnimationClip; issues: [] }
+  | { ok: false; clip: null; issues: RawAnimationValidationIssue[] };
 
 export type SampleRepairDiagnostic = ClipValidationIssue & {
   sample?: number;
@@ -111,6 +178,465 @@ type QuaternionNormalizationIssue = {
   kind: keyof QuaternionNormalizationMessages;
   message: string;
 };
+
+type RawAnimationChannel = {
+  sourceTrack: number;
+  joint?: string;
+  humanBone?: HumanoidBoneName | string;
+  targetKey: string;
+  jointIndex: number;
+  property: NormalizedTrackProperty;
+  keys: readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[];
+};
+
+const RAW_ANIMATION_PROPERTY_ORDER: readonly NormalizedTrackProperty[] = ["translation", "rotation", "scale"];
+const RAW_ANIMATION_PROPERTY_RANK: Readonly<Record<NormalizedTrackProperty, number>> = {
+  translation: 0,
+  rotation: 1,
+  scale: 2
+};
+
+export function createRawAnimation(definition: RawAnimationDefinition): RawAnimation {
+  const raw: RawAnimation = {
+    id: definition.id,
+    duration: definition.duration,
+    tracks: (definition.tracks ?? []).map((track) => createRawAnimationJointTrack(track))
+  };
+  if (definition.name !== undefined) raw.name = definition.name;
+  if (definition.loop !== undefined) raw.loop = definition.loop;
+  if (definition.metadata !== undefined) raw.metadata = { ...definition.metadata };
+  return raw;
+}
+
+export function createRawAnimationJointTrack(definition: RawAnimationJointTrackDefinition): RawAnimationJointTrack {
+  const track: RawAnimationJointTrack = {
+    translations: (definition.translations ?? []).map(cloneRawAnimationVec3Key),
+    rotations: (definition.rotations ?? []).map(cloneRawAnimationQuaternionKey),
+    scales: (definition.scales ?? []).map(cloneRawAnimationVec3Key)
+  };
+  if (definition.joint !== undefined) track.joint = definition.joint;
+  if (definition.humanBone !== undefined) track.humanBone = definition.humanBone;
+  return track;
+}
+
+export function cloneRawAnimation(rawAnimation: RawAnimation): RawAnimation {
+  assertRawAnimationObject(rawAnimation);
+  const cloned: RawAnimation = {
+    id: rawAnimation.id,
+    duration: rawAnimation.duration,
+    tracks: readRawAnimationTracks(rawAnimation).map((track) => cloneRawAnimationJointTrack(track))
+  };
+  if (rawAnimation.name !== undefined) cloned.name = rawAnimation.name;
+  if (rawAnimation.loop !== undefined) cloned.loop = rawAnimation.loop;
+  if (rawAnimation.metadata !== undefined) cloned.metadata = { ...rawAnimation.metadata };
+  return cloned;
+}
+
+export function cloneRawAnimationJointTrack(track: RawAnimationJointTrack): RawAnimationJointTrack {
+  assertRawAnimationJointTrackObject(track, "raw animation joint track");
+  const cloned: RawAnimationJointTrack = {
+    translations: readRawAnimationKeys(track, "translation").map(cloneRawAnimationVec3Key),
+    rotations: readRawAnimationKeys(track, "rotation").map(cloneRawAnimationQuaternionKey),
+    scales: readRawAnimationKeys(track, "scale").map(cloneRawAnimationVec3Key)
+  };
+  if (track.joint !== undefined) cloned.joint = track.joint;
+  if (track.humanBone !== undefined) cloned.humanBone = track.humanBone;
+  return cloned;
+}
+
+export function validateRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): RawAnimationValidationIssue[] {
+  const issues: RawAnimationValidationIssue[] = [];
+  if (!isRawAnimationObject(rawAnimation)) {
+    issues.push({ message: "raw animation must be an object" });
+    return issues;
+  }
+  if (typeof rawAnimation.id !== "string" || rawAnimation.id.length === 0) {
+    issues.push({ message: "raw animation id is required" });
+  }
+  if (rawAnimation.name !== undefined && typeof rawAnimation.name !== "string") {
+    issues.push({ message: "raw animation name must be a string" });
+  }
+  if (!Number.isFinite(rawAnimation.duration) || rawAnimation.duration <= 0) {
+    issues.push({ message: "raw animation duration must be positive and finite" });
+  }
+  if (rawAnimation.loop !== undefined && typeof rawAnimation.loop !== "boolean") {
+    issues.push({ message: "raw animation loop must be a boolean" });
+  }
+  const tracks = Array.isArray(rawAnimation.tracks) ? rawAnimation.tracks : undefined;
+  if (!tracks) {
+    issues.push({ message: "raw animation tracks must be an array" });
+    return issues;
+  }
+
+  const resolvedChannels = new Map<string, { track: number; joint: string; property: NormalizedTrackProperty }>();
+  let channelCount = 0;
+
+  for (let trackIndex = 0; trackIndex < tracks.length; trackIndex += 1) {
+    const track = tracks[trackIndex]!;
+    if (!isRawAnimationJointTrackObject(track)) {
+      issues.push({ track: trackIndex, message: "raw animation joint track must be an object" });
+      continue;
+    }
+
+    const target = validateRawAnimationTrackTarget(issues, track, trackIndex, skeleton);
+    let trackKeyCount = 0;
+    for (const property of RAW_ANIMATION_PROPERTY_ORDER) {
+      const keys = readRawAnimationKeysForValidation(track, property);
+      if (!keys) {
+        issues.push({ track: trackIndex, joint: target.name, property, message: `raw animation ${property} keys must be an array` });
+        continue;
+      }
+      if (keys.length > 0 && target.key) {
+        const channelKey = `${target.key}:${property}`;
+        const existing = resolvedChannels.get(channelKey);
+        if (existing) {
+          issues.push({
+            track: trackIndex,
+            joint: target.name,
+            property,
+            message: `duplicate raw animation target channel ${target.name}.${property} conflicts with track ${existing.track} (${existing.joint}.${existing.property})`
+          });
+        } else {
+          resolvedChannels.set(channelKey, { track: trackIndex, joint: target.name, property });
+        }
+      }
+      validateRawAnimationKeys(issues, keys, trackIndex, target.name, property, rawAnimation.duration);
+      trackKeyCount += keys.length;
+    }
+    if (trackKeyCount === 0) {
+      issues.push({ track: trackIndex, joint: target.name, message: "raw animation joint track has no transform keys" });
+    } else {
+      channelCount += 1;
+    }
+  }
+
+  if (channelCount === 0) {
+    issues.push({ message: "raw animation has no keyed transform channels" });
+  }
+  return issues;
+}
+
+export function tryBuildAnimationFromRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): AnimationBuildResult {
+  const issues = validateRawAnimation(rawAnimation, skeleton);
+  if (issues.length > 0) return { ok: false, clip: null, issues };
+
+  const clip = buildValidatedAnimationFromRawAnimation(rawAnimation, skeleton);
+  const clipIssues = validateClip(clip, skeleton);
+  if (clipIssues.length > 0) {
+    return {
+      ok: false,
+      clip: null,
+      issues: clipIssues.map((issue): RawAnimationValidationIssue => {
+        const mapped: RawAnimationValidationIssue = { message: issue.message };
+        if (issue.track !== undefined) mapped.track = issue.track;
+        if (issue.joint !== undefined) mapped.joint = issue.joint;
+        if (issue.index !== undefined) mapped.index = issue.index;
+        const property = normalizedTrackProperty(issue.property ?? "");
+        if (property) mapped.property = property;
+        return mapped;
+      })
+    };
+  }
+  return { ok: true, clip, issues: [] };
+}
+
+export function buildAnimationFromRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): AnimationClip {
+  const result = tryBuildAnimationFromRawAnimation(rawAnimation, skeleton);
+  if (!result.ok) {
+    throw new Error(`raw animation is invalid: ${result.issues.map(formatRawAnimationIssue).join("; ")}`);
+  }
+  return result.clip;
+}
+
+export class AnimationBuilder {
+  build(rawAnimation: RawAnimation, skeleton?: Skeleton): AnimationClip {
+    return buildAnimationFromRawAnimation(rawAnimation, skeleton);
+  }
+}
+
+function buildValidatedAnimationFromRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): AnimationClip {
+  const channels = collectRawAnimationChannels(rawAnimation, skeleton).sort(compareRawAnimationChannels);
+  const tracks = channels.map((channel): AnimationTrack => {
+    const stride = trackStride(channel.property);
+    const times = new Float32Array(channel.keys.length);
+    const values = new Float32Array(channel.keys.length * stride);
+    let previousRotation: Quat | undefined;
+    for (let keyIndex = 0; keyIndex < channel.keys.length; keyIndex += 1) {
+      const key = channel.keys[keyIndex]!;
+      times[keyIndex] = key.time;
+      if (channel.property === "rotation") {
+        let rotation = normalizeQuat(cloneQuat((key as RawAnimationQuaternionKey).value));
+        if (previousRotation) rotation = ensureShortestQuat(previousRotation, rotation);
+        values.set(rotation, keyIndex * stride);
+        previousRotation = rotation;
+      } else {
+        values.set(cloneVec3((key as RawAnimationVec3Key).value, channel.property === "scale" ? ONE_VEC3 : undefined), keyIndex * stride);
+      }
+    }
+    const track: AnimationTrack = { property: channel.property, times, values };
+    if (channel.joint !== undefined) track.joint = channel.joint;
+    if (channel.humanBone !== undefined) track.humanBone = channel.humanBone;
+    return track;
+  });
+
+  const clip: AnimationClip = {
+    id: rawAnimation.id,
+    duration: rawAnimation.duration,
+    tracks
+  };
+  if (rawAnimation.name !== undefined) clip.name = rawAnimation.name;
+  if (rawAnimation.loop !== undefined) clip.loop = rawAnimation.loop;
+  if (rawAnimation.metadata !== undefined) clip.metadata = { ...rawAnimation.metadata };
+  return clip;
+}
+
+function collectRawAnimationChannels(rawAnimation: RawAnimation, skeleton?: Skeleton): RawAnimationChannel[] {
+  const channels: RawAnimationChannel[] = [];
+  const tracks = readRawAnimationTracks(rawAnimation);
+  for (let trackIndex = 0; trackIndex < tracks.length; trackIndex += 1) {
+    const track = tracks[trackIndex]!;
+    const target = readRawAnimationTarget(track, skeleton);
+    pushRawAnimationChannel(channels, track, trackIndex, target, "translation", track.translations);
+    pushRawAnimationChannel(channels, track, trackIndex, target, "rotation", track.rotations);
+    pushRawAnimationChannel(channels, track, trackIndex, target, "scale", track.scales);
+  }
+  return channels;
+}
+
+function pushRawAnimationChannel(
+  channels: RawAnimationChannel[],
+  track: RawAnimationJointTrack,
+  sourceTrack: number,
+  target: { key: string; name: string; jointIndex: number },
+  property: NormalizedTrackProperty,
+  keys: readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[]
+): void {
+  if (keys.length === 0) return;
+  const channel: RawAnimationChannel = {
+    sourceTrack,
+    targetKey: target.key,
+    jointIndex: target.jointIndex,
+    property,
+    keys
+  };
+  if (track.joint !== undefined) channel.joint = track.joint;
+  if (track.humanBone !== undefined) channel.humanBone = track.humanBone;
+  channels.push(channel);
+}
+
+function compareRawAnimationChannels(a: RawAnimationChannel, b: RawAnimationChannel): number {
+  if (a.jointIndex >= 0 && b.jointIndex >= 0 && a.jointIndex !== b.jointIndex) return a.jointIndex - b.jointIndex;
+  const targetOrder = a.targetKey.localeCompare(b.targetKey);
+  if (targetOrder !== 0) return targetOrder;
+  const propertyOrder = RAW_ANIMATION_PROPERTY_RANK[a.property] - RAW_ANIMATION_PROPERTY_RANK[b.property];
+  if (propertyOrder !== 0) return propertyOrder;
+  return a.sourceTrack - b.sourceTrack;
+}
+
+function validateRawAnimationTrackTarget(
+  issues: RawAnimationValidationIssue[],
+  track: RawAnimationJointTrack,
+  trackIndex: number,
+  skeleton: Skeleton | undefined
+): { key: string | null; name: string; jointIndex: number } {
+  const hasJoint = track.joint !== undefined;
+  const hasHumanBone = track.humanBone !== undefined;
+  const fallbackName = String(track.joint ?? track.humanBone ?? "");
+
+  if (hasJoint === hasHumanBone) {
+    issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation joint track needs exactly one joint or humanBone target" });
+    return { key: null, name: fallbackName, jointIndex: -1 };
+  }
+  if (hasJoint && (typeof track.joint !== "string" || track.joint.length === 0)) {
+    issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation joint target must be a non-empty string" });
+    return { key: null, name: fallbackName, jointIndex: -1 };
+  }
+  if (hasHumanBone) {
+    if (typeof track.humanBone !== "string" || track.humanBone.length === 0) {
+      issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation humanBone target must be a non-empty string" });
+      return { key: null, name: fallbackName, jointIndex: -1 };
+    }
+    if (!isHumanoidBoneName(track.humanBone)) {
+      issues.push({ track: trackIndex, joint: track.humanBone, message: `raw animation track has unknown humanoid bone ${track.humanBone}` });
+      return { key: null, name: track.humanBone, jointIndex: -1 };
+    }
+  }
+
+  if (!skeleton) return { key: fallbackName, name: fallbackName, jointIndex: -1 };
+
+  const jointIndex = hasJoint ? resolveJointIndex(skeleton, track.joint!) : resolveHumanoidIndex(skeleton, track.humanBone as HumanoidBoneName);
+  if (jointIndex < 0) {
+    issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation track does not map to skeleton" });
+    return { key: null, name: fallbackName, jointIndex: -1 };
+  }
+  const jointName = skeleton.joints[jointIndex]?.name ?? fallbackName;
+  return { key: String(jointIndex), name: `${jointName}[${jointIndex}]`, jointIndex };
+}
+
+function validateRawAnimationKeys(
+  issues: RawAnimationValidationIssue[],
+  keys: readonly unknown[],
+  trackIndex: number,
+  joint: string,
+  property: NormalizedTrackProperty,
+  duration: number
+): void {
+  let previousTime = -Infinity;
+  for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+    const key = keys[keyIndex] as RawAnimationVec3Key | RawAnimationQuaternionKey | undefined;
+    if (!isRawAnimationKeyObject(key)) {
+      issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key must be an object" });
+      continue;
+    }
+    if (!Number.isFinite(key.time)) {
+      issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key time must be finite" });
+    } else {
+      if (key.time < 0 || key.time > duration) {
+        issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key time must be within raw animation duration" });
+      }
+      if (key.time <= previousTime) {
+        issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key times must be in strict ascending order" });
+      }
+      previousTime = key.time;
+    }
+
+    if (property === "rotation") validateRawAnimationQuaternionValue(issues, key.value, trackIndex, keyIndex, joint, property);
+    else validateRawAnimationVec3Value(issues, key.value, trackIndex, keyIndex, joint, property);
+  }
+}
+
+function validateRawAnimationVec3Value(
+  issues: RawAnimationValidationIssue[],
+  value: unknown,
+  track: number,
+  key: number,
+  joint: string,
+  property: NormalizedTrackProperty
+): void {
+  const length = rawArrayLikeLength(value);
+  if (length !== 3) {
+    issues.push({ track, key, joint, property, message: `raw animation ${property} key value must contain exactly 3 values` });
+    return;
+  }
+  for (let component = 0; component < 3; component += 1) {
+    if (!Number.isFinite((value as ArrayLike<number>)[component])) {
+      issues.push({ track, key, joint, property, message: `raw animation ${property} key values must be finite` });
+      return;
+    }
+  }
+}
+
+function validateRawAnimationQuaternionValue(
+  issues: RawAnimationValidationIssue[],
+  value: unknown,
+  track: number,
+  key: number,
+  joint: string,
+  property: NormalizedTrackProperty
+): void {
+  const length = rawArrayLikeLength(value);
+  if (length !== 4) {
+    issues.push({ track, key, joint, property, message: "raw animation rotation key value must contain exactly 4 values" });
+    return;
+  }
+  const components = value as ArrayLike<number>;
+  for (let component = 0; component < 4; component += 1) {
+    if (!Number.isFinite(components[component])) {
+      issues.push({ track, key, joint, property, message: "raw animation rotation key values must be finite" });
+      return;
+    }
+  }
+  const lengthValue = Math.hypot(components[0]!, components[1]!, components[2]!, components[3]!);
+  if (!Number.isFinite(lengthValue) || lengthValue <= EPSILON) {
+    issues.push({ track, key, joint, property, message: "raw animation rotation key quaternion must be normalizable" });
+  }
+}
+
+function readRawAnimationTarget(track: RawAnimationJointTrack, skeleton?: Skeleton): { key: string; name: string; jointIndex: number } {
+  const targetName = String(track.joint ?? track.humanBone ?? "");
+  if (!skeleton) return { key: targetName, name: targetName, jointIndex: -1 };
+  const jointIndex = track.joint !== undefined ? resolveJointIndex(skeleton, track.joint) : resolveHumanoidIndex(skeleton, track.humanBone as HumanoidBoneName);
+  const jointName = skeleton.joints[jointIndex]?.name ?? targetName;
+  return { key: String(jointIndex), name: `${jointName}[${jointIndex}]`, jointIndex };
+}
+
+function formatRawAnimationIssue(issue: RawAnimationValidationIssue): string {
+  const pieces: string[] = [];
+  if (issue.track !== undefined) pieces.push(`track ${issue.track}`);
+  if (issue.key !== undefined) pieces.push(`key ${issue.key}`);
+  if (issue.joint) pieces.push(issue.joint);
+  if (issue.property) pieces.push(issue.property);
+  pieces.push(issue.message);
+  return pieces.join(" ");
+}
+
+function cloneRawAnimationVec3Key(key: RawAnimationVec3KeyDefinition): RawAnimationVec3Key {
+  return {
+    time: key.time,
+    value: [rawAnimationNumberAt(key.value, 0), rawAnimationNumberAt(key.value, 1), rawAnimationNumberAt(key.value, 2)]
+  };
+}
+
+function cloneRawAnimationQuaternionKey(key: RawAnimationQuaternionKeyDefinition): RawAnimationQuaternionKey {
+  return {
+    time: key.time,
+    value: [
+      rawAnimationNumberAt(key.value, 0),
+      rawAnimationNumberAt(key.value, 1),
+      rawAnimationNumberAt(key.value, 2),
+      rawAnimationNumberAt(key.value, 3)
+    ]
+  };
+}
+
+function rawAnimationNumberAt(value: ArrayLike<number> | undefined, index: number): number {
+  const component = value?.[index];
+  return typeof component === "number" ? component : Number.NaN;
+}
+
+function readRawAnimationTracks(rawAnimation: RawAnimation): readonly RawAnimationJointTrack[] {
+  const tracks = (rawAnimation as RawAnimation | undefined)?.tracks;
+  if (!Array.isArray(tracks)) throw new Error("raw animation tracks must be an array");
+  return tracks;
+}
+
+function readRawAnimationKeys(track: RawAnimationJointTrack, property: NormalizedTrackProperty): readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[] {
+  const keys = readRawAnimationKeysForValidation(track, property);
+  if (!keys) throw new Error(`raw animation ${property} keys must be an array`);
+  return keys as readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[];
+}
+
+function readRawAnimationKeysForValidation(track: RawAnimationJointTrack, property: NormalizedTrackProperty): readonly unknown[] | null {
+  if (property === "translation") return Array.isArray(track.translations) ? track.translations : null;
+  if (property === "rotation") return Array.isArray(track.rotations) ? track.rotations : null;
+  return Array.isArray(track.scales) ? track.scales : null;
+}
+
+function rawArrayLikeLength(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const length = (value as ArrayLike<number>).length;
+  return typeof length === "number" ? length : null;
+}
+
+function isRawAnimationObject(value: unknown): value is RawAnimation {
+  return typeof value === "object" && value !== null;
+}
+
+function assertRawAnimationObject(value: unknown): asserts value is RawAnimation {
+  if (!isRawAnimationObject(value)) throw new Error("raw animation must be an object");
+}
+
+function isRawAnimationJointTrackObject(value: unknown): value is RawAnimationJointTrack {
+  return typeof value === "object" && value !== null;
+}
+
+function assertRawAnimationJointTrackObject(value: unknown, label: string): asserts value is RawAnimationJointTrack {
+  if (!isRawAnimationJointTrackObject(value)) throw new Error(`${label} must be an object`);
+}
+
+function isRawAnimationKeyObject(value: unknown): value is { time: number; value: unknown } {
+  return typeof value === "object" && value !== null && "time" in value && "value" in value;
+}
 
 export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipValidationIssue[] {
   const issues: ClipValidationIssue[] = [];

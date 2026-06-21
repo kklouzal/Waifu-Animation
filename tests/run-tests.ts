@@ -6,10 +6,12 @@ import {
   type AnimationManifest,
   type AnimationClip,
   type Pose,
+  type RawAnimation,
   type RawUserTrack,
   type RawSkeletonJoint,
   type SampleRepairDiagnostic,
   type Skeleton,
+  AnimationBuilder,
   AttentionScheduler,
   BlinkScheduler,
   dampAlpha,
@@ -52,6 +54,8 @@ import {
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
   additiveDeltaPose,
+  createRawAnimation,
+  createRawAnimationJointTrack,
   createRawSkeleton,
   createRawSkeletonJoint,
   createSkeleton,
@@ -95,7 +99,9 @@ import {
   retargetQuaternionTrackValues,
   blendMotionDeltas,
   buildSkeletonFromRawSkeleton,
+  buildAnimationFromRawAnimation,
   buildUserTrack,
+  cloneRawAnimation,
   cloneRawSkeleton,
   countRawSkeletonJoints,
   extractRootMotion,
@@ -127,6 +133,7 @@ import {
   solveTwoBoneIkModel,
   toFloat32Array,
   triggerFloatTrackEdges,
+  tryBuildAnimationFromRawAnimation,
   tryBuildUserTrack,
   transformPoint,
   rejectedAnimationReport,
@@ -134,6 +141,7 @@ import {
   validateAnimationManifestAssets,
   validateClip,
   validateManifest,
+  validateRawAnimation,
   validateRawUserTrack,
   validateRawSkeleton,
   validateUserTrack,
@@ -901,6 +909,201 @@ assert.ok(
     (issue) => issue.message === "raw skeleton joint has invalid humanoid bone pelvis"
   ),
   "validateRawSkeleton should reject invalid humanoid identifiers"
+);
+
+const editableRawAnimationTrack = createRawAnimationJointTrack({ joint: "leftUpperArm" });
+editableRawAnimationTrack.translations.push(
+  { time: 0, value: [0, 0, 0] },
+  { time: 2, value: [2, 0, 0] }
+);
+editableRawAnimationTrack.rotations.push(
+  { time: 0, value: [0, 0, 0, 2] },
+  { time: 2, value: [0, 0, 0, -1] }
+);
+const rawAnimation = createRawAnimation({
+  id: "raw-builder",
+  name: "Raw Builder",
+  duration: 2,
+  loop: true,
+  metadata: { source: "raw" },
+  tracks: [
+    editableRawAnimationTrack,
+    {
+      humanBone: "head",
+      rotations: [
+        { time: 0, value: [0, 0, 0, 1] },
+        { time: 2, value: quatFromAxisAngle([0, 1, 0], Math.PI / 2) }
+      ]
+    },
+    {
+      joint: "spine",
+      scales: [
+        { time: 0, value: [1, 1, 1] },
+        { time: 2, value: [2, 2, 2] }
+      ]
+    }
+  ]
+});
+assert.deepEqual(validateRawAnimation(rawAnimation, skeleton), [], "validateRawAnimation should accept strict raw joint TRS tracks");
+const rawBuiltClip = new AnimationBuilder().build(rawAnimation, skeleton);
+assert.equal(rawBuiltClip.id, "raw-builder");
+assert.equal(rawBuiltClip.name, "Raw Builder");
+assert.equal(rawBuiltClip.duration, 2);
+assert.equal(rawBuiltClip.loop, true);
+assert.deepEqual(rawBuiltClip.metadata, { source: "raw" });
+assert.deepEqual(
+  rawBuiltClip.tracks.map((track) => `${track.joint ?? track.humanBone}.${track.property}`),
+  ["spine.scale", "head.rotation", "leftUpperArm.translation", "leftUpperArm.rotation"],
+  "AnimationBuilder should emit deterministic skeleton-order tracks with TRS property ordering"
+);
+const rawBuiltPose = sampleClipToPose(skeleton, rawBuiltClip, 1, { loop: false });
+assert.deepEqual(rawBuiltPose[3]!.translation, [1, 0, 0], "built raw animation clips should sample as ordinary AnimationClips");
+assert.deepEqual(rawBuiltPose[1]!.scale, [1.5, 1.5, 1.5], "raw scale keys should build into runtime scale tracks");
+assert.ok(
+  quaternionNearlyEqual(Array.from(rawBuiltClip.tracks[3]!.values.slice(0, 4)), [0, 0, 0, 1], 1e-6),
+  "AnimationBuilder should normalize raw rotation quaternions"
+);
+assert.ok(
+  quaternionNearlyEqual(Array.from(rawBuiltClip.tracks[3]!.values.slice(4, 8)), [0, 0, 0, 1], 1e-6),
+  "AnimationBuilder should keep adjacent raw rotation keys in the shortest quaternion hemisphere"
+);
+assert.deepEqual(rawAnimation.tracks[0]!.rotations[1]!.value, [0, 0, 0, -1], "AnimationBuilder should not mutate raw rotation key values");
+assert.equal(validateClip(rawBuiltClip, skeleton).length, 0, "built raw animations should pass runtime clip validation");
+assert.equal(buildAnimationFromRawAnimation(rawAnimation, skeleton).tracks.length, rawBuiltClip.tracks.length, "buildAnimationFromRawAnimation should expose the same builder path");
+
+const clonedRawAnimation = cloneRawAnimation(rawAnimation);
+assert.notEqual(clonedRawAnimation, rawAnimation, "cloneRawAnimation should create a new raw animation object");
+assert.notEqual(clonedRawAnimation.tracks[0], rawAnimation.tracks[0], "cloneRawAnimation should clone raw joint tracks");
+clonedRawAnimation.tracks[0]!.translations[0]!.value[0] = 99;
+assert.deepEqual(rawAnimation.tracks[0]!.translations[0]!.value, [0, 0, 0], "cloneRawAnimation should not alias raw translation key values");
+rawAnimation.tracks[0]!.translations[0]!.value[0] = 123;
+assert.equal(rawBuiltClip.tracks[2]!.values[0], 0, "built AnimationClips should not alias mutable raw animation values");
+rawAnimation.tracks[0]!.translations[0]!.value[0] = 0;
+
+const missingRawAnimation = createRawAnimation({
+  id: "raw-missing-target",
+  duration: 1,
+  tracks: [{ joint: "missing", translations: [{ time: 0, value: [0, 0, 0] }] }]
+});
+const missingRawAnimationIssues = validateRawAnimation(missingRawAnimation, skeleton);
+assert.ok(
+  missingRawAnimationIssues.some((issue) => issue.message === "raw animation track does not map to skeleton"),
+  "validateRawAnimation should reject raw joint tracks that do not map to a supplied skeleton"
+);
+const missingRawAnimationBuild = tryBuildAnimationFromRawAnimation(missingRawAnimation, skeleton);
+assert.equal(missingRawAnimationBuild.ok, false, "tryBuildAnimationFromRawAnimation should return issues instead of a clip for invalid raw input");
+assert.throws(
+  () => buildAnimationFromRawAnimation(missingRawAnimation, skeleton),
+  /raw animation track does not map to skeleton/,
+  "buildAnimationFromRawAnimation should reject skeleton mapping failures"
+);
+
+const duplicateRawAnimation = createRawAnimation({
+  id: "raw-duplicate-channel",
+  duration: 1,
+  tracks: [
+    { joint: "head", rotations: [{ time: 0, value: [0, 0, 0, 1] }] },
+    { humanBone: "head", rotations: [{ time: 0, value: [0, 0, 0, 1] }] }
+  ]
+});
+assert.ok(
+  validateRawAnimation(duplicateRawAnimation, skeleton).some((issue) => issue.message.includes("duplicate raw animation target channel head[2].rotation")),
+  "validateRawAnimation should reject duplicate resolved target channels"
+);
+assert.throws(
+  () => new AnimationBuilder().build(duplicateRawAnimation, skeleton),
+  /duplicate raw animation target channel/,
+  "AnimationBuilder should reject duplicate raw target channels"
+);
+
+const invalidRawKeyAnimation = createRawAnimation({
+  id: "raw-invalid-keys",
+  duration: 1,
+  tracks: [
+    {
+      joint: "hips",
+      translations: [
+        { time: 0.75, value: [0, 0, 0] },
+        { time: 0.5, value: [1, 0, 0] }
+      ]
+    },
+    { joint: "spine", translations: [{ time: 1.25, value: [0, 0, 0] }] },
+    { joint: "head", translations: [{ time: Number.NaN, value: [0, 0, 0] }] },
+    { joint: "leftUpperArm", scales: [{ time: 0, value: [1, Number.POSITIVE_INFINITY, 1] }] }
+  ]
+});
+const invalidRawKeyIssues = validateRawAnimation(invalidRawKeyAnimation, skeleton);
+assert.ok(
+  invalidRawKeyIssues.some((issue) => issue.message === "raw animation key times must be in strict ascending order"),
+  "validateRawAnimation should reject unsorted raw key times"
+);
+assert.ok(
+  invalidRawKeyIssues.some((issue) => issue.message === "raw animation key time must be within raw animation duration"),
+  "validateRawAnimation should reject raw key times outside the animation duration"
+);
+assert.ok(
+  invalidRawKeyIssues.some((issue) => issue.message === "raw animation key time must be finite"),
+  "validateRawAnimation should reject non-finite raw key times"
+);
+assert.ok(
+  invalidRawKeyIssues.some((issue) => issue.message === "raw animation scale key values must be finite"),
+  "validateRawAnimation should reject non-finite raw vector values"
+);
+
+const invalidQuaternionRawAnimation: RawAnimation = {
+  id: "raw-invalid-quaternions",
+  duration: 1,
+  tracks: [
+    {
+      joint: "head",
+      translations: [],
+      rotations: [
+        { time: 0, value: [0, 0, 0, 0] },
+        { time: 0.5, value: [0, Number.NaN, 0, 1] },
+        { time: 1, value: [0, 0, 1] as unknown as [number, number, number, number] }
+      ],
+      scales: []
+    }
+  ]
+};
+const invalidQuaternionRawIssues = validateRawAnimation(invalidQuaternionRawAnimation, skeleton);
+assert.ok(
+  invalidQuaternionRawIssues.some((issue) => issue.message === "raw animation rotation key quaternion must be normalizable"),
+  "validateRawAnimation should reject zero-length raw quaternions"
+);
+assert.ok(
+  invalidQuaternionRawIssues.some((issue) => issue.message === "raw animation rotation key values must be finite"),
+  "validateRawAnimation should reject non-finite raw quaternion components"
+);
+assert.ok(
+  invalidQuaternionRawIssues.some((issue) => issue.message === "raw animation rotation key value must contain exactly 4 values"),
+  "validateRawAnimation should reject malformed raw quaternion shapes"
+);
+
+const emptyRawAnimation = createRawAnimation({ id: "raw-empty", duration: 1 });
+assert.ok(
+  validateRawAnimation(emptyRawAnimation).some((issue) => issue.message === "raw animation has no keyed transform channels"),
+  "validateRawAnimation should reject empty raw animations"
+);
+assert.equal(tryBuildAnimationFromRawAnimation(emptyRawAnimation).ok, false, "empty raw animations should not build");
+assert.throws(() => buildAnimationFromRawAnimation(emptyRawAnimation), /no keyed transform channels/, "empty raw animation builds should fail explicitly");
+const emptyTrackRawAnimation = createRawAnimation({ id: "raw-empty-track", duration: 1, tracks: [{ joint: "head" }] });
+assert.ok(
+  validateRawAnimation(emptyTrackRawAnimation).some((issue) => issue.message === "raw animation joint track has no transform keys"),
+  "validateRawAnimation should reject raw joint tracks with no TRS keys"
+);
+const invalidHeaderRawAnimation = createRawAnimation({
+  id: "",
+  duration: 0,
+  tracks: [{ joint: "head", translations: [{ time: 0, value: [0, 0, 0] }] }]
+});
+assert.ok(
+  validateRawAnimation(invalidHeaderRawAnimation).some((issue) => issue.message === "raw animation id is required"),
+  "validateRawAnimation should reject missing raw animation ids"
+);
+assert.ok(
+  validateRawAnimation(invalidHeaderRawAnimation).some((issue) => issue.message === "raw animation duration must be positive and finite"),
+  "validateRawAnimation should reject non-positive raw animation durations"
 );
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
