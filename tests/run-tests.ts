@@ -104,7 +104,9 @@ import {
   cloneRawAnimation,
   cloneRawSkeleton,
   countRawSkeletonJoints,
+  createFixedRateSamplingTimes,
   extractRootMotion,
+  extractRawAnimationTimePoints,
   getRawUserTrackStats,
   MotionAccumulator,
   MotionSampler,
@@ -116,6 +118,8 @@ import {
   sampleClipToPose,
   sampleClipToPoseAtRatio,
   sampleClipToPoseWithContext,
+  sampleRawAnimation,
+  sampleRawAnimationAtRatio,
   sampleRawUserTrack,
   sampleTrack,
   getAnimationClipStats,
@@ -1105,6 +1109,115 @@ assert.ok(
   validateRawAnimation(invalidHeaderRawAnimation).some((issue) => issue.message === "raw animation duration must be positive and finite"),
   "validateRawAnimation should reject non-positive raw animation durations"
 );
+
+const rawUtilityAnimation = createRawAnimation({
+  id: "raw-utilities",
+  duration: 2,
+  tracks: [
+    {
+      humanBone: "head",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 2, value: [2, 0, 0] }
+      ],
+      rotations: [
+        { time: 0, value: [0, 0, 0, 1] },
+        { time: 0.5, value: [0, 0, 0, 1] },
+        { time: 2, value: quatFromAxisAngle([0, 1, 0], Math.PI / 2).map((value) => -value) as [number, number, number, number] }
+      ]
+    },
+    {
+      joint: "spine",
+      scales: [
+        { time: 0.25, value: [1, 1, 1] },
+        { time: 1, value: [2, 2, 2] }
+      ]
+    },
+    {
+      joint: "leftUpperArm",
+      translations: [
+        { time: 0.75, value: [0, 0, 0] },
+        { time: 2, value: [0, 2, 0] }
+      ]
+    }
+  ]
+});
+assert.deepEqual(
+  extractRawAnimationTimePoints(rawUtilityAnimation, { skeleton }),
+  [0, 0.25, 0.5, 0.75, 1, 2],
+  "extractRawAnimationTimePoints should return unique sorted raw key times across all TRS channels"
+);
+assert.deepEqual(
+  extractRawAnimationTimePoints(rawUtilityAnimation, { skeleton, properties: ["rotation"] }),
+  [0, 0.5, 2],
+  "raw timepoint extraction should filter by transform property"
+);
+assert.deepEqual(
+  extractRawAnimationTimePoints(rawUtilityAnimation, { skeleton, joints: ["spine"] }),
+  [0.25, 1],
+  "raw timepoint extraction should filter by skeleton joint"
+);
+assert.deepEqual(
+  extractRawAnimationTimePoints(rawUtilityAnimation, { skeleton, joints: ["head"], properties: ["translation"] }),
+  [0, 2],
+  "raw timepoint extraction should combine joint and property filters"
+);
+assert.throws(
+  () => extractRawAnimationTimePoints(rawUtilityAnimation, { skeleton, joints: ["missing"] }),
+  /raw animation timepoint joint missing was not found/,
+  "raw timepoint extraction should reject missing skeleton filter joints"
+);
+assert.throws(
+  () => extractRawAnimationTimePoints(emptyRawAnimation),
+  /no keyed transform channels/,
+  "raw timepoint extraction should reject invalid raw animations"
+);
+
+const fixedRateSamples = createFixedRateSamplingTimes(1.01, 2);
+assert.equal(fixedRateSamples.sampleCount, 4, "fixed-rate sampling should include a clipped final sample when duration is between periods");
+assert.deepEqual(fixedRateSamples.times, [0, 0.5, 1, 1.01]);
+assert.ok(vectorNearlyEqual(fixedRateSamples.ratios, [0, 0.5 / 1.01, 1 / 1.01, 1], 1e-12));
+const zeroDurationFixedRateSamples = createFixedRateSamplingTimes(0, 30);
+assert.deepEqual(zeroDurationFixedRateSamples.times, [0], "zero-duration fixed-rate sampling should produce one bounded sample at time zero");
+assert.deepEqual(zeroDurationFixedRateSamples.ratios, [0], "zero-duration fixed-rate ratios should stay bounded");
+assert.deepEqual(createFixedRateSamplingTimes(Number.NaN, 30).times, [0], "non-finite durations should sanitize to a bounded zero-duration sample");
+assert.throws(() => createFixedRateSamplingTimes(1, 0), /frequency must be positive and finite/, "fixed-rate sampling should reject invalid frequencies");
+
+const rawUtilityPose = sampleRawAnimation(rawUtilityAnimation, 1, { skeleton, loop: false });
+assert.deepEqual(rawUtilityPose[2]!.translation, [1, 0, 0], "sampleRawAnimation should interpolate raw translation keys onto a skeleton pose");
+assert.ok(
+  quaternionNearlyEqual(rawUtilityPose[2]!.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 6), 1e-5),
+  "sampleRawAnimation should interpolate raw rotation keys along the shortest quaternion path"
+);
+assert.deepEqual(rawUtilityPose[1]!.scale, [2, 2, 2], "sampleRawAnimation should clamp to the last raw scale key before the sample time");
+assert.deepEqual(rawUtilityPose[0]!.translation, [0, 1, 0], "sampleRawAnimation should keep rest transforms for unkeyed skeleton joints");
+const rawRatioStartPose = sampleRawAnimationAtRatio(rawUtilityAnimation, Number.NaN, { skeleton });
+const rawRatioEndPose = sampleRawAnimationAtRatio(rawUtilityAnimation, 2, { skeleton });
+assert.deepEqual(rawRatioStartPose[2]!.translation, [0, 0, 0], "raw ratio sampling should clamp non-finite ratios to the first sample");
+assert.deepEqual(rawRatioEndPose[2]!.translation, [2, 0, 0], "raw ratio sampling should clamp ratios above one to the last sample");
+const rawTrackOrderSamples = sampleRawAnimation(rawUtilityAnimation, 1, { loop: false });
+assert.equal(rawTrackOrderSamples.length, rawUtilityAnimation.tracks.length, "sampling raw animation without a skeleton should return raw track-order transforms");
+assert.deepEqual(rawTrackOrderSamples[2]!.translation, [0, 0.4, 0], "raw track-order sampling should use raw track identity defaults without skeleton rest mapping");
+assert.throws(
+  () => sampleRawAnimation(missingRawAnimation, 0.5, { skeleton }),
+  /raw animation track does not map to skeleton/,
+  "sampleRawAnimation should reject skeleton mapping failures"
+);
+assert.throws(() => sampleRawAnimation(emptyRawAnimation, 0), /no keyed transform channels/, "sampleRawAnimation should reject empty raw animations");
+const rawNormalizationAnimation = createRawAnimation({
+  id: "raw-normalized-sample",
+  duration: 1,
+  tracks: [{ joint: "head", rotations: [{ time: 0, value: [0, 0, 0, 2] }] }]
+});
+const rawNormalizationSample = sampleRawAnimation(rawNormalizationAnimation, 0, { skeleton });
+assert.deepEqual(rawNormalizationSample[2]!.rotation, [0, 0, 0, 1], "raw sampling should normalize quaternion samples");
+assert.deepEqual(
+  rawNormalizationAnimation.tracks[0]!.rotations[0]!.value,
+  [0, 0, 0, 2],
+  "raw sampling should not mutate raw quaternion key values"
+);
+rawUtilityPose[2]!.translation[0] = 99;
+assert.deepEqual(rawUtilityAnimation.tracks[0]!.translations[0]!.value, [0, 0, 0], "raw sampled poses should not alias raw translation keys");
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
