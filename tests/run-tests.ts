@@ -524,6 +524,11 @@ assert.throws(
   "createSkeleton should reject NaN parent indices"
 );
 assert.throws(
+  () => createSkeleton([{ name: 123 } as unknown as Parameters<typeof createSkeleton>[0][number]]),
+  /joint 0 is missing a name/,
+  "createSkeleton should reject non-string runtime joint names"
+);
+assert.throws(
   () =>
     createSkeleton([
       { name: "root" },
@@ -531,6 +536,15 @@ assert.throws(
     ]),
   /joint child parent index must be an integer/,
   "createSkeleton should reject non-integer parent indices"
+);
+assert.throws(
+  () =>
+    createSkeleton([
+      { name: "root" },
+      { name: "child", parentIndex: "0" } as unknown as Parameters<typeof createSkeleton>[0][number]
+    ]),
+  /joint child parent index must be an integer/,
+  "createSkeleton should reject non-numeric runtime parent indices instead of falling through to default parenting"
 );
 assert.throws(
   () => createSkeleton([{ name: "root", parentIndex: NO_PARENT - 1 }]),
@@ -560,6 +574,15 @@ assert.throws(
     ]),
   /joint child parent missing was not found/,
   "createSkeleton should reject missing parent names"
+);
+assert.throws(
+  () =>
+    createSkeleton([
+      { name: "root" },
+      { name: "child", parentName: "" }
+    ]),
+  /joint child parent name must be a non-empty string/,
+  "createSkeleton should reject explicitly empty parent names instead of falling back to the default root"
 );
 assert.throws(
   () =>
@@ -616,6 +639,14 @@ assert.ok(
     (issue) => issue.index === 3 && issue.joint === "head" && issue.message === "duplicate joint name also assigned to index 2"
   ),
   "validateSkeleton should report duplicate joint names on externally mutated skeletons"
+);
+const invalidJointNameSkeleton = {
+  ...skeleton,
+  joints: skeleton.joints.map((joint, index) => (index === 2 ? { ...joint, name: 123 as unknown as string } : joint))
+};
+assert.ok(
+  validateSkeleton(invalidJointNameSkeleton).some((issue) => issue.index === 2 && issue.message === "joint has no name"),
+  "validateSkeleton should report non-string joint names on externally mutated skeletons"
 );
 const staleParentsSkeleton = {
   ...skeleton,
@@ -1876,6 +1907,30 @@ assert.equal(
   true,
   "declared channels with distinct normalized properties should remain valid"
 );
+
+const ambiguousRuntimeTargetClip: AnimationClip = {
+  id: "ambiguous-runtime-target",
+  duration: 1,
+  tracks: [
+    {
+      joint: "spine",
+      humanBone: "head",
+      property: "rotation",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1])
+    }
+  ]
+};
+const ambiguousRuntimeTargetIssues = validateClip(ambiguousRuntimeTargetClip, skeleton);
+assert.ok(
+  ambiguousRuntimeTargetIssues.some(
+    (issue) => issue.track === 0 && issue.joint === "spine" && issue.property === "rotation" && issue.message === "track needs exactly one joint or humanBone target"
+  ),
+  "validateClip should reject runtime tracks whose joint and humanBone targets disagree"
+);
+const ambiguousRuntimePackedBuild = tryBuildPackedRuntimeAnimation(ambiguousRuntimeTargetClip, skeleton);
+assert.equal(ambiguousRuntimePackedBuild.ok, false, "packed runtime builds should inherit runtime target ambiguity validation");
 
 const validSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("valid-source-rest-quaternion");
 assert.equal(validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted, true, "valid source rest metadata on quaternion tracks should remain accepted");

@@ -2624,24 +2624,39 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
   if (!Number.isFinite(clip.duration) || clip.duration <= 0) issues.push({ message: "clip duration must be positive and finite" });
   for (let index = 0; index < clip.tracks.length; index += 1) {
     const track = clip.tracks[index]!;
-    const jointName = track.joint ?? track.humanBone;
     const property = normalizedTrackProperty(track.property);
+    const hasJoint = track.joint !== undefined;
+    const hasHumanBone = track.humanBone !== undefined;
+    const targetName = String(track.joint ?? track.humanBone ?? "");
+    let targetValid = true;
     if (!property) {
-      issues.push({ track: index, joint: String(jointName ?? ""), property: String(track.property), message: "track property is unsupported" });
+      issues.push({ track: index, joint: targetName, property: String(track.property), message: "track property is unsupported" });
       continue;
     }
     const stride = trackStride(property);
-    if (!jointName) issues.push({ track: index, property: track.property, message: "track needs joint or humanBone" });
-    if (track.humanBone !== undefined && !isHumanoidBoneName(track.humanBone)) {
+    if (!hasJoint && !hasHumanBone) {
+      issues.push({ track: index, property: track.property, message: "track needs joint or humanBone" });
+      targetValid = false;
+    } else if (hasJoint && hasHumanBone) {
+      issues.push({ track: index, joint: targetName, property: track.property, message: "track needs exactly one joint or humanBone target" });
+      targetValid = false;
+    } else if (hasJoint && (typeof track.joint !== "string" || track.joint.length === 0)) {
+      issues.push({ track: index, joint: targetName, property: track.property, message: "track joint target must be a non-empty string" });
+      targetValid = false;
+    } else if (hasHumanBone && (typeof track.humanBone !== "string" || track.humanBone.length === 0)) {
+      issues.push({ track: index, joint: targetName, property: track.property, message: "track humanBone target must be a non-empty string" });
+      targetValid = false;
+    } else if (track.humanBone !== undefined && !isHumanoidBoneName(track.humanBone)) {
       issues.push({ track: index, joint: String(track.humanBone), property: track.property, message: "track has unknown humanoid bone" });
+      targetValid = false;
     }
-    const jointIndex = skeleton && jointName ? resolveTrackJointIndex(skeleton, track) : -1;
-    if (skeleton && jointName && jointIndex < 0) {
-      issues.push({ track: index, joint: String(jointName), property: track.property, message: "track does not map to skeleton" });
+    const jointIndex = skeleton && targetValid ? resolveTrackJointIndex(skeleton, track) : -1;
+    if (skeleton && targetValid && jointIndex < 0) {
+      issues.push({ track: index, joint: targetName, property: track.property, message: "track does not map to skeleton" });
     }
-    validateSourceRestQuaternion(issues, track, index, String(jointName ?? ""), property);
-    validateSourceRestChildDirection(issues, track, index, String(jointName ?? ""), property);
-    const channel = resolvedTrackChannel(skeleton, track, jointIndex, property);
+    validateSourceRestQuaternion(issues, track, index, targetName, property);
+    validateSourceRestChildDirection(issues, track, index, targetName, property);
+    const channel = targetValid ? resolvedTrackChannel(skeleton, track, jointIndex, property) : null;
     if (channel) {
       const existing = resolvedChannels.get(channel.key);
       if (existing) {
@@ -2655,25 +2670,25 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
         resolvedChannels.set(channel.key, { track: index, joint: channel.joint, property });
       }
     }
-    if (track.times.length < 1) issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track has no times" });
+    if (track.times.length < 1) issues.push({ track: index, joint: targetName, property: track.property, message: "track has no times" });
     if (track.values.length !== track.times.length * stride) {
-      issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track value count does not match times and stride" });
+      issues.push({ track: index, joint: targetName, property: track.property, message: "track value count does not match times and stride" });
     }
     for (let i = 0; i < track.times.length; i += 1) {
       const time = track.times[i]!;
       if (!Number.isFinite(time)) {
-        issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track time is not finite" });
+        issues.push({ track: index, joint: targetName, property: track.property, message: "track time is not finite" });
       } else if (time < 0 || time > clip.duration) {
-        issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track time must be within clip duration" });
+        issues.push({ track: index, joint: targetName, property: track.property, message: "track time must be within clip duration" });
       }
       if (i > 0 && time <= track.times[i - 1]!) {
-        issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track times must be sorted" });
+        issues.push({ track: index, joint: targetName, property: track.property, message: "track times must be sorted" });
       }
     }
     if (track.values.some((value) => !Number.isFinite(value))) {
-      issues.push({ track: index, joint: String(jointName ?? ""), property: track.property, message: "track values must be finite" });
+      issues.push({ track: index, joint: targetName, property: track.property, message: "track values must be finite" });
     }
-    validateRotationTrackQuaternions(issues, track, index, String(jointName ?? ""), property);
+    validateRotationTrackQuaternions(issues, track, index, targetName, property);
   }
   return issues;
 }

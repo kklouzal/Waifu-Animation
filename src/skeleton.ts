@@ -487,7 +487,7 @@ export function createSkeleton(definitions: JointDefinition[]): Skeleton {
 
   const nameToIndex = new Map<string, number>();
   for (const [index, joint] of definitions.entries()) {
-    if (!joint.name) throw new Error(`joint ${index} is missing a name`);
+    if (typeof joint.name !== "string" || joint.name.length === 0) throw new Error(`joint ${index} is missing a name`);
     if (nameToIndex.has(joint.name)) throw new Error(`duplicate joint name ${joint.name}`);
     nameToIndex.set(joint.name, index);
   }
@@ -526,8 +526,14 @@ export function createSkeleton(definitions: JointDefinition[]): Skeleton {
 }
 
 function resolveParentIndex(joint: JointDefinition, index: number, nameToIndex: ReadonlyMap<string, number>): number {
-  if (typeof joint.parentIndex === "number") return joint.parentIndex;
-  if (joint.parentName) {
+  if (joint.parentIndex !== undefined) {
+    if (!Number.isInteger(joint.parentIndex)) throw new Error(`joint ${joint.name} parent index must be an integer`);
+    return joint.parentIndex;
+  }
+  if (joint.parentName !== undefined) {
+    if (typeof joint.parentName !== "string" || joint.parentName.length === 0) {
+      throw new Error(`joint ${joint.name} parent name must be a non-empty string`);
+    }
     const parentIndex = nameToIndex.get(joint.parentName);
     if (parentIndex === undefined) throw new Error(`joint ${joint.name} parent ${joint.parentName} was not found`);
     return parentIndex;
@@ -549,11 +555,12 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
   const humanoidToIndex = new Map<HumanoidBoneName, number>();
   for (let index = 0; index < skeleton.joints.length; index += 1) {
     const joint = skeleton.joints[index]!;
-    if (!joint.name) issues.push({ index, message: "joint has no name" });
+    const hasValidName = typeof joint.name === "string" && joint.name.length > 0;
+    if (!hasValidName) issues.push({ index, message: "joint has no name" });
     const existingNameIndex = names.get(joint.name);
-    if (joint.name && existingNameIndex !== undefined) {
+    if (hasValidName && existingNameIndex !== undefined) {
       issues.push({ index, joint: joint.name, message: `duplicate joint name also assigned to index ${existingNameIndex}` });
-    } else if (joint.name) {
+    } else if (hasValidName) {
       names.set(joint.name, index);
     }
     if (!Number.isInteger(joint.parentIndex)) issues.push({ index, joint: joint.name, message: "parent index must be an integer" });
@@ -568,7 +575,7 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
       if (!isFiniteTransform(restPoseTransform)) issues.push({ index, joint: joint.name, message: "rest pose transform is invalid" });
       if (!transformsEqual(restPoseTransform, joint.rest)) issues.push({ index, joint: joint.name, message: "rest pose entry does not match joint rest" });
     }
-    if (nameToIndex && joint.name && nameToIndex.get(joint.name) !== index) {
+    if (nameToIndex && hasValidName && nameToIndex.get(joint.name) !== index) {
       issues.push({ index, joint: joint.name, message: "nameToIndex entry does not match joint index" });
     }
     if (joint.humanoid !== undefined) {
