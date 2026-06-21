@@ -10,6 +10,7 @@ import {
 } from "./math.js";
 
 export const NO_PARENT = -1;
+const OZZ_MAX_JOINTS = 1024;
 
 export const VRM_HUMANOID_BONES = [
   "hips",
@@ -145,6 +146,24 @@ export type JointDefinition = {
   humanoid?: HumanoidBoneName;
 };
 
+export type RawSkeletonJointDefinition = {
+  name: string;
+  rest?: Partial<Transform>;
+  humanoid?: HumanoidBoneName;
+  children?: readonly RawSkeletonJointDefinition[];
+};
+
+export type RawSkeletonJoint = {
+  name: string;
+  rest?: Partial<Transform>;
+  humanoid?: HumanoidBoneName;
+  children: RawSkeletonJoint[];
+};
+
+export type RawSkeleton = {
+  roots: RawSkeletonJoint[];
+};
+
 export type SkeletonJoint = {
   name: string;
   parentIndex: number;
@@ -163,6 +182,13 @@ export type Skeleton = {
 export type SkeletonValidationIssue = {
   joint?: string;
   index?: number;
+  message: string;
+};
+
+export type RawSkeletonValidationIssue = {
+  joint?: string;
+  index?: number;
+  path?: string;
   message: string;
 };
 
@@ -185,9 +211,279 @@ export type SkeletonJointTraversalItem = {
   joint: SkeletonJoint;
 };
 
+export type RawSkeletonJointTraversalItem = {
+  index: number;
+  depth: number;
+  path: string;
+  joint: RawSkeletonJoint;
+  parent: RawSkeletonJoint | undefined;
+  parentName: string | undefined;
+};
+
+export function createRawSkeleton(roots: readonly RawSkeletonJointDefinition[] = []): RawSkeleton {
+  return { roots: roots.map((root) => createRawSkeletonJoint(root)) };
+}
+
+export function createRawSkeletonJoint(definition: RawSkeletonJointDefinition): RawSkeletonJoint {
+  const joint: RawSkeletonJoint = {
+    name: definition.name,
+    children: (definition.children ?? []).map((child) => createRawSkeletonJoint(child))
+  };
+  if (definition.rest !== undefined) joint.rest = cloneTransform(definition.rest);
+  if (definition.humanoid !== undefined) joint.humanoid = definition.humanoid;
+  return joint;
+}
+
+export function cloneRawSkeleton(rawSkeleton: RawSkeleton): RawSkeleton {
+  const active = new Set<RawSkeletonJoint>();
+  const visited = new Set<RawSkeletonJoint>();
+
+  function cloneJoint(joint: RawSkeletonJoint, path: string): RawSkeletonJoint {
+    assertRawJointObject(joint, path);
+    if (active.has(joint)) throw new Error(`raw skeleton contains a cycle at ${path}`);
+    if (visited.has(joint)) throw new Error(`raw skeleton reuses the same joint object at ${path}`);
+    active.add(joint);
+    visited.add(joint);
+    const cloned: RawSkeletonJoint = { name: joint.name, children: [] };
+    if (joint.rest !== undefined) cloned.rest = cloneTransform(joint.rest);
+    if (joint.humanoid !== undefined) cloned.humanoid = joint.humanoid;
+    const children = readRawChildren(joint, path);
+    for (let childIndex = 0; childIndex < children.length; childIndex += 1) {
+      const child = children[childIndex]!;
+      cloned.children.push(cloneJoint(child, `${path}/${rawPathSegment(child, childIndex)}`));
+    }
+    active.delete(joint);
+    return cloned;
+  }
+
+  return {
+    roots: readRawRoots(rawSkeleton).map((root, rootIndex) => cloneJoint(root, rawPathSegment(root, rootIndex)))
+  };
+}
+
+export function countRawSkeletonJoints(rawSkeleton: RawSkeleton): number {
+  return Array.from(iterateRawSkeletonDepthFirst(rawSkeleton)).length;
+}
+
+export function* iterateRawSkeletonDepthFirst(rawSkeleton: RawSkeleton): IterableIterator<RawSkeletonJointTraversalItem> {
+  let order = 0;
+  const active = new Set<RawSkeletonJoint>();
+  const visited = new Set<RawSkeletonJoint>();
+
+  function* visit(
+    joint: RawSkeletonJoint,
+    parent: RawSkeletonJoint | undefined,
+    depth: number,
+    path: string
+  ): IterableIterator<RawSkeletonJointTraversalItem> {
+    assertRawJointObject(joint, path);
+    if (active.has(joint)) throw new Error(`raw skeleton contains a cycle at ${path}`);
+    if (visited.has(joint)) throw new Error(`raw skeleton reuses the same joint object at ${path}`);
+    active.add(joint);
+    visited.add(joint);
+    yield {
+      index: order,
+      depth,
+      path,
+      joint,
+      parent,
+      parentName: parent?.name
+    };
+    order += 1;
+    const children = readRawChildren(joint, path);
+    for (let childIndex = 0; childIndex < children.length; childIndex += 1) {
+      const child = children[childIndex]!;
+      yield* visit(child, joint, depth + 1, `${path}/${rawPathSegment(child, childIndex)}`);
+    }
+    active.delete(joint);
+  }
+
+  const roots = readRawRoots(rawSkeleton);
+  for (let rootIndex = 0; rootIndex < roots.length; rootIndex += 1) {
+    const root = roots[rootIndex]!;
+    yield* visit(root, undefined, 0, rawPathSegment(root, rootIndex));
+  }
+}
+
+export function* iterateRawSkeletonBreadthFirst(rawSkeleton: RawSkeleton): IterableIterator<RawSkeletonJointTraversalItem> {
+  let order = 0;
+  const visited = new Set<RawSkeletonJoint>();
+
+  function* visitSiblings(
+    joints: readonly RawSkeletonJoint[],
+    parent: RawSkeletonJoint | undefined,
+    depth: number,
+    parentPath: string
+  ): IterableIterator<RawSkeletonJointTraversalItem> {
+    for (let jointIndex = 0; jointIndex < joints.length; jointIndex += 1) {
+      const joint = joints[jointIndex]!;
+      const path = parentPath ? `${parentPath}/${rawPathSegment(joint, jointIndex)}` : rawPathSegment(joint, jointIndex);
+      assertRawJointObject(joint, path);
+      if (visited.has(joint)) throw new Error(`raw skeleton contains a cycle or shared joint at ${path}`);
+      visited.add(joint);
+      yield {
+        index: order,
+        depth,
+        path,
+        joint,
+        parent,
+        parentName: parent?.name
+      };
+      order += 1;
+    }
+    for (let jointIndex = 0; jointIndex < joints.length; jointIndex += 1) {
+      const joint = joints[jointIndex]!;
+      const path = parentPath ? `${parentPath}/${rawPathSegment(joint, jointIndex)}` : rawPathSegment(joint, jointIndex);
+      yield* visitSiblings(readRawChildren(joint, path), joint, depth + 1, path);
+    }
+  }
+
+  yield* visitSiblings(readRawRoots(rawSkeleton), undefined, 0, "");
+}
+
+export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValidationIssue[] {
+  const issues: RawSkeletonValidationIssue[] = [];
+  const roots = Array.isArray(rawSkeleton?.roots) ? rawSkeleton.roots : undefined;
+  if (!roots) {
+    issues.push({ message: "raw skeleton roots must be an array" });
+    return issues;
+  }
+
+  const names = new Map<string, number>();
+  const humanoid = new Map<HumanoidBoneName, number>();
+  const active = new Set<RawSkeletonJoint>();
+  const visited = new Set<RawSkeletonJoint>();
+  let jointCount = 0;
+  let reportedJointLimit = false;
+
+  function visit(joint: RawSkeletonJoint, path: string): void {
+    if (!isRawJointObject(joint)) {
+      issues.push({ path, message: "raw skeleton joint must be an object" });
+      return;
+    }
+    const jointName = typeof joint.name === "string" ? joint.name : String(joint.name);
+    if (active.has(joint)) {
+      issues.push({ joint: jointName, path, message: "raw skeleton contains a cycle" });
+      return;
+    }
+    if (visited.has(joint)) {
+      issues.push({ joint: jointName, path, message: "raw skeleton reuses the same joint object in more than one place" });
+      return;
+    }
+
+    active.add(joint);
+    visited.add(joint);
+    const index = jointCount;
+    jointCount += 1;
+    if (jointCount > OZZ_MAX_JOINTS && !reportedJointLimit) {
+      issues.push({ index, joint: jointName, path, message: `raw skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit` });
+      reportedJointLimit = true;
+    }
+
+    if (typeof joint.name !== "string" || joint.name.length === 0) {
+      issues.push({ index, path, message: "raw skeleton joint is missing a name" });
+    } else {
+      const existingNameIndex = names.get(joint.name);
+      if (existingNameIndex !== undefined) {
+        issues.push({ index, joint: joint.name, path, message: `duplicate raw skeleton joint name also assigned to index ${existingNameIndex}` });
+      } else {
+        names.set(joint.name, index);
+      }
+    }
+
+    if (joint.humanoid !== undefined) {
+      if (!isHumanoidBoneName(joint.humanoid)) {
+        issues.push({ index, joint: joint.name, path, message: `raw skeleton joint has invalid humanoid bone ${String(joint.humanoid)}` });
+      } else {
+        const existingHumanoidIndex = humanoid.get(joint.humanoid);
+        if (existingHumanoidIndex !== undefined) {
+          issues.push({
+            index,
+            joint: joint.name,
+            path,
+            message: `duplicate raw skeleton humanoid bone ${joint.humanoid} also assigned to index ${existingHumanoidIndex}`
+          });
+        } else {
+          humanoid.set(joint.humanoid, index);
+        }
+      }
+    }
+
+    if (!Array.isArray(joint.children)) {
+      issues.push({ index, joint: joint.name, path, message: "raw skeleton joint children must be an array" });
+      active.delete(joint);
+      return;
+    }
+
+    for (let childIndex = 0; childIndex < joint.children.length; childIndex += 1) {
+      const child = joint.children[childIndex]!;
+      visit(child, `${path}/${rawPathSegment(child, childIndex)}`);
+    }
+    active.delete(joint);
+  }
+
+  for (let rootIndex = 0; rootIndex < roots.length; rootIndex += 1) {
+    const root = roots[rootIndex]!;
+    visit(root, rawPathSegment(root, rootIndex));
+  }
+  return issues;
+}
+
+export function buildSkeletonFromRawSkeleton(rawSkeleton: RawSkeleton): Skeleton {
+  const issues = validateRawSkeleton(rawSkeleton);
+  if (issues.length > 0) {
+    throw new Error(`raw skeleton is invalid: ${issues.map((issue) => issue.message).join("; ")}`);
+  }
+  const definitions = Array.from(iterateRawSkeletonDepthFirst(rawSkeleton), (item): JointDefinition => {
+    const definition: JointDefinition = {
+      name: item.joint.name,
+      rest: cloneTransform(item.joint.rest)
+    };
+    if (item.parentName === undefined) {
+      definition.parentIndex = NO_PARENT;
+    } else {
+      definition.parentName = item.parentName;
+    }
+    if (item.joint.humanoid !== undefined) definition.humanoid = item.joint.humanoid;
+    return definition;
+  });
+  if (definitions.length === 0) throw new Error("raw skeleton has no joints");
+  return createSkeleton(definitions);
+}
+
+export class SkeletonBuilder {
+  build(rawSkeleton: RawSkeleton): Skeleton {
+    return buildSkeletonFromRawSkeleton(rawSkeleton);
+  }
+}
+
+function readRawRoots(rawSkeleton: RawSkeleton): readonly RawSkeletonJoint[] {
+  const roots = (rawSkeleton as RawSkeleton | undefined)?.roots;
+  if (!Array.isArray(roots)) throw new Error("raw skeleton roots must be an array");
+  return roots;
+}
+
+function readRawChildren(joint: RawSkeletonJoint, path = "joint"): readonly RawSkeletonJoint[] {
+  const children = (joint as RawSkeletonJoint | undefined)?.children;
+  if (!Array.isArray(children)) throw new Error(`raw skeleton joint children must be an array at ${path}`);
+  return children;
+}
+
+function rawPathSegment(joint: RawSkeletonJoint, index: number): string {
+  return isRawJointObject(joint) && typeof joint.name === "string" && joint.name.length > 0 ? joint.name : `#${index}`;
+}
+
+function isRawJointObject(value: unknown): value is RawSkeletonJoint {
+  return typeof value === "object" && value !== null;
+}
+
+function assertRawJointObject(value: unknown, path: string): asserts value is RawSkeletonJoint {
+  if (!isRawJointObject(value)) throw new Error(`raw skeleton joint must be an object at ${path}`);
+}
+
 export function createSkeleton(definitions: JointDefinition[]): Skeleton {
   if (definitions.length === 0) throw new Error("skeleton requires at least one joint");
-  if (definitions.length > 1024) throw new Error("skeleton exceeds Ozz-style 1024 joint safety limit");
+  if (definitions.length > OZZ_MAX_JOINTS) throw new Error(`skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit`);
 
   const nameToIndex = new Map<string, number>();
   for (const [index, joint] of definitions.entries()) {

@@ -7,6 +7,7 @@ import {
   type AnimationClip,
   type Pose,
   type RawUserTrack,
+  type RawSkeletonJoint,
   type SampleRepairDiagnostic,
   type Skeleton,
   AttentionScheduler,
@@ -51,6 +52,8 @@ import {
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
   additiveDeltaPose,
+  createRawSkeleton,
+  createRawSkeletonJoint,
   createSkeleton,
   clonePose,
   cloneTransform,
@@ -72,6 +75,8 @@ import {
   isLeaf,
   iterateJointsDepthFirst,
   iterateJointsReverseDepthFirst,
+  iterateRawSkeletonBreadthFirst,
+  iterateRawSkeletonDepthFirst,
   localToModelPose,
   updateLocalToModelPoseRange,
   multiplyMat4,
@@ -89,7 +94,10 @@ import {
   retargetQuaternionSample,
   retargetQuaternionTrackValues,
   blendMotionDeltas,
+  buildSkeletonFromRawSkeleton,
   buildUserTrack,
+  cloneRawSkeleton,
+  countRawSkeletonJoints,
   extractRootMotion,
   getRawUserTrackStats,
   MotionAccumulator,
@@ -107,6 +115,7 @@ import {
   getAnimationClipStats,
   sampleUserTrack,
   sanitizeQuaternionTrackValues,
+  SkeletonBuilder,
   solveAimIk,
   applyAimIkChainToPose,
   applyAimIkModelCorrection,
@@ -126,6 +135,7 @@ import {
   validateClip,
   validateManifest,
   validateRawUserTrack,
+  validateRawSkeleton,
   validateUserTrack,
   validateSkeleton,
   validatePose,
@@ -507,6 +517,15 @@ assert.throws(
 assert.throws(
   () =>
     createSkeleton([
+      { name: "root" },
+      { name: "child", parentName: "missing" }
+    ]),
+  /joint child parent missing was not found/,
+  "createSkeleton should reject missing parent names"
+);
+assert.throws(
+  () =>
+    createSkeleton([
       { name: "hips", humanoid: "hips" },
       { name: "pelvis", humanoid: "hips" }
     ]),
@@ -754,6 +773,135 @@ assert.deepEqual(
   "iterateJointsReverseDepthFirst should visit leaves before their parents"
 );
 assert.throws(() => Array.from(iterateJointsDepthFirst(traversalSkeleton, "missing")), /depth-first traversal joint missing was not found/);
+
+const rawSkeleton = createRawSkeleton([
+  {
+    name: "root",
+    rest: { translation: [1, 0, 0] },
+    children: [
+      {
+        name: "spine",
+        humanoid: "spine",
+        rest: { translation: [0, 1, 0] },
+        children: [
+          {
+            name: "neck",
+            children: [
+              { name: "head", humanoid: "head", rest: { translation: [0, 2, 0] } }
+            ]
+          }
+        ]
+      },
+      { name: "arm", rest: { translation: [0, 0, 1] } }
+    ]
+  },
+  {
+    name: "propRoot",
+    children: [{ name: "propTip", rest: { translation: [0, 0, 5] } }]
+  }
+]);
+assert.deepEqual(validateRawSkeleton(rawSkeleton), [], "validateRawSkeleton should accept a named roots/children hierarchy");
+assert.equal(countRawSkeletonJoints(rawSkeleton), 7, "countRawSkeletonJoints should count all raw roots and descendants");
+assert.deepEqual(
+  Array.from(iterateRawSkeletonDepthFirst(rawSkeleton), (item) => ({
+    index: item.index,
+    depth: item.depth,
+    name: item.joint.name,
+    parent: item.parentName,
+    path: item.path
+  })),
+  [
+    { index: 0, depth: 0, name: "root", parent: undefined, path: "root" },
+    { index: 1, depth: 1, name: "spine", parent: "root", path: "root/spine" },
+    { index: 2, depth: 2, name: "neck", parent: "spine", path: "root/spine/neck" },
+    { index: 3, depth: 3, name: "head", parent: "neck", path: "root/spine/neck/head" },
+    { index: 4, depth: 1, name: "arm", parent: "root", path: "root/arm" },
+    { index: 5, depth: 0, name: "propRoot", parent: undefined, path: "propRoot" },
+    { index: 6, depth: 1, name: "propTip", parent: "propRoot", path: "propRoot/propTip" }
+  ],
+  "iterateRawSkeletonDepthFirst should traverse roots and children in Ozz-style pre-order"
+);
+assert.deepEqual(
+  Array.from(iterateRawSkeletonBreadthFirst(rawSkeleton), (item) => item.joint.name),
+  ["root", "propRoot", "spine", "arm", "neck", "head", "propTip"],
+  "iterateRawSkeletonBreadthFirst should visit sibling groups before their descendants"
+);
+const builtRawSkeleton = buildSkeletonFromRawSkeleton(rawSkeleton);
+assert.deepEqual(
+  builtRawSkeleton.joints.map((joint) => [joint.name, joint.parentIndex]),
+  [
+    ["root", NO_PARENT],
+    ["spine", 0],
+    ["neck", 1],
+    ["head", 2],
+    ["arm", 0],
+    ["propRoot", NO_PARENT],
+    ["propTip", 5]
+  ],
+  "buildSkeletonFromRawSkeleton should preserve deterministic depth-first ordering and parent-before-child indices"
+);
+assert.equal(builtRawSkeleton.nameToIndex.get("head"), 3, "raw skeleton builder should preserve runtime parent/name lookup maps");
+assert.equal(builtRawSkeleton.joints[builtRawSkeleton.nameToIndex.get("head")!]!.parentIndex, builtRawSkeleton.nameToIndex.get("neck"));
+assert.equal(builtRawSkeleton.humanoid.get("head"), 3, "raw skeleton builder should preserve humanoid aliases");
+assert.deepEqual(builtRawSkeleton.restPose[1]!.translation, [0, 1, 0], "raw skeleton builder should clone normalized local rest poses");
+const classBuiltRawSkeleton = new SkeletonBuilder().build(rawSkeleton);
+assert.deepEqual(
+  classBuiltRawSkeleton.joints.map((joint) => joint.name),
+  builtRawSkeleton.joints.map((joint) => joint.name),
+  "SkeletonBuilder should expose the raw-to-runtime build split"
+);
+const editableRawSkeleton = createRawSkeleton();
+assert.deepEqual(validateRawSkeleton(editableRawSkeleton), [], "empty raw skeletons should remain valid editable offline objects");
+const editableRoot = createRawSkeletonJoint({ name: "editableRoot" });
+editableRoot.children.push(createRawSkeletonJoint({ name: "editableChild", rest: { translation: [0, 3, 0] } }));
+editableRawSkeleton.roots.push(editableRoot);
+assert.deepEqual(
+  Array.from(iterateRawSkeletonDepthFirst(editableRawSkeleton), (item) => item.joint.name),
+  ["editableRoot", "editableChild"],
+  "raw skeleton roots and children should remain mutable for offline authoring"
+);
+const clonedRawSkeleton = cloneRawSkeleton(rawSkeleton);
+assert.notEqual(clonedRawSkeleton.roots[0], rawSkeleton.roots[0], "cloneRawSkeleton should create new root joint objects");
+assert.notEqual(clonedRawSkeleton.roots[0]!.children[0], rawSkeleton.roots[0]!.children[0], "cloneRawSkeleton should deep-clone child joints");
+clonedRawSkeleton.roots[0]!.children[0]!.rest!.translation![1] = 99;
+assert.deepEqual(rawSkeleton.roots[0]!.children[0]!.rest!.translation, [0, 1, 0], "cloneRawSkeleton should not alias rest pose arrays");
+rawSkeleton.roots[0]!.children[0]!.rest!.translation![1] = 42;
+assert.deepEqual(builtRawSkeleton.restPose[1]!.translation, [0, 1, 0], "raw skeleton builds should not alias mutable raw rest poses");
+rawSkeleton.roots[0]!.children[0]!.rest!.translation![1] = 1;
+const duplicateRawSkeleton = createRawSkeleton([
+  { name: "root", children: [{ name: "dup" }] },
+  { name: "dup" }
+]);
+assert.ok(
+  validateRawSkeleton(duplicateRawSkeleton).some((issue) => issue.message === "duplicate raw skeleton joint name also assigned to index 1"),
+  "validateRawSkeleton should reject duplicate names across roots and descendants"
+);
+assert.throws(() => buildSkeletonFromRawSkeleton(duplicateRawSkeleton), /duplicate raw skeleton joint name/, "raw skeleton builder should reject duplicate names");
+const cycleRoot: RawSkeletonJoint = createRawSkeletonJoint({ name: "cycleRoot" });
+cycleRoot.children.push(cycleRoot);
+assert.ok(
+  validateRawSkeleton({ roots: [cycleRoot] }).some((issue) => issue.message === "raw skeleton contains a cycle"),
+  "validateRawSkeleton should report child cycles"
+);
+assert.throws(() => Array.from(iterateRawSkeletonDepthFirst({ roots: [cycleRoot] })), /cycle/, "raw depth-first traversal should guard cycles");
+assert.throws(() => cloneRawSkeleton({ roots: [cycleRoot] }), /cycle/, "cloneRawSkeleton should guard cycles");
+assert.throws(() => buildSkeletonFromRawSkeleton({ roots: [cycleRoot] }), /cycle/, "raw skeleton builder should reject cycles");
+const malformedRawSkeleton = { roots: [{ name: "root" } as RawSkeletonJoint] };
+assert.ok(
+  validateRawSkeleton(malformedRawSkeleton).some((issue) => issue.message === "raw skeleton joint children must be an array"),
+  "validateRawSkeleton should report malformed raw joints with missing children arrays"
+);
+assert.throws(
+  () => buildSkeletonFromRawSkeleton({ roots: [] }),
+  /raw skeleton has no joints/,
+  "raw skeleton builder should reject empty runtime builds"
+);
+assert.ok(
+  validateRawSkeleton({ roots: [{ name: "root", humanoid: "pelvis", children: [] } as unknown as RawSkeletonJoint] }).some(
+    (issue) => issue.message === "raw skeleton joint has invalid humanoid bone pelvis"
+  ),
+  "validateRawSkeleton should reject invalid humanoid identifiers"
+);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
