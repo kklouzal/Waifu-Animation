@@ -151,6 +151,8 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
   const flags = view.getUint32(20, true);
   const trackCount = view.getUint32(24, true);
   const stringBytes = view.getUint32(28, true);
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error("animation binary duration must be positive and finite");
+  if ((flags & ~1) !== 0) throw new Error("animation binary flags are invalid");
   const stringByteOffset = HEADER_BYTES + trackCount * trackBytes;
   const floatByteOffset = stringByteOffset + align4(stringBytes);
   if (stringByteOffset + stringBytes > bytes.byteLength || floatByteOffset > bytes.byteLength) {
@@ -182,13 +184,19 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     if (targetKind !== TARGET_HUMAN_BONE && targetKind !== TARGET_JOINT) {
       throw new Error(`animation track ${index} target kind is invalid`);
     }
+    if (keyCount < 1) throw new Error(`animation track ${index} has no keys`);
     if (nameByteOffset + nameByteLength > stringBytes) throw new Error(`animation track ${index} name bounds are invalid`);
     assertFloatBounds(index, "time", timeOffset, keyCount, floatData.length);
     assertFloatBounds(index, "value", valueOffset, keyCount * stride, floatData.length);
     if (sourceRestOffset !== NO_OFFSET) assertFloatBounds(index, "source-rest", sourceRestOffset, 4, floatData.length);
     if (sourceRestChildDirectionOffset !== NO_OFFSET) assertFloatBounds(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData.length);
+    validateBinaryTrackTimes(index, timeOffset, keyCount, floatData, duration);
+    assertFiniteFloatRange(index, "value", valueOffset, keyCount * stride, floatData);
+    if (sourceRestOffset !== NO_OFFSET) assertFiniteFloatRange(index, "source-rest", sourceRestOffset, 4, floatData);
+    if (sourceRestChildDirectionOffset !== NO_OFFSET) assertFiniteFloatRange(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData);
 
     const name = textDecoder.decode(bytes.subarray(stringByteOffset + nameByteOffset, stringByteOffset + nameByteOffset + nameByteLength));
+    if (name.length === 0) throw new Error(`animation track ${index} target name is empty`);
     const trackBase = {
       property,
       times: floatData.subarray(timeOffset, timeOffset + keyCount),
@@ -248,6 +256,24 @@ function readSourceRestQuaternion(track: AnimationTrack): Float32Array | null {
 
 function assertFloatBounds(trackIndex: number, label: string, offset: number, count: number, floatCount: number): void {
   if (offset + count > floatCount) throw new Error(`animation track ${trackIndex} ${label} bounds are invalid`);
+}
+
+function validateBinaryTrackTimes(trackIndex: number, offset: number, count: number, floatData: Float32Array, duration: number): void {
+  let previous = -Infinity;
+  for (let i = 0; i < count; i += 1) {
+    const time = floatData[offset + i]!;
+    if (!Number.isFinite(time)) throw new Error(`animation track ${trackIndex} time values must be finite`);
+    if (time < 0 || time > duration) throw new Error(`animation track ${trackIndex} time values must be within animation duration`);
+    if (i > 0 && time <= previous) throw new Error(`animation track ${trackIndex} time values must be sorted`);
+    previous = time;
+  }
+}
+
+function assertFiniteFloatRange(trackIndex: number, label: string, offset: number, count: number, floatData: Float32Array): void {
+  const labelText = label === "value" ? "values" : `${label} values`;
+  for (let i = 0; i < count; i += 1) {
+    if (!Number.isFinite(floatData[offset + i]!)) throw new Error(`animation track ${trackIndex} ${labelText} must be finite`);
+  }
 }
 
 function readOptionalPayloadFlag(view: DataView, offset: number, trackIndex: number, label: string): boolean {

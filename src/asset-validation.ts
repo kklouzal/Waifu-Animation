@@ -6,6 +6,7 @@ import {
   type AssetValidationStatus,
   inspectClipAsset,
   isInvalidAssetValidationStatus,
+  manifestRootMotionPolicyIssue,
   readRootMotionPolicy,
   readRootMotionProvenance
 } from "./manifest.js";
@@ -250,7 +251,8 @@ function toAssetIssue(id: string, issue: ClipValidationIssue): AnimationAssetVal
     severity: "error",
     message: issue.message,
     ...(issue.track === undefined ? {} : { track: issue.track }),
-    ...(issue.joint === undefined ? {} : { joint: issue.joint })
+    ...(issue.joint === undefined ? {} : { joint: issue.joint }),
+    ...(issue.property === undefined ? {} : { property: issue.property })
   };
 }
 
@@ -286,9 +288,14 @@ function inspectManifestEntryStructure(entry: AnimationManifestEntry): Animation
   if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) {
     issues.push({ id, severity: "error", message: `${id} has unsupported format ${String(entry.format)}` });
   }
+  if (isInvalidAssetValidationStatus(entry.validation?.status)) {
+    issues.push({ id, severity: "error", message: `invalid validation status ${String(entry.validation?.status)}` });
+  }
   if (entry.validation?.status === "accepted" && entry.validation.reason) {
     issues.push({ id, severity: "error", message: `${id} is accepted but still has rejection reason` });
   }
+  const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry);
+  if (rootMotionPolicyIssue) issues.push({ id, severity: "error", message: rootMotionPolicyIssue });
   return issues;
 }
 

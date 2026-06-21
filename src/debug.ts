@@ -130,5 +130,5 @@ function isValidMetricRotation(rotation: Quat): boolean {
 }
 
 function isFiniteVec3(value: readonly [number, number, number]): boolean {
-  return value.every(Number.isFinite);
+  return value.length === 3 && value.every(Number.isFinite);
 }

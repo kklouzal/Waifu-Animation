@@ -68,12 +68,16 @@ export type ManifestLoaderOptions = {
 export function validateManifest(manifest: AnimationManifest): string[] {
   const issues: string[] = [];
   const ids = new Set<string>();
-  for (const entry of manifest.clips) {
+  const clips = readManifestClips(manifest);
+  if (!clips) return ["manifest clips must be an array"];
+  for (const entry of clips) {
     if (!entry.id) issues.push("manifest entry is missing id");
     if (!entry.url) issues.push(`${entry.id || "<unknown>"} is missing url`);
     if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) issues.push(`${entry.id} has unsupported format ${entry.format}`);
-    if (ids.has(entry.id)) issues.push(`duplicate clip id ${entry.id}`);
-    ids.add(entry.id);
+    if (entry.id) {
+      if (ids.has(entry.id)) issues.push(`duplicate clip id ${entry.id}`);
+      ids.add(entry.id);
+    }
     if (isInvalidAssetValidationStatus(entry.validation?.status)) {
       issues.push(`${entry.id || "<unknown>"} has invalid validation status ${String(entry.validation?.status)}`);
     }
@@ -90,8 +94,9 @@ export async function loadManifest(url: string, loader: AssetLoader, options: Ma
   if (seen.has(url)) return { version: 1, clips: [] };
   seen.add(url);
   const manifest = (await loader(url)) as AnimationManifest;
+  const manifestIncludes = Array.isArray(manifest.includes) ? manifest.includes : [];
   const includes = await Promise.all(
-    (manifest.includes ?? []).map(async (includeUrl) => {
+    manifestIncludes.map(async (includeUrl) => {
       const resolved = options.resolveInclude?.(includeUrl, url) ?? includeUrl;
       try {
         return await loadManifest(resolved, loader, options, seen);
@@ -103,7 +108,7 @@ export async function loadManifest(url: string, loader: AssetLoader, options: Ma
   );
   return {
     ...manifest,
-    clips: (manifest.clips ?? []).concat(includes.flatMap((entry) => entry.clips ?? []))
+    clips: (readManifestClips(manifest) ?? []).concat(includes.flatMap((entry) => readManifestClips(entry) ?? []))
   };
 }
 
@@ -264,15 +269,16 @@ export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: Ani
   const entrySource = entry.source ?? {};
   const clipMetadata = clip?.metadata ?? {};
   const sourceRootMotion = entrySource.rootMotion;
-  if (typeof sourceRootMotion === "string" && isRootMotionPolicy(sourceRootMotion)) return { policy: sourceRootMotion, provenance: "unknown" };
-  if (typeof sourceRootMotion === "object" && sourceRootMotion && "policy" in sourceRootMotion) {
+  if (sourceRootMotion !== undefined) {
+    if (typeof sourceRootMotion === "string") return isRootMotionPolicy(sourceRootMotion) ? { policy: sourceRootMotion, provenance: "unknown" } : null;
+    if (typeof sourceRootMotion !== "object" || sourceRootMotion === null || !("policy" in sourceRootMotion)) return null;
     const metadata = sourceRootMotion as { policy?: unknown; provenance?: unknown };
-    if (isRootMotionPolicy(metadata.policy)) {
-      return {
-        policy: metadata.policy,
-        provenance: isRootMotionProvenance(metadata.provenance) ? metadata.provenance : "unknown"
-      };
-    }
+    if (!isRootMotionPolicy(metadata.policy)) return null;
+    if (metadata.provenance !== undefined && !isRootMotionProvenance(metadata.provenance)) return null;
+    return {
+      policy: metadata.policy,
+      provenance: isRootMotionProvenance(metadata.provenance) ? metadata.provenance : "unknown"
+    };
   }
   const sourcePolicy = entrySource.rootMotionPolicy;
   if (isRootMotionPolicy(sourcePolicy)) return { policy: sourcePolicy, provenance: "unknown" };
@@ -301,13 +307,15 @@ function isRootMotionProvenance(value: unknown): value is RootMotionProvenance {
 }
 
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
-  const duplicateIds = duplicatedManifestIds(manifest.clips);
-  return manifest.clips.filter((entry) => !manifestRejectionIssue(entry, duplicateIds));
+  const clips = readManifestClips(manifest) ?? [];
+  const duplicateIds = duplicatedManifestIds(clips);
+  return clips.filter((entry) => !manifestRejectionIssue(entry, duplicateIds));
 }
 
 export function rejectedAnimationReport(manifest: AnimationManifest): Array<{ id: string; label?: string; reason: string }> {
-  const duplicateIds = duplicatedManifestIds(manifest.clips);
-  return manifest.clips
+  const clips = readManifestClips(manifest) ?? [];
+  const duplicateIds = duplicatedManifestIds(clips);
+  return clips
     .map((entry) => ({ entry, reason: manifestRejectionIssue(entry, duplicateIds) }))
     .filter((item): item is { entry: AnimationManifestEntry; reason: string } => item.reason !== null)
     .map(({ entry, reason }) => ({ id: entry.id, label: entry.label, reason }));
@@ -335,4 +343,8 @@ function duplicatedManifestIds(entries: readonly AnimationManifestEntry[]): Set<
     else seen.add(entry.id);
   }
   return duplicates;
+}
+
+function readManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] | null {
+  return Array.isArray(manifest.clips) ? manifest.clips : null;
 }

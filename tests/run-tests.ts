@@ -1664,6 +1664,29 @@ assert.ok(
   "validateManifest should report invalid source.rootMotion.provenance values from runtime JSON"
 );
 assert.deepEqual(
+  validateManifest({ version: 1 } as unknown as AnimationManifest),
+  ["manifest clips must be an array"],
+  "validateManifest should report malformed manifests whose clips table is missing"
+);
+const missingIdsManifest = {
+  version: 1,
+  clips: [
+    { id: "", label: "Missing Id A", url: "/missing-a.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    { id: "", label: "Missing Id B", url: "/missing-b.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }
+  ]
+} as AnimationManifest;
+const missingIdsManifestIssues = validateManifest(missingIdsManifest);
+assert.equal(
+  missingIdsManifestIssues.filter((issue) => issue === "manifest entry is missing id").length,
+  2,
+  "validateManifest should report each missing id"
+);
+assert.equal(
+  missingIdsManifestIssues.some((issue) => issue === "duplicate clip id "),
+  false,
+  "missing manifest ids should not be classified as duplicate concrete ids"
+);
+assert.deepEqual(
   usableManifestClips(malformedValidationStatusManifest).map((entry) => entry.id),
   ["valid", "accepted"],
   "usableManifestClips should exclude malformed, rejected, and quarantined validation statuses"
@@ -1693,6 +1716,34 @@ assert.deepEqual(
   readRootMotionMetadata(convertedStrippedRootMotionEntry),
   { policy: "stripped-to-in-place", provenance: "stripped-during-conversion" },
   "root-motion metadata should expose conversion-time stripping separately from the runtime policy"
+);
+assert.equal(
+  readRootMotionMetadata(
+    {
+      id: "invalid-root-motion-with-fallback",
+      label: "Invalid Root Motion With Fallback",
+      url: "/invalid-root-motion-with-fallback.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "keep-everything" }, rootMotionPolicy: "preserved" }
+    },
+    { ...nodClip, metadata: { rootMotionPolicy: "preserved", rootMotionProvenance: "preserved-in-clip" } }
+  ),
+  null,
+  "invalid source.rootMotion metadata should not fall through to legacy aliases or clip metadata"
+);
+assert.equal(
+  readRootMotionMetadata(
+    {
+      id: "invalid-root-motion-provenance-with-fallback",
+      label: "Invalid Root Motion Provenance With Fallback",
+      url: "/invalid-root-motion-provenance-with-fallback.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "preserved", provenance: "converted" } }
+    },
+    { ...nodClip, metadata: { rootMotionPolicy: "preserved", rootMotionProvenance: "preserved-in-clip" } }
+  ),
+  null,
+  "invalid source.rootMotion provenance should not be partially interpreted as a valid policy"
 );
 assert.deepEqual(
   validateManifest({ version: 1, clips: [convertedStrippedRootMotionEntry] }),
@@ -1847,6 +1898,38 @@ assert.ok(
   structuralAssetValidationReport.entries[3]!.issues.some((issue) => issue.message === "accepted-reason-asset is accepted but still has rejection reason"),
   "asset report validation should not accept entries whose manifest still carries a rejection reason"
 );
+const invalidRootMotionMetadataAssetEntry = {
+  id: "invalid-root-motion-metadata-asset",
+  label: "Invalid Root Motion Metadata Asset",
+  url: "/invalid-root-motion-metadata-asset.waifuanim.bin",
+  format: WAIFU_ANIMATION_BINARY_FORMAT,
+  source: { rootMotion: { policy: "keep-everything" } }
+};
+const metadataRejectedAssetFetches: string[] = [];
+const metadataRejectedAssetReport = await validateAnimationManifestAssets(
+  {
+    version: 1,
+    clips: [
+      invalidValidationStatusManifestEntry,
+      invalidRootMotionMetadataAssetEntry,
+      { id: "valid-metadata-asset", label: "Valid Metadata Asset", url: "/valid-metadata-asset.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }
+    ]
+  },
+  async (url) => {
+    metadataRejectedAssetFetches.push(url);
+    return encodeAnimationBinary(nodClip);
+  },
+  { skeleton }
+);
+assert.deepEqual(
+  metadataRejectedAssetFetches,
+  ["/valid-metadata-asset.waifuanim.bin"],
+  "asset report validation should not fetch entries rejected by manifest metadata validation"
+);
+assert.equal(metadataRejectedAssetReport.accepted, 1);
+assert.equal(metadataRejectedAssetReport.rejected, 2);
+assert.ok(metadataRejectedAssetReport.entries[0]!.issues.some((issue) => issue.message === "invalid validation status acceptted"));
+assert.ok(metadataRejectedAssetReport.entries[1]!.issues.some((issue) => issue.message === "has invalid source.rootMotion.policy keep-everything"));
 
 const duplicateResolvedChannelClip: AnimationClip = {
   id: "duplicate-resolved-channel",
@@ -1871,6 +1954,11 @@ assert.equal(duplicateResolvedAsset.status, "rejected");
 assert.ok(
   duplicateResolvedAsset.issues.some((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")),
   "inspectAnimationAsset should surface duplicate resolved target channels"
+);
+assert.equal(
+  duplicateResolvedAsset.issues.find((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation"))?.property,
+  "rotation",
+  "inspectAnimationAsset should preserve clip issue property metadata in asset reports"
 );
 
 const duplicateDeclaredChannelClip: AnimationClip = {
@@ -2241,6 +2329,34 @@ assert.throws(
   () => decodeAnimationBinary(invalidTargetKindBinary.slice(0, invalidTargetKindBinary.byteLength - 1), "misaligned-floats"),
   /animation binary float data is misaligned/,
   "decodeAnimationBinary should reject payloads whose float table is not 4-byte aligned"
+);
+const invalidFlagsBinary = encodeAnimationBinary(nodClip);
+new DataView(invalidFlagsBinary).setUint32(20, 2, true);
+assert.throws(
+  () => decodeAnimationBinary(invalidFlagsBinary, "invalid-flags"),
+  /animation binary flags are invalid/,
+  "decodeAnimationBinary should reject unknown binary header flags"
+);
+const nonFiniteDurationBinary = encodeAnimationBinary(nodClip);
+new DataView(nonFiniteDurationBinary).setFloat32(16, Number.NaN, true);
+assert.throws(
+  () => decodeAnimationBinary(nonFiniteDurationBinary, "non-finite-binary-duration"),
+  /animation binary duration must be positive and finite/,
+  "decodeAnimationBinary should reject non-finite binary durations before exposing clips"
+);
+const unsortedBinaryTimes = encodeAnimationBinary(endpointTrackTimeClip);
+new Float32Array(unsortedBinaryTimes, binaryFloatByteOffsetForTest(unsortedBinaryTimes))[1] = 0;
+assert.throws(
+  () => decodeAnimationBinary(unsortedBinaryTimes, "unsorted-binary-times"),
+  /animation track 0 time values must be sorted/,
+  "decodeAnimationBinary should reject duplicate or unsorted binary time samples"
+);
+const nonFiniteBinaryValue = encodeAnimationBinary(nodClip);
+new Float32Array(nonFiniteBinaryValue, binaryFloatByteOffsetForTest(nonFiniteBinaryValue))[3] = Number.NaN;
+assert.throws(
+  () => decodeAnimationBinary(nonFiniteBinaryValue, "non-finite-binary-value"),
+  /animation track 0 values must be finite/,
+  "decodeAnimationBinary should reject non-finite binary value samples"
 );
 
 const rootMotionRotationOnlyClip: AnimationClip = {
@@ -7080,6 +7196,15 @@ assert.ok(
   invalidPoseDelta.rotation.max > 1.56 && invalidPoseDelta.rotation.max < 1.58,
   "pose delta metrics should keep valid finite rotation samples when invalid samples are skipped"
 );
+const malformedVec3PoseA = clonePose(skeleton.restPose);
+const malformedVec3PoseB = clonePose(skeleton.restPose);
+malformedVec3PoseA[0]!.translation = [0, 0] as unknown as [number, number, number];
+malformedVec3PoseB[1]!.scale = [1] as unknown as [number, number, number];
+const malformedVec3PoseDelta = poseDeltaMetric(malformedVec3PoseA, malformedVec3PoseB, skeleton);
+assert.equal(malformedVec3PoseDelta.translation.invalidSamples, 1, "pose delta metrics should count short translation tuples as invalid samples");
+assert.equal(malformedVec3PoseDelta.scale.invalidSamples, 1, "pose delta metrics should count short scale tuples as invalid samples");
+assert.equal(Number.isFinite(malformedVec3PoseDelta.translation.rms), true, "short translation tuples should not poison translation RMS");
+assert.equal(Number.isFinite(malformedVec3PoseDelta.scale.rms), true, "short scale tuples should not poison scale RMS");
 
 const headBone = new Object3D();
 headBone.name = "normalizedHead";
@@ -7551,6 +7676,15 @@ function createLegacyV1NodBinary(): ArrayBuffer {
 
 function align4ForTest(value: number): number {
   return (value + 3) & ~3;
+}
+
+function binaryFloatByteOffsetForTest(buffer: ArrayBuffer): number {
+  const view = new DataView(buffer);
+  const headerBytes = view.getUint32(8, true);
+  const trackBytes = view.getUint32(12, true);
+  const trackCount = view.getUint32(24, true);
+  const stringBytes = view.getUint32(28, true);
+  return headerBytes + trackCount * trackBytes + align4ForTest(stringBytes);
 }
 
 function attachArmChain(root: Object3D, bones: Map<string, Object3D>, side: "left" | "right", sign: 1 | -1): void {
