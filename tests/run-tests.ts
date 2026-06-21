@@ -87,8 +87,10 @@ import {
   blendMotionDeltas,
   buildUserTrack,
   extractRootMotion,
+  getRawUserTrackStats,
   MotionAccumulator,
   MotionSampler,
+  optimizeRawUserTrack,
   sampleMotionCarrier,
   sampleMotionIntervalDelta,
   sampleMotionTracks,
@@ -195,6 +197,12 @@ const invalidUserTrackBuild = tryBuildUserTrack(invalidRawUserTrack);
 assert.equal(invalidUserTrackBuild.ok, false, "invalid raw user tracks should not build");
 if (!invalidUserTrackBuild.ok) assert.equal(invalidUserTrackBuild.issues.length > 0, true);
 assert.throws(() => buildUserTrack(invalidRawUserTrack), /strict ascending/, "buildUserTrack should fail explicitly for invalid raw tracks");
+assert.throws(() => optimizeRawUserTrack(invalidRawUserTrack), /strict ascending/, "track optimization should reject invalid raw tracks through validation");
+assert.throws(
+  () => optimizeRawUserTrack({ type: "float", keyframes: [{ ratio: 0, value: 0, interpolation: "linear" }] }, { tolerance: Number.NaN }),
+  /tolerance/,
+  "track optimization should reject invalid tolerances"
+);
 assert.throws(
   () => buildUserTrack({ type: "float", keyframes: [{ ratio: 0, value: Number.NaN, interpolation: "linear" }] }),
   /finite/,
@@ -212,6 +220,115 @@ assert.equal(patchedUserTrack.name, "attach-weight");
 assert.deepEqual(Array.from(patchedUserTrack.ratios), [0, 0.25, 0.75, 1], "runtime user tracks should be patched to cover [0,1]");
 assert.deepEqual(Array.from(patchedUserTrack.values), [10, 10, 20, 20]);
 assert.equal(sampleRawUserTrack({ type: "float", keyframes: [] }, 0.5), 0, "empty raw float tracks sample to identity");
+const rawTrackStats = getRawUserTrackStats({
+  type: "float3",
+  name: "stats-track",
+  keyframes: [
+    { ratio: 0, value: [0, 0, 0], interpolation: "linear" },
+    { ratio: 0.5, value: [1, 1, 1], interpolation: "step" },
+    { ratio: 1, value: [2, 2, 2], interpolation: "linear" }
+  ]
+});
+assert.deepEqual(
+  rawTrackStats,
+  { type: "float3", name: "stats-track", keyCount: 3, linearKeyCount: 2, stepKeyCount: 1, valueComponentCount: 9 },
+  "raw user track stats should report key counts and packed component counts"
+);
+const optimizedIdentityTrack = optimizeRawUserTrack({
+  type: "float3",
+  name: "identity-track",
+  keyframes: [
+    { ratio: 0.2, value: [0, 0, 0], interpolation: "linear" },
+    { ratio: 0.4, value: [0, 0, 0], interpolation: "linear" },
+    { ratio: 0.8, value: [0, 0, 0], interpolation: "linear" }
+  ]
+});
+assert.equal(optimizedIdentityTrack.track.name, "identity-track", "track optimization should preserve names");
+assert.equal(optimizedIdentityTrack.track.keyframes.length, 0, "identity linear tracks should reduce to no keys");
+assert.equal(optimizedIdentityTrack.removedKeyCount, 3, "optimization stats should count removed keys");
+const optimizedConstantTrack = optimizeRawUserTrack({
+  type: "float2",
+  keyframes: [
+    { ratio: 0.2, value: [4, 6], interpolation: "linear" },
+    { ratio: 0.5, value: [4, 6], interpolation: "linear" },
+    { ratio: 0.8, value: [4, 6], interpolation: "linear" }
+  ]
+});
+assert.deepEqual(optimizedConstantTrack.track.keyframes, [{ ratio: 0.2, value: [4, 6], interpolation: "linear" }], "constant non-identity tracks should reduce to one key");
+const optimizedStepTrack = optimizeRawUserTrack({
+  type: "float",
+  keyframes: [
+    { ratio: 0.2, value: 0, interpolation: "linear" },
+    { ratio: 0.4, value: 0, interpolation: "step" },
+    { ratio: 0.8, value: 0, interpolation: "linear" }
+  ]
+});
+assert.deepEqual(
+  optimizedStepTrack.track.keyframes,
+  [
+    { ratio: 0.2, value: 0, interpolation: "linear" },
+    { ratio: 0.4, value: 0, interpolation: "step" }
+  ],
+  "step keys needed for held segments should not be optimized away"
+);
+const optimizedLinearTrack = optimizeRawUserTrack({
+  type: "float4",
+  keyframes: [
+    { ratio: 0, value: [6.9, 0, 0, 0], interpolation: "linear" },
+    { ratio: 0.25, value: [4.6, 0, 0, 0], interpolation: "linear" },
+    { ratio: 0.5, value: [2.3, 0, 0, 0], interpolation: "linear" },
+    { ratio: 0.500001, value: [2.300001, 0, 0, 0], interpolation: "linear" },
+    { ratio: 0.75, value: [0, 0, 0, 0], interpolation: "linear" },
+    { ratio: 1, value: [0, 0, 0, 0], interpolation: "linear" }
+  ]
+});
+assert.deepEqual(
+  optimizedLinearTrack.track.keyframes,
+  [
+    { ratio: 0, value: [6.9, 0, 0, 0], interpolation: "linear" },
+    { ratio: 0.75, value: [0, 0, 0, 0], interpolation: "linear" }
+  ],
+  "interpolable linear vector keys should be removed within tolerance"
+);
+const strictLinearTrack = optimizeRawUserTrack(
+  {
+    type: "float",
+    keyframes: [
+      { ratio: 0, value: 0, interpolation: "linear" },
+      { ratio: 0.5, value: 0.01, interpolation: "linear" },
+      { ratio: 1, value: 0, interpolation: "linear" }
+    ]
+  },
+  { tolerance: 0.001 }
+);
+const looseLinearTrack = optimizeRawUserTrack(
+  {
+    type: "float",
+    keyframes: [
+      { ratio: 0, value: 0, interpolation: "linear" },
+      { ratio: 0.5, value: 0.01, interpolation: "linear" },
+      { ratio: 1, value: 0, interpolation: "linear" }
+    ]
+  },
+  { tolerance: 0.02 }
+);
+assert.equal(strictLinearTrack.track.keyframes.length, 3, "strict tolerance should keep visible deviations");
+assert.equal(looseLinearTrack.track.keyframes.length, 0, "loose tolerance should remove near-identity deviations");
+const rawShortestQuatTrack: RawUserTrack<"quaternion"> = {
+  type: "quaternion",
+  name: "shortest-rotation",
+  keyframes: [
+    { ratio: 0, value: [0, 0, 0, -1], interpolation: "linear" },
+    { ratio: 0.5, value: [0, 0, 0, 1], interpolation: "linear" },
+    { ratio: 1, value: [0, 0, 0, -1], interpolation: "linear" }
+  ]
+};
+const optimizedShortestQuatTrack = optimizeRawUserTrack(rawShortestQuatTrack);
+assert.equal(optimizedShortestQuatTrack.track.keyframes.length, 0, "sign-equivalent identity quaternions should optimize away");
+assert.ok(
+  quaternionNearlyEqual(sampleRawUserTrack(rawShortestQuatTrack, 0.25) as readonly number[], sampleRawUserTrack(optimizedShortestQuatTrack.track, 0.25) as readonly number[], 1e-6),
+  "optimized quaternion tracks should preserve shortest-path normalized sampling equivalence"
+);
 const invalidRuntimeUserTrack = {
   type: "float" as const,
   name: "bad-runtime",

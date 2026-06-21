@@ -1,4 +1,4 @@
-import { EPSILON, clamp01, ensureShortestQuat, isFiniteNumber, normalizeQuat, slerpQuat, type Quat } from "./math.js";
+import { EPSILON, clamp01, dotQuat, ensureShortestQuat, isFiniteNumber, normalizeQuat, slerpQuat, type Quat } from "./math.js";
 
 export type UserTrackType = "float" | "float2" | "float3" | "float4" | "quaternion";
 export type UserTrackInterpolation = "linear" | "step";
@@ -57,6 +57,27 @@ export type UserTrackValidationIssue = {
 export type UserTrackBuildResult<T extends UserTrackType = UserTrackType> =
   | { ok: true; track: UserTrack<T>; issues: [] }
   | { ok: false; track: null; issues: UserTrackValidationIssue[] };
+
+export type RawUserTrackStats<T extends UserTrackType = UserTrackType> = {
+  type: T;
+  name: string;
+  keyCount: number;
+  linearKeyCount: number;
+  stepKeyCount: number;
+  valueComponentCount: number;
+};
+
+export type UserTrackOptimizationOptions = {
+  /** Maximum value-space error allowed while removing redundant linear keys. Defaults to 1e-3. */
+  tolerance?: number;
+};
+
+export type UserTrackOptimizationResult<T extends UserTrackType = UserTrackType> = {
+  track: RawUserTrack<T>;
+  before: RawUserTrackStats<T>;
+  after: RawUserTrackStats<T>;
+  removedKeyCount: number;
+};
 
 export type TrackTriggerEdge = {
   ratio: number;
@@ -184,6 +205,39 @@ export function buildUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>): U
   return result.track;
 }
 
+export function getRawUserTrackStats<T extends UserTrackType>(raw: RawUserTrack<T>): RawUserTrackStats<T> {
+  const issues = validateRawUserTrack(raw as RawUserTrack);
+  if (issues.length > 0) throw trackValidationError("raw user track", issues);
+  let linearKeyCount = 0;
+  let stepKeyCount = 0;
+  for (const key of raw.keyframes) {
+    if (key.interpolation === "step") stepKeyCount += 1;
+    else linearKeyCount += 1;
+  }
+  return {
+    type: raw.type,
+    name: raw.name ?? "",
+    keyCount: raw.keyframes.length,
+    linearKeyCount,
+    stepKeyCount,
+    valueComponentCount: raw.keyframes.length * trackValueSize(raw.type)
+  };
+}
+
+export function optimizeRawUserTrack<T extends UserTrackType>(
+  raw: RawUserTrack<T>,
+  options: UserTrackOptimizationOptions = {}
+): UserTrackOptimizationResult<T> {
+  const before = getRawUserTrackStats(raw);
+  const tolerance = readOptimizationTolerance(options.tolerance);
+  const optimizedKeyframes = decimateRawUserTrackKeys(raw, raw.type === "quaternion" ? 1 - Math.cos(0.5 * tolerance) : tolerance);
+  const track: RawUserTrack<T> = raw.name === undefined
+    ? { type: raw.type, keyframes: optimizedKeyframes }
+    : { type: raw.type, name: raw.name, keyframes: optimizedKeyframes };
+  const after = getRawUserTrackStats(track);
+  return { track, before, after, removedKeyCount: before.keyCount - after.keyCount };
+}
+
 export function sampleRawUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>, ratio: number): UserTrackValue<T> {
   return sampleUserTrack(buildUserTrack(raw), ratio);
 }
@@ -240,6 +294,125 @@ function buildValidatedUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>):
   });
 
   return { type: raw.type, name: raw.name ?? "", ratios, values, steps };
+}
+
+function readOptimizationTolerance(value: number | undefined): number {
+  if (value === undefined) return 1e-3;
+  if (!isFiniteNumber(value) || value < 0) throw new Error("track optimization tolerance must be finite and non-negative");
+  return value;
+}
+
+function decimateRawUserTrackKeys<T extends UserTrackType>(raw: RawUserTrack<T>, tolerance: number): RawUserTrackKeyframe<T>[] {
+  const keyframes: RawUserTrackKeyframe<T>[] = [];
+  let previousQuat: Quat | undefined;
+  for (const key of raw.keyframes) {
+    const cloned = cloneOptimizableKey(raw.type, key, previousQuat);
+    keyframes.push(cloned);
+    if (raw.type === "quaternion") previousQuat = cloned.value as Quat;
+  }
+  if (keyframes.length >= 2) {
+    const included = new Array<boolean>(keyframes.length).fill(false);
+    const segments: [number, number][] = [[0, keyframes.length - 1]];
+    included[0] = true;
+    included[keyframes.length - 1] = true;
+
+    while (segments.length > 0) {
+      const segment = segments.pop()!;
+      const [left, right] = segment;
+      let maxDistance = -1;
+      let candidate = left;
+      for (let index = left + 1; index < right; index += 1) {
+        const key = keyframes[index]!;
+        if (!isDecimableKey(key)) {
+          candidate = index;
+          break;
+        }
+        const distance = valueDistance(raw.type, interpolateOptimizedValue(raw.type, keyframes[left]!, keyframes[right]!, key), key.value);
+        if (distance > tolerance && distance > maxDistance) {
+          maxDistance = distance;
+          candidate = index;
+        }
+      }
+      if (candidate !== left) {
+        included[candidate] = true;
+        if (candidate - left > 1) segments.push([left, candidate]);
+        if (right - candidate > 1) segments.push([candidate, right]);
+      }
+    }
+
+    keyframes.splice(0, keyframes.length, ...keyframes.filter((_, index) => included[index]));
+  }
+
+  while (keyframes.length > 0) {
+    const back = keyframes[keyframes.length - 1]!;
+    if (keyframes.length > 1 && !isDecimableKey(back)) break;
+    const reference = keyframes.length === 1 ? defaultUserTrackValue(raw.type) : keyframes[keyframes.length - 2]!.value;
+    if (valueDistance(raw.type, reference, back.value) > tolerance) break;
+    keyframes.pop();
+  }
+
+  return keyframes;
+}
+
+function cloneOptimizableKey<T extends UserTrackType>(type: T, key: RawUserTrackKeyframe<T>, previousQuat: Quat | undefined): RawUserTrackKeyframe<T> {
+  const flat = flattenTrackValue(type, key.value);
+  const value = type === "quaternion" ? fixupQuaternion(flat, previousQuat) : flat;
+  return {
+    ratio: key.ratio,
+    value: (type === "float" ? value[0]! : value) as UserTrackValue<T>,
+    interpolation: key.interpolation
+  };
+}
+
+function isDecimableKey(key: RawUserTrackKeyframe): boolean {
+  return key.interpolation !== "step";
+}
+
+function interpolateOptimizedValue<T extends UserTrackType>(
+  type: T,
+  left: RawUserTrackKeyframe<T>,
+  right: RawUserTrackKeyframe<T>,
+  reference: RawUserTrackKeyframe<T>
+): UserTrackValue<T> {
+  const alpha = (reference.ratio - left.ratio) / (right.ratio - left.ratio);
+  if (type === "quaternion") return nlerpQuat(left.value as Quat, right.value as Quat, alpha) as UserTrackValue<T>;
+  if (type === "float") {
+    const a = left.value as number;
+    const b = right.value as number;
+    return (a + (b - a) * clamp01(alpha)) as UserTrackValue<T>;
+  }
+  const amount = clamp01(alpha);
+  const stride = trackValueSize(type);
+  const a = left.value as ArrayLike<number>;
+  const b = right.value as ArrayLike<number>;
+  const result: number[] = [];
+  for (let component = 0; component < stride; component += 1) result.push(a[component]! + (b[component]! - a[component]!) * amount);
+  return result as UserTrackValue<T>;
+}
+
+function valueDistance<T extends UserTrackType>(type: T, a: UserTrackValue<T>, b: UserTrackValue<T>): number {
+  if (type === "quaternion") return 1 - Math.min(1, Math.abs(dotQuat(normalizeQuat(a as Quat), normalizeQuat(b as Quat))));
+  if (type === "float") return Math.abs((a as number) - (b as number));
+  const stride = trackValueSize(type);
+  const left = a as ArrayLike<number>;
+  const right = b as ArrayLike<number>;
+  let squared = 0;
+  for (let component = 0; component < stride; component += 1) {
+    const delta = left[component]! - right[component]!;
+    squared += delta * delta;
+  }
+  return Math.sqrt(squared);
+}
+
+function nlerpQuat(left: Quat, right: Quat, alpha: number): Quat {
+  const end = ensureShortestQuat(left, right);
+  const amount = clamp01(alpha);
+  return normalizeQuat([
+    left[0] + (end[0] - left[0]) * amount,
+    left[1] + (end[1] - left[1]) * amount,
+    left[2] + (end[2] - left[2]) * amount,
+    left[3] + (end[3] - left[3]) * amount
+  ]);
 }
 
 function patchBeginEndKeys<T extends UserTrackType>(raw: RawUserTrack<T>): RawUserTrackKeyframe<T>[] {
