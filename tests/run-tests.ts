@@ -4170,6 +4170,13 @@ assert.throws(
   /attachment offset matrix values must be finite/,
   "attachment bindings should reject non-finite offset matrices"
 );
+const mutatedBoundAttachment = createAttachmentBinding({ skeleton, joint: "head", offset: attachmentOffset });
+mutatedBoundAttachment.offsetMatrix[0] = Number.NaN;
+assert.throws(
+  () => computeBoundAttachmentTransform({ modelPose: models, binding: mutatedBoundAttachment }),
+  /attachment binding joint 2 offset matrix values must be finite/,
+  "bound attachment evaluation should reject offset matrices mutated after binding"
+);
 assertMat4NearlyEqual(
   computeBoundAttachmentTransform({ modelPose: models, binding: boundHeadAttachment }),
   computeBoundAttachmentTransform({ modelPose: models, binding: boundHeadAttachment }),
@@ -4394,6 +4401,20 @@ for (const transform of malformedAdditivePose) {
     "malformed additive masks should not produce non-finite transforms"
   );
 }
+const invalidUnmaskedAdditiveDelta = clonePose(skeleton.restPose);
+invalidUnmaskedAdditiveDelta[1]!.translation = [Number.NaN, 0, 0];
+invalidUnmaskedAdditiveDelta[1]!.rotation = [0, 0, 0, 0];
+invalidUnmaskedAdditiveDelta[1]!.scale = [1, Number.POSITIVE_INFINITY, 1];
+const invalidUnmaskedAdditivePose = applyAdditivePose(skeleton.restPose, invalidUnmaskedAdditiveDelta, 1);
+assert.deepEqual(
+  invalidUnmaskedAdditivePose[1],
+  skeleton.restPose[1],
+  "invalid unmasked additive deltas should leave the base joint unchanged instead of leaking non-finite output"
+);
+assert.ok(
+  invalidUnmaskedAdditivePose.every((transform) => transform.translation.every(Number.isFinite) && transform.rotation.every(Number.isFinite) && transform.scale.every(Number.isFinite)),
+  "invalid unmasked additive deltas should not produce non-finite transforms"
+);
 
 const shortAdditiveSample = clonePose(skeleton.restPose);
 shortAdditiveSample[0]!.translation = [3, 0, 0];
@@ -6059,6 +6080,20 @@ assert.equal(
   deterministicAttentionB.choose(500, deterministicTargets)?.id,
   "positive-weight attention selection should remain deterministic under a fixed seed"
 );
+const overflowAttention = new AttentionScheduler("attention-overflow");
+assert.equal(
+  overflowAttention.choose(
+    100,
+    [
+      { id: "first-huge", position: [0, 0, 1], weight: Number.MAX_VALUE },
+      { id: "second-huge", position: [1, 0, 1], weight: Number.MAX_VALUE }
+    ],
+    1000,
+    1000
+  )?.id,
+  "first-huge",
+  "huge finite attention weights should preserve weighted selection instead of overflowing to the last target"
+);
 const finiteDwellAttention = new AttentionScheduler("attention-dwell");
 assert.equal(
   finiteDwellAttention.choose(Number.POSITIVE_INFINITY, [{ id: "finite-dwell", position: [0, 0, 1], weight: 1 }], Number.NaN, Number.POSITIVE_INFINITY)?.id,
@@ -6099,6 +6134,31 @@ const finitePresenceFrame = presenceA.update({
 });
 assert.ok(finitePresenceFrame.lookAtTarget.every(Number.isFinite), "presence look target should stay finite for non-finite timing");
 assert.ok(finitePresenceFrame.boneTargets.every((target) => target.rotation.every(Number.isFinite)), "presence bone targets should stay finite for non-finite timing");
+const hostileCuePresence = new PresencePlanner("presence-hostile-cue", Number.NaN);
+hostileCuePresence.scheduleCue("nod", Number.NaN, Number.NaN, Number.NaN, 1);
+const hostileCuePresenceFrame = hostileCuePresence.update({
+  nowMs: 0.5,
+  elapsedSeconds: Number.NaN,
+  deltaSeconds: 1 / 30
+});
+assert.ok(hostileCuePresenceFrame.cueAmounts.nod > 0, "presence cues should sanitize non-finite schedule times instead of being dropped");
+assert.ok(
+  Object.values(hostileCuePresenceFrame.cueAmounts).every(Number.isFinite) &&
+    hostileCuePresenceFrame.lookAtTarget.every(Number.isFinite) &&
+    hostileCuePresenceFrame.boneTargets.every((target) => target.rotation.every(Number.isFinite)),
+  "presence planning should stay finite after hostile cue timing"
+);
+const hostileSpeechPresence = new PresencePlanner("presence-hostile-speech");
+hostileSpeechPresence.scheduleSpeechPerformance("hello world", Number.NaN, Number.NaN);
+const hostileSpeechPresenceFrame = hostileSpeechPresence.update({
+  nowMs: 0.5,
+  elapsedSeconds: 0,
+  deltaSeconds: 1 / 30
+});
+assert.ok(
+  Object.values(hostileSpeechPresenceFrame.cueAmounts).every(Number.isFinite),
+  "speech performance scheduling should sanitize non-finite duration and start times"
+);
 
 const aim = solveAimIk({
   target: [0, 1, 0],
@@ -6864,6 +6924,20 @@ const partialReleaseMixed = partialReleaseVisemes.update(1 / 30);
 assert.ok(partialReleaseMixed.ih < beforePartialRelease.ih, "partial viseme release maps should fall back for unspecified visemes");
 assert.ok(Math.abs(partialReleaseMixed.aa - beforePartialRelease.aa * (1 - dampAlpha(40, 1 / 30))) < 1e-6, "partial viseme release maps should respect specified speeds");
 assert.ok(Math.abs(partialReleaseMixed.ih - beforePartialRelease.ih * (1 - dampAlpha(20, 1 / 30))) < 1e-6, "partial viseme release maps should use the default release speed");
+const malformedSpeedVisemes = new VisemeMixer({ attack: { aa: Number.NaN }, release: { aa: Number.NaN }, maxTotal: 1 });
+malformedSpeedVisemes.setTarget({ aa: 0.5 });
+const malformedSpeedAttack = malformedSpeedVisemes.update(1 / 30);
+assert.ok(
+  Math.abs(malformedSpeedAttack.aa - 0.5 * dampAlpha(30, 1 / 30)) < 1e-6,
+  "malformed viseme attack speeds should fall back instead of freezing the channel"
+);
+malformedSpeedVisemes.setTarget({});
+const beforeMalformedSpeedRelease = { ...malformedSpeedVisemes.current };
+const malformedSpeedRelease = malformedSpeedVisemes.update(1 / 30);
+assert.ok(
+  Math.abs(malformedSpeedRelease.aa - beforeMalformedSpeedRelease.aa * (1 - dampAlpha(20, 1 / 30))) < 1e-6,
+  "malformed viseme release speeds should fall back instead of freezing the channel"
+);
 const hostileComposedExpressions = composeFacialExpressions({
   visemes: { aa: Number.NaN, ih: -0.5, ou: 2, ee: 0.4, oh: Number.POSITIVE_INFINITY },
   blink: Number.NaN,
@@ -6886,6 +6960,13 @@ blink.trigger(32, 100);
 assert.equal(blink.update(48, 1 / 60, 0.5), 1);
 assert.equal(Number.isFinite(blink.update(200, Number.NaN, 0.5)), true, "blink scheduler should ignore non-finite delta time");
 assert.equal(blink.update(216, Number.NaN, 0.5), blink.update(216, Number.NaN, 0.5), "blink scheduler should keep non-finite delta decay deterministic");
+const hostileBlink = new BlinkScheduler("hostile-blink", Number.NaN);
+hostileBlink.trigger(Number.NaN, Number.NaN);
+assert.equal(hostileBlink.update(0, 1 / 60, 0.5), 1, "blink triggers should sanitize non-finite hold timing");
+assert.ok(
+  Number.isFinite(hostileBlink.state.nextAtMs) && Number.isFinite(hostileBlink.state.holdUntilMs),
+  "blink scheduler should keep timing state finite after hostile trigger inputs"
+);
 
 const facial = new FacialExpressionMixer({
   visemes: {
@@ -6909,6 +6990,19 @@ assert.ok(faceState.mouthLevel > 0);
 assert.ok(faceState.visemes.aa + faceState.visemes.ee <= 0.4201);
 assert.equal(faceState.expressions.blink, 1);
 assert.ok(faceState.expressions.happy > 0.1);
+const malformedSpeedFacial = new FacialExpressionMixer({ mouthAttack: Number.NaN, mouthRelease: Number.NaN });
+malformedSpeedFacial.setTarget({ targetMouth: 1 });
+const malformedMouthAttackState = malformedSpeedFacial.update(1 / 30, { talking: true });
+assert.ok(
+  Math.abs(malformedMouthAttackState.mouthLevel - dampAlpha(28, 1 / 30)) < 1e-6,
+  "malformed mouth attack speeds should fall back instead of freezing mouth motion"
+);
+const beforeMalformedMouthRelease = malformedSpeedFacial.mouthLevel;
+const malformedMouthReleaseState = malformedSpeedFacial.update(1 / 30, { talking: false });
+assert.ok(
+  Math.abs(malformedMouthReleaseState.mouthLevel - beforeMalformedMouthRelease * (1 - dampAlpha(18, 1 / 30))) < 1e-6,
+  "malformed mouth release speeds should fall back instead of freezing mouth motion"
+);
 
 const metric = poseRotationMetric(skeleton.restPose, evaluated.localPose);
 assert.ok(metric.maxRotationDelta > 0);

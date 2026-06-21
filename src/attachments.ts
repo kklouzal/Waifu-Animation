@@ -118,7 +118,10 @@ export function computeBoundAttachmentTransform(input: BoundAttachmentTransformI
   }
   const jointModel = input.modelPose[jointIndex];
   if (!jointModel) throw new Error(`attachment binding joint index ${jointIndex} has no model matrix`);
-  return multiplyMat4(cloneFiniteMat4(jointModel, `attachment binding joint ${jointIndex} model matrix`), input.binding.offsetMatrix);
+  return multiplyMat4(
+    cloneFiniteMat4(jointModel, `attachment binding joint ${jointIndex} model matrix`),
+    cloneFiniteMat4(input.binding.offsetMatrix, `attachment binding joint ${jointIndex} offset matrix`)
+  );
 }
 
 export function computeBoundAttachmentTransforms(input: BoundAttachmentTransformsInput): BoundAttachmentTransform[] {

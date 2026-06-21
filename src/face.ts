@@ -71,7 +71,8 @@ export class VisemeMixer {
 }
 
 function visemeSpeedFor(speed: VisemeSpeed, name: VisemeName, defaultSpeed: number): number {
-  return typeof speed === "number" ? speed : speed[name] ?? defaultSpeed;
+  const value = typeof speed === "number" ? speed : speed[name];
+  return finiteNonNegative(value, defaultSpeed);
 }
 
 function visemeWeights(read: (name: VisemeName) => number): VisemeWeights {
@@ -96,39 +97,45 @@ export class BlinkScheduler {
 
   constructor(seed: string | number, nowMs = 0) {
     this.random = createSeededRandom(seed);
-    this.state = { value: 0, nextAtMs: nowMs + randomRange(this.random, 1200, 4200), holdUntilMs: 0 };
+    const now = finiteNonNegative(nowMs, 0);
+    this.state = { value: 0, nextAtMs: now + randomRange(this.random, 1200, 4200), holdUntilMs: 0 };
   }
 
   trigger(nowMs: number, holdMs = 115): void {
-    if (nowMs <= this.state.holdUntilMs) {
+    const now = finiteNonNegative(nowMs, 0);
+    const hold = finiteNonNegative(holdMs, 115);
+    if (now <= this.state.holdUntilMs) {
       this.state.value = 1;
       return;
     }
-    const holdUntil = nowMs + Math.max(0, holdMs);
+    const holdUntil = now + hold;
     this.state.value = 1;
     this.state.holdUntilMs = Math.max(this.state.holdUntilMs, holdUntil);
     this.state.nextAtMs = Math.max(this.state.nextAtMs, this.state.holdUntilMs + randomRange(this.random, 900, 2100));
   }
 
   maybeTrigger(nowMs: number, probability: number, holdMs = 115): boolean {
-    if (nowMs <= this.state.holdUntilMs) return false;
+    const now = finiteNonNegative(nowMs, 0);
+    if (now <= this.state.holdUntilMs) return false;
     if (this.random() >= clamp01(probability)) return false;
-    this.trigger(nowMs, holdMs);
+    this.trigger(now, holdMs);
     return true;
   }
 
   update(nowMs: number, deltaSeconds: number, attentiveness = 0.5): number {
-    if (nowMs <= this.state.holdUntilMs) {
+    const now = finiteNonNegative(nowMs, 0);
+    const dt = finiteNonNegative(deltaSeconds, 0);
+    if (now <= this.state.holdUntilMs) {
       this.state.value = 1;
       return this.state.value;
     }
-    if (nowMs >= this.state.nextAtMs) {
+    if (now >= this.state.nextAtMs) {
       this.state.value = 1;
-      this.state.holdUntilMs = nowMs + randomRange(this.random, 90, 145);
-      this.state.nextAtMs = nowMs + randomRange(this.random, 1500, 4300 - clamp01(attentiveness) * 900);
+      this.state.holdUntilMs = now + randomRange(this.random, 90, 145);
+      this.state.nextAtMs = now + randomRange(this.random, 1500, 4300 - clamp01(attentiveness) * 900);
       return this.state.value;
     }
-    const alpha = dampAlpha(20, deltaSeconds);
+    const alpha = dampAlpha(20, dt);
     this.state.value += (0 - this.state.value) * alpha;
     return this.state.value;
   }
@@ -169,8 +176,8 @@ export class FacialExpressionMixer {
 
   constructor(options: FacialExpressionMixerOptions = {}) {
     this.visemes = new VisemeMixer(options.visemes);
-    this.mouthAttack = options.mouthAttack ?? 28;
-    this.mouthRelease = options.mouthRelease ?? 18;
+    this.mouthAttack = finiteNonNegative(options.mouthAttack, 28);
+    this.mouthRelease = finiteNonNegative(options.mouthRelease, 18);
   }
 
   setTarget(target: Pick<FacialExpressionInput, "targetMouth" | "targetVisemes">): void {

@@ -80,25 +80,31 @@ export class AttentionScheduler {
       ? (targets.find((target) => target.id === this.currentId && isEligibleAttentionTarget(target)) ?? null)
       : null;
     if (now >= this.nextSwitchAt || !currentTarget || !isEligibleAttentionTarget(currentTarget)) {
-      let total = 0;
+      let maxWeight = 0;
       let lastEligible = -1;
       for (let i = 0; i < targets.length; i += 1) {
         const target = targets[i]!;
         if (!isEligibleAttentionTarget(target)) continue;
-        total += finiteAttentionWeight(target.weight);
+        maxWeight = Math.max(maxWeight, finiteAttentionWeight(target.weight));
         lastEligible = i;
       }
-      if (total <= 0 || lastEligible < 0) {
+      if (maxWeight <= 0 || lastEligible < 0) {
         this.currentId = null;
         this.nextSwitchAt = 0;
         return null;
+      }
+      let total = 0;
+      for (let i = 0; i < targets.length; i += 1) {
+        const target = targets[i]!;
+        if (!isEligibleAttentionTarget(target)) continue;
+        total += finiteAttentionWeight(target.weight) / maxWeight;
       }
       let pick = this.random() * total;
       this.currentId = targets[lastEligible]!.id;
       for (let i = 0; i < targets.length; i += 1) {
         const target = targets[i]!;
         if (!isEligibleAttentionTarget(target)) continue;
-        pick -= finiteAttentionWeight(target.weight);
+        pick -= finiteAttentionWeight(target.weight) / maxWeight;
         if (pick <= 0) {
           this.currentId = target.id;
           break;
@@ -317,16 +323,20 @@ export class PresencePlanner {
   constructor(seed: string | number, nowMs = 0) {
     this.random = createSeededRandom(seed);
     this.aliveSeed = randomRange(this.random, 0, 1000);
-    this.nextIdleShiftAt = nowMs + 1200;
-    this.nextBackchannelAt = nowMs + 3200;
-    this.nextSaccadeAt = nowMs + 700;
+    const now = finiteNonNegative(nowMs, 0);
+    this.nextIdleShiftAt = now + 1200;
+    this.nextBackchannelAt = now + 3200;
+    this.nextSaccadeAt = now + 700;
   }
 
   scheduleCue(kind: PresenceCueKind, nowMs: number, delayMs: number, durationMs: number, intensity = 1, gaze?: PresenceGaze): void {
+    const now = finiteNonNegative(nowMs, 0);
+    const delay = finiteNonNegative(delayMs, 0);
+    const duration = Math.max(1, finiteNonNegative(durationMs, 1));
     const cue: PresenceCue = {
       kind,
-      startMs: nowMs + Math.max(0, delayMs),
-      durationMs: Math.max(1, durationMs),
+      startMs: now + delay,
+      durationMs: duration,
       intensity: clamp01(intensity)
     };
     if (gaze) cue.gaze = gaze;
@@ -335,45 +345,48 @@ export class PresencePlanner {
 
   scheduleSpeechPerformance(text: string, durationMs: number, nowMs: number, affectInput?: PresenceAffect): void {
     const affect = normalizeAffect(affectInput);
+    const now = finiteNonNegative(nowMs, 0);
+    const duration = finiteNonNegative(durationMs, 0);
     const words = text.trim().split(/\s+/).filter(Boolean);
     const beatCount = Math.min(12, Math.max(3, Math.ceil(words.length / 4)));
-    this.scheduleCue("lookCamera", nowMs, 80, Math.min(900, durationMs * 0.22), 0.8, "camera");
-    this.scheduleCue("blink", nowMs, Math.min(420, durationMs * 0.18), 140, 0.8);
-    this.scheduleCue("smile", nowMs, Math.max(180, durationMs * 0.08), Math.min(1800, durationMs * 0.46), 0.2 + affect.rapport * 0.32);
-    this.scheduleCue("nod", nowMs, 140, 420, 0.35 + affect.attentiveness * 0.24);
+    this.scheduleCue("lookCamera", now, 80, Math.min(900, duration * 0.22), 0.8, "camera");
+    this.scheduleCue("blink", now, Math.min(420, duration * 0.18), 140, 0.8);
+    this.scheduleCue("smile", now, Math.max(180, duration * 0.08), Math.min(1800, duration * 0.46), 0.2 + affect.rapport * 0.32);
+    this.scheduleCue("nod", now, 140, 420, 0.35 + affect.attentiveness * 0.24);
 
     for (let i = 0; i < beatCount; i += 1) {
-      const t = ((i + 0.55) / (beatCount + 0.45)) * durationMs;
+      const t = ((i + 0.55) / (beatCount + 0.45)) * duration;
       const strong = i % 3 === 1 ? 1 : 0.64;
-      this.scheduleCue(i % 3 === 2 ? "nod" : "beat", nowMs, t, 260 + strong * 120, strong);
+      this.scheduleCue(i % 3 === 2 ? "nod" : "beat", now, t, 260 + strong * 120, strong);
       if (i > 0 && i % 4 === 0) {
-        this.scheduleCue("glance", nowMs, Math.max(0, t - 140), 520, 0.48, i % 2 === 0 ? "left" : "right");
-        this.scheduleCue("lookCamera", nowMs, t + 340, 620, 0.64, "camera");
+        this.scheduleCue("glance", now, Math.max(0, t - 140), 520, 0.48, i % 2 === 0 ? "left" : "right");
+        this.scheduleCue("lookCamera", now, t + 340, 620, 0.64, "camera");
       }
     }
 
-    this.scheduleCue("settle", nowMs, durationMs + 80, 900, 0.75);
+    this.scheduleCue("settle", now, duration + 80, 900, 0.75);
   }
 
   onBehaviorChange(behaviorInput: PresenceBehavior, affectInput: PresenceAffect | undefined, nowMs: number): void {
     const behavior = normalizeBehavior(behaviorInput);
     const affect = normalizeAffect(affectInput);
+    const now = finiteNonNegative(nowMs, 0);
     if (behavior.state === "thinking") {
-      this.scheduleCue("thinkingPulse", nowMs, 0, 1400, 0.65);
-      this.scheduleCue("glance", nowMs, 120, 900, 0.7, "down");
+      this.scheduleCue("thinkingPulse", now, 0, 1400, 0.65);
+      this.scheduleCue("glance", now, 120, 900, 0.7, "down");
     }
     if (behavior.gesture === "shrug") {
-      this.scheduleCue("shrug", nowMs, 0, 980, 0.86);
-      this.scheduleCue("glance", nowMs, 120, 620, 0.34, this.random() < 0.5 ? "left" : "right");
-      this.scheduleCue("lookCamera", nowMs, 760, 620, 0.48, "camera");
+      this.scheduleCue("shrug", now, 0, 980, 0.86);
+      this.scheduleCue("glance", now, 120, 620, 0.34, this.random() < 0.5 ? "left" : "right");
+      this.scheduleCue("lookCamera", now, 760, 620, 0.48, "camera");
     }
     if (behavior.state === "listening") {
-      this.nextBackchannelAt = nowMs + randomRange(this.random, 900, 2300) - affect.attentiveness * 120;
+      this.nextBackchannelAt = now + randomRange(this.random, 900, 2300) - affect.attentiveness * 120;
     }
   }
 
   update(input: PresenceUpdateInput): PresenceFrame {
-    const nowMs = input.nowMs;
+    const nowMs = finiteNonNegative(input.nowMs, 0);
     const elapsedSeconds = finiteNonNegative(input.elapsedSeconds, 0);
     const deltaSeconds = finiteNonNegative(input.deltaSeconds, 0);
     const behavior = normalizeBehavior(input.behavior);

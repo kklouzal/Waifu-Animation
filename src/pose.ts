@@ -196,5 +196,10 @@ export function additiveDeltaPose(restPose: readonly Transform[], samplePose: re
 export function applyAdditivePose(base: readonly Transform[], deltaPose: readonly Transform[], weight: number, mask?: JointMask): Pose {
   if (base.length !== deltaPose.length) throw new Error("additive pose length mismatch");
   const layerWeight = Number.isFinite(weight) ? weight : 0;
-  return base.map((transform, index) => applyTransformDelta(transform, deltaPose[index]!, layerWeight * readMaskWeight(mask, index)));
+  return base.map((transform, index) => {
+    const baseTransform = cloneTransform(transform);
+    const delta = deltaPose[index];
+    if (!delta || !isFiniteTransform(delta)) return baseTransform;
+    return applyTransformDelta(baseTransform, delta, layerWeight * readMaskWeight(mask, index));
+  });
 }
