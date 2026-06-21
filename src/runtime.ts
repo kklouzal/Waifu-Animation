@@ -218,7 +218,7 @@ export class AnimationRuntime {
   crossfade(id: string, clip: AnimationClip, options: CrossfadeOptions = {}): AnimationLayer {
     const existing = this.layers.get(id);
     const resetTime = options.resetTime ?? !existing;
-    const blendMode = options.blendMode ?? "override";
+    const blendMode = options.blendMode ?? existing?.blendMode ?? "override";
     const targetWeight = sanitizeLayerWeight(blendMode, options.targetWeight ?? options.weight ?? 1, 1);
     const fadeSpeed = finiteNonNegative(options.fadeSpeed, 8);
     const priority = finiteNonNegative(options.priority ?? existing?.priority, 0);

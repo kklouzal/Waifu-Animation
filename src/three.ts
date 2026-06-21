@@ -497,7 +497,9 @@ export function prepareThreeRuntimeAction<TEntry extends AnimationManifestEntry>
 
 export function calculateThreeBaseLoopSeamWindow(duration: number, options: ThreeBaseLoopSeamWindowOptions = {}): number {
   const safeDuration = sanitizeThreeRuntimeTime(duration);
-  return clamp(safeDuration * finiteNonNegative(options.fraction ?? 0.18, 0.18), options.min ?? 0.32, options.max ?? 0.72);
+  const minimum = finiteNonNegative(options.min, 0.32);
+  const maximum = Math.max(minimum, finiteNonNegative(options.max, 0.72));
+  return clamp(safeDuration * finiteNonNegative(options.fraction ?? 0.18, 0.18), minimum, maximum);
 }
 
 export function calculateThreeBaseLoopTransitionWeights(options: ThreeBaseLoopTransitionOptions): ThreeBaseLoopTransitionWeights {
@@ -516,10 +518,12 @@ export function calculateThreeBaseLoopTransitionWeights(options: ThreeBaseLoopTr
 export function calculateThreeOverlayFade(options: ThreeOverlayFadeOptions): ThreeOverlayFadeResult {
   const duration = sanitizeThreeRuntimeTime(options.duration);
   const time = sanitizeThreeRuntimeTime(options.time);
+  const minWindow = finiteNonNegative(options.minWindow, 0.18);
+  const maxWindow = Math.max(minWindow, finiteNonNegative(options.maxWindow, 0.42));
   const fadeOutWindow = clamp(
     duration * finiteNonNegative(options.windowFraction ?? 0.22, 0.22),
-    options.minWindow ?? 0.18,
-    options.maxWindow ?? 0.42
+    minWindow,
+    maxWindow
   );
   const completionEpsilon = finiteNonNegative(options.completionEpsilon ?? 0.02, 0.02);
   const fadingOut = time >= Math.max(0, duration - fadeOutWindow);

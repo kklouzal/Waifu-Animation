@@ -4275,6 +4275,23 @@ assert.equal(baseAfterAdditiveTarget?.targetWeight, 1, "additive crossfade shoul
 assert.ok(Math.abs(additiveTargetAfterFade!.weight - 1) < 1e-4, "additive crossfade target should finish fading in");
 assert.ok(Math.abs(finishedAdditiveTargetCrossfade.localPose[2]!.translation[0] - 3) < 1e-4, "additive crossfade target should compose fully on top of the base pose");
 
+const runtimeReplaceExistingAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+runtimeReplaceExistingAdditive.setLayer("base", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 2 });
+runtimeReplaceExistingAdditive.setLayer("additive", additiveNudgeClip, { weight: 1, targetWeight: 1, priority: 2, blendMode: "additive" });
+runtimeReplaceExistingAdditive.crossfade(
+  "additive",
+  { id: "additive-replacement", duration: 1, tracks: [makeTransformTrack("head", "translation", [4, 0, 0])] },
+  { resetTime: true, fadeSpeed: 1 }
+);
+runtimeReplaceExistingAdditive.update(Math.log(2));
+const replacedExistingAdditive = runtimeReplaceExistingAdditive.evaluate();
+const baseDuringExistingAdditiveReplace = replacedExistingAdditive.activeLayers.find((layer) => layer.id === "base");
+const replacedExistingAdditiveLayer = replacedExistingAdditive.activeLayers.find((layer) => layer.id === "additive");
+assert.equal(replacedExistingAdditiveLayer?.blendMode, "additive", "crossfading an existing additive layer should preserve its blend mode by default");
+assert.equal(baseDuringExistingAdditiveReplace?.targetWeight, 1, "replacing an additive layer should not implicitly fade same-priority override layers");
+assert.ok(Math.abs(replacedExistingAdditiveLayer!.weight - 0.5) < 1e-6, "replaced additive layers should still honor resetTime fade-in");
+assert.ok(Math.abs(replacedExistingAdditive.localPose[2]!.translation[0] - 4) < 1e-6, "replaced additive layers should compose over the base pose instead of replacing it");
+
 const runtimeSubtractiveAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
 runtimeSubtractiveAdditive.setLayer("base", crossfadeNewClip, { weight: 1, targetWeight: 1 });
 runtimeSubtractiveAdditive.setLayer("subtract", additiveNudgeClip, { weight: -2, targetWeight: -2, blendMode: "additive" });
@@ -6766,6 +6783,7 @@ assert.equal(preparedOverlayAction.effectiveTimeScale, 1.25);
 assert.equal(calculateThreeBaseLoopSeamWindow(Number.NaN), 0.32);
 assert.equal(calculateThreeBaseLoopSeamWindow(2), 0.36);
 assert.equal(calculateThreeBaseLoopSeamWindow(10), 0.72);
+assert.equal(calculateThreeBaseLoopSeamWindow(2, { min: Number.NaN, max: Number.NaN }), 0.36, "base loop seam helper should sanitize non-finite bounds");
 const transitionWeights = calculateThreeBaseLoopTransitionWeights({ elapsed: 0.5, duration: 1, fromWeight: 0.8, toWeight: 0.5 });
 assert.ok(Math.abs(transitionWeights.progress - 0.5) < 1e-6);
 assert.ok(Math.abs(transitionWeights.fromWeight - 0.4) < 1e-6);
@@ -6794,6 +6812,17 @@ assert.equal(overlayFadeOut.fadeOutWindow, 0.42);
 assert.equal(overlayFadeOut.fadingOut, true);
 assert.equal(overlayFadeOut.targetWeight, 0);
 assert.ok(Math.abs(overlayFadeOut.nextWeight - 0.25) < 1e-6);
+const overlayFadeSanitizedBounds = calculateThreeOverlayFade({
+  time: 1.7,
+  duration: 2,
+  currentWeight: 0.5,
+  targetWeight: 0.8,
+  deltaSeconds: 0,
+  minWindow: Number.NaN,
+  maxWindow: Number.NaN
+});
+assert.equal(overlayFadeSanitizedBounds.fadeOutWindow, 0.42, "overlay fade helper should sanitize non-finite window bounds");
+assert.equal(overlayFadeSanitizedBounds.fadingOut, true);
 assert.equal(
   calculateThreeOverlayFade({ time: 2, duration: 2, currentWeight: 0.005, targetWeight: 1, deltaSeconds: 0 }).shouldStop,
   true

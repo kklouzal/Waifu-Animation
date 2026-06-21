@@ -25,7 +25,7 @@
 
 - Override blending now exposes an Ozz-style `DEFAULT_BLEND_THRESHOLD` (`0.1`) and `BlendPoseOptions.threshold`.  Per-joint accumulated override weight below the threshold blends back toward the skeleton rest pose, matching Ozz's bind/rest fallback intent and preventing tiny-weight layers from fully owning a joint during fades or partial masks.
 - `AnimationRuntime` accepts `AnimationRuntimeOptions.blendThreshold` and routes override evaluation through priority groups before additive layers and local-to-model conversion. Layers at the same priority use weighted blending; higher-priority groups blend over lower-priority results only for joints they own by weight and mask.
-- `AnimationRuntime.crossfade` creates or replaces an override target layer, fades matching same-priority override sources toward zero, leaves additive layers active, and relies on the existing priority/mask threshold evaluation for final pose composition.
+- `AnimationRuntime.crossfade` creates or replaces a target layer, preserves an existing layer's blend mode unless the caller overrides it, fades matching same-priority override sources toward zero only for override targets, leaves additive layers active, and relies on the existing priority/mask threshold evaluation for final pose composition.
 - The optional Three adapter owns `applyThreePresenceTargets`, a reusable bridge for consumers that opt into applying package-planned procedural presence bone targets to Three/VRM bones with finite-target checks, clamped influence, damped quaternion slerp, and missing-bone telemetry.
 
 ### 2026-06-14 final polish
