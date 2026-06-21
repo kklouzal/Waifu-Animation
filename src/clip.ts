@@ -707,6 +707,7 @@ export function validatePackedRuntimeAnimation(animation: PackedRuntimeAnimation
   }
 
   validatePackedArchiveConsistency(issues, candidate, controllers, iframeTimes);
+  validatePackedBufferCoverage(issues, controllers, times, values);
   return issues;
 }
 
@@ -1242,6 +1243,64 @@ function validatePackedArchiveConsistency(
   if (archive.iframeCount !== iframeTimes.length) issues.push({ message: "packed runtime animation archive iframeCount does not match iframe table" });
 }
 
+function validatePackedBufferCoverage(
+  issues: ClipValidationIssue[],
+  controllers: readonly PackedRuntimeAnimationKeyController[],
+  times: readonly number[],
+  values: readonly number[]
+): void {
+  if (controllers.length === 0) return;
+  const timeCoverage = new Uint8Array(times.length);
+  const valueCoverage = new Uint8Array(values.length);
+  let reportedTimeOverlap = false;
+  let reportedValueOverlap = false;
+
+  for (let index = 0; index < controllers.length; index += 1) {
+    const controller = controllers[index]!;
+    if (!isPackedKeyControllerObject(controller)) continue;
+    const property = normalizedTrackProperty(String(controller.normalizedProperty));
+    const stride = property ? trackStride(property) : null;
+    const keyCountValid = Number.isInteger(controller.keyCount) && controller.keyCount > 0;
+    const timeRangeValid = Number.isInteger(controller.timeOffset) && controller.timeOffset >= 0 && controller.timeOffset + Math.max(0, controller.keyCount) <= times.length;
+    const valueRangeValid =
+      stride !== null &&
+      controller.stride === stride &&
+      Number.isInteger(controller.valueOffset) &&
+      controller.valueOffset >= 0 &&
+      controller.valueOffset + Math.max(0, controller.keyCount) * stride <= values.length;
+    const targetName = controllerTargetName(controller);
+
+    if (keyCountValid && timeRangeValid) {
+      for (let key = 0; key < controller.keyCount; key += 1) {
+        const offset = controller.timeOffset + key;
+        if (timeCoverage[offset] && !reportedTimeOverlap) {
+          issues.push({ track: index, joint: targetName, property: String(controller.property), message: "packed key controller time ranges must not overlap" });
+          reportedTimeOverlap = true;
+        }
+        timeCoverage[offset] = 1;
+      }
+    }
+
+    if (keyCountValid && valueRangeValid && stride !== null) {
+      for (let component = 0; component < controller.keyCount * stride; component += 1) {
+        const offset = controller.valueOffset + component;
+        if (valueCoverage[offset] && !reportedValueOverlap) {
+          issues.push({ track: index, joint: targetName, property: String(controller.property), message: "packed key controller value ranges must not overlap" });
+          reportedValueOverlap = true;
+        }
+        valueCoverage[offset] = 1;
+      }
+    }
+  }
+
+  if (timeCoverage.some((covered) => covered === 0)) {
+    issues.push({ message: "packed runtime animation time buffer contains unreferenced entries" });
+  }
+  if (valueCoverage.some((covered) => covered === 0)) {
+    issues.push({ message: "packed runtime animation value buffer contains unreferenced entries" });
+  }
+}
+
 function validatePackedIframeTable(
   issues: ClipValidationIssue[],
   duration: number,
@@ -1360,6 +1419,12 @@ function validatePackedControllerTarget(
       issues.push({ track: index, joint: targetName, property: controller.property, message: "packed key controller does not map to skeleton" });
     } else if (controller.jointIndex !== undefined && controller.jointIndex !== jointIndex) {
       issues.push({ track: index, joint: targetName, property: controller.property, message: "packed key controller jointIndex does not match skeleton target" });
+    }
+  }
+  if (typeof controller.targetKey === "string" && controller.targetKey.length > 0) {
+    const expectedTargetKey = skeleton && jointIndex >= 0 ? String(jointIndex) : String(controller.joint ?? controller.humanBone ?? "");
+    if (expectedTargetKey.length > 0 && controller.targetKey !== expectedTargetKey) {
+      issues.push({ track: index, joint: targetName, property: controller.property, message: "packed key controller targetKey does not match resolved target" });
     }
   }
 

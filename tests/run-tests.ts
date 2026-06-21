@@ -3077,6 +3077,46 @@ assert.ok(
   validatePackedRuntimeAnimation(staleSeekTablePacked, skeleton).some((issue) => issue.message === "packed seek table does not match key times"),
   "packed runtime validation should reject seek tables stale against packed key times"
 );
+const stalePackedTargetKey = {
+  ...packedRuntimeAnimation,
+  keyControllers: packedRuntimeAnimation.keyControllers.map((controller, index) => (index === 1 ? { ...controller, targetKey: "stale-target" } : controller))
+} as unknown as typeof packedRuntimeAnimation;
+assert.ok(
+  validatePackedRuntimeAnimation(stalePackedTargetKey, skeleton).some((issue) => issue.message === "packed key controller targetKey does not match resolved target"),
+  "packed runtime validation should reject key controllers whose targetKey no longer matches their resolved target"
+);
+const overlappingPackedBuffersBase = buildPackedRuntimeAnimation(
+  {
+    id: "packed-overlapping-buffers",
+    duration: 1,
+    tracks: [
+      { humanBone: "spine", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([1, 0, 0]) },
+      { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([2, 0, 0]) }
+    ]
+  },
+  skeleton
+);
+const overlappingPackedBuffers = {
+  ...overlappingPackedBuffersBase,
+  keyControllers: overlappingPackedBuffersBase.keyControllers.map((controller, index) =>
+    index === 1
+      ? {
+          ...controller,
+          timeOffset: overlappingPackedBuffersBase.keyControllers[0]!.timeOffset,
+          valueOffset: overlappingPackedBuffersBase.keyControllers[0]!.valueOffset
+        }
+      : controller
+  )
+} as unknown as typeof overlappingPackedBuffersBase;
+const overlappingPackedBufferIssues = validatePackedRuntimeAnimation(overlappingPackedBuffers, skeleton);
+assert.ok(
+  overlappingPackedBufferIssues.some((issue) => issue.message === "packed key controller time ranges must not overlap"),
+  "packed runtime validation should reject controllers that alias another controller's time buffer"
+);
+assert.ok(
+  overlappingPackedBufferIssues.some((issue) => issue.message === "packed key controller value ranges must not overlap"),
+  "packed runtime validation should reject controllers that alias another controller's value buffer"
+);
 const wrongPackedSkeleton = createSkeleton([{ name: "only" }]);
 assert.ok(
   validatePackedRuntimeAnimation(packedRuntimeAnimation, wrongPackedSkeleton).some((issue) => issue.message === "packed key controller does not map to skeleton"),
