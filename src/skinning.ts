@@ -1,5 +1,5 @@
 import { type Mat4, multiplyMat4 } from "./math.js";
-import { cloneFiniteMat4, isFiniteMat4, sanitizeNonNegativeInteger, sanitizePositiveInteger } from "./numeric-helpers.js";
+import { cloneFiniteMat4, finiteOr, isFiniteMat4, sanitizeNonNegativeInteger, sanitizePositiveInteger } from "./numeric-helpers.js";
 
 export type SkinningNumericArray = ArrayLike<number>;
 export type SkinningMutableArray = Float32Array | number[];
@@ -415,8 +415,4 @@ function sanitizePaletteIndex(value: number | undefined, paletteLength: number):
   const index = value as number;
   if (index < 0 || index >= paletteLength) return 0;
   return index;
-}
-
-function finiteOr(value: number | undefined, fallback: number): number {
-  return Number.isFinite(value) ? value! : fallback;
 }

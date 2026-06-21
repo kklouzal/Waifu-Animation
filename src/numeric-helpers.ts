@@ -47,6 +47,14 @@ export function finiteMat4Value(matrix: NumericArray, index: number, fallback: n
   return Number.isFinite(value) ? value! : fallback;
 }
 
+export function finiteOr(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) ? value! : fallback;
+}
+
+export function finitePositive(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export function sanitizePositiveInteger(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && value! > 0 ? value! : fallback;
 }
