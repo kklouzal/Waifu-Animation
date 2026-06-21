@@ -2019,6 +2019,39 @@ assert.ok(
 );
 const ambiguousRuntimePackedBuild = tryBuildPackedRuntimeAnimation(ambiguousRuntimeTargetClip, skeleton);
 assert.equal(ambiguousRuntimePackedBuild.ok, false, "packed runtime builds should inherit runtime target ambiguity validation");
+const ambiguousRuntimeSampleClip: AnimationClip = {
+  id: "ambiguous-runtime-sample",
+  duration: 1,
+  tracks: [
+    {
+      joint: "spine",
+      humanBone: "head",
+      property: "rotation",
+      times: toFloat32Array([0]),
+      values: toFloat32Array(quatFromAxisAngle([0, 0, 1], Math.PI / 2))
+    }
+  ]
+};
+const ambiguousRuntimeSamplePose = sampleClipToPose(skeleton, ambiguousRuntimeSampleClip, 0);
+assert.ok(
+  quaternionNearlyEqual(ambiguousRuntimeSamplePose[1]!.rotation, skeleton.restPose[1]!.rotation, 1e-6),
+  "clip sampling should skip structurally invalid ambiguous target tracks before applying their joint target"
+);
+assert.ok(
+  quaternionNearlyEqual(ambiguousRuntimeSamplePose[2]!.rotation, skeleton.restPose[2]!.rotation, 1e-6),
+  "clip sampling should skip structurally invalid ambiguous target tracks before applying their humanBone target"
+);
+const ambiguousRuntime = new AnimationRuntime(skeleton);
+ambiguousRuntime.setLayer("ambiguous", ambiguousRuntimeSampleClip, { weight: 1, targetWeight: 1 });
+const ambiguousEvaluation = ambiguousRuntime.evaluate({ diagnostics: true });
+assert.ok(
+  ambiguousEvaluation.diagnostics?.some((issue) => issue.track === 0 && issue.message === "track needs exactly one joint or humanBone target"),
+  "runtime diagnostics should keep reporting ambiguous track targets"
+);
+assert.ok(
+  quaternionNearlyEqual(ambiguousEvaluation.localPose[1]!.rotation, skeleton.restPose[1]!.rotation, 1e-6),
+  "runtime evaluation should skip structurally invalid ambiguous target tracks"
+);
 
 const validSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("valid-source-rest-quaternion");
 assert.equal(validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted, true, "valid source rest metadata on quaternion tracks should remain accepted");

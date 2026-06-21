@@ -3158,6 +3158,7 @@ function sampleClipToPoseAtResolvedTime(
   const output = Array.from({ length: skeleton.joints.length }, (_, joint) => cloneTransform(readPoseTransformOrRest(skeleton, restPose, joint)));
   for (let trackIndex = 0; trackIndex < clip.tracks.length; trackIndex += 1) {
     const track = clip.tracks[trackIndex]!;
+    if (!isSampleableTrackTarget(track)) continue;
     const jointIndex = resolveTrackJointIndex(skeleton, track);
     if (jointIndex < 0) continue;
     const property = normalizedTrackProperty(track.property);
@@ -3179,6 +3180,14 @@ function sampleClipToPoseAtResolvedTime(
     output[jointIndex] = transform;
   }
   return output;
+}
+
+function isSampleableTrackTarget(track: AnimationTrack): boolean {
+  const hasJoint = track.joint !== undefined;
+  const hasHumanBone = track.humanBone !== undefined;
+  if (hasJoint === hasHumanBone) return false;
+  if (hasJoint) return typeof track.joint === "string" && track.joint.length > 0;
+  return typeof track.humanBone === "string" && track.humanBone.length > 0 && isHumanoidBoneName(track.humanBone);
 }
 
 function retargetSampledRotation(
