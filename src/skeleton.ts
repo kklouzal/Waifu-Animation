@@ -177,6 +177,14 @@ export type LocalToModelPoseRangeOptions = {
   fromExcluded?: boolean;
 };
 
+export type JointReference = number | string;
+
+export type SkeletonJointTraversalItem = {
+  index: number;
+  parentIndex: number;
+  joint: SkeletonJoint;
+};
+
 export function createSkeleton(definitions: JointDefinition[]): Skeleton {
   if (definitions.length === 0) throw new Error("skeleton requires at least one joint");
   if (definitions.length > 1024) throw new Error("skeleton exceeds Ozz-style 1024 joint safety limit");
@@ -349,6 +357,52 @@ export function createRestPose(skeleton: Skeleton): Transform[] {
   return cloneTransformList(skeleton.restPose);
 }
 
+export function getJointLocalRestPose(skeleton: Skeleton, joint: JointReference): Transform {
+  const index = resolveRequiredJointIndex(skeleton, joint, "rest pose");
+  return cloneTransform(skeleton.restPose[index] ?? skeleton.joints[index]!.rest);
+}
+
+export function isLeaf(skeleton: Skeleton, joint: JointReference): boolean {
+  const index = resolveRequiredJointIndex(skeleton, joint, "leaf");
+  for (let childIndex = 0; childIndex < skeleton.joints.length; childIndex += 1) {
+    if (readParentIndex(skeleton, childIndex) === index) return false;
+  }
+  return true;
+}
+
+export function* iterateJointsDepthFirst(skeleton: Skeleton, from: JointReference = NO_PARENT): IterableIterator<SkeletonJointTraversalItem> {
+  const startIndex = from === NO_PARENT ? NO_PARENT : resolveRequiredJointIndex(skeleton, from, "depth-first traversal");
+  const children = collectJointChildren(skeleton);
+  const visited = new Set<number>();
+
+  function* visit(index: number): IterableIterator<SkeletonJointTraversalItem> {
+    if (visited.has(index)) return;
+    visited.add(index);
+    yield { index, parentIndex: readParentIndex(skeleton, index), joint: skeleton.joints[index]! };
+    for (const childIndex of children[index]!) {
+      yield* visit(childIndex);
+    }
+  }
+
+  if (startIndex !== NO_PARENT) {
+    yield* visit(startIndex);
+    return;
+  }
+
+  for (let index = 0; index < skeleton.joints.length; index += 1) {
+    if (readParentIndex(skeleton, index) === NO_PARENT) {
+      yield* visit(index);
+    }
+  }
+}
+
+export function* iterateJointsReverseDepthFirst(skeleton: Skeleton): IterableIterator<SkeletonJointTraversalItem> {
+  const items = Array.from(iterateJointsDepthFirst(skeleton));
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    yield items[index]!;
+  }
+}
+
 export function resolveJointIndex(skeleton: Skeleton, nameOrHumanoid: string): number {
   const direct = skeleton.nameToIndex.get(nameOrHumanoid);
   if (direct !== undefined) return direct;
@@ -412,4 +466,31 @@ function sanitizeLocalToModelBoundary(value: number | undefined, fallback: numbe
   if (resolved === NO_PARENT) return resolved;
   if (resolved < 0) throw new Error(`local-to-model ${label} is out of range`);
   return Math.min(resolved, jointCount - 1);
+}
+
+function resolveRequiredJointIndex(skeleton: Skeleton, joint: JointReference, label: string): number {
+  if (typeof joint === "string") {
+    const index = resolveJointIndex(skeleton, joint);
+    if (index < 0) throw new Error(`${label} joint ${joint} was not found`);
+    return index;
+  }
+  if (!Number.isInteger(joint) || joint < 0 || joint >= skeleton.joints.length) {
+    throw new Error(`${label} joint index is out of range`);
+  }
+  return joint;
+}
+
+function readParentIndex(skeleton: Skeleton, index: number): number {
+  return skeleton.parents[index] ?? skeleton.joints[index]!.parentIndex;
+}
+
+function collectJointChildren(skeleton: Skeleton): number[][] {
+  const children = Array.from({ length: skeleton.joints.length }, () => [] as number[]);
+  for (let index = 0; index < skeleton.joints.length; index += 1) {
+    const parentIndex = readParentIndex(skeleton, index);
+    if (parentIndex >= 0 && parentIndex < skeleton.joints.length) {
+      children[parentIndex]!.push(index);
+    }
+  }
+  return children;
 }

@@ -67,7 +67,11 @@ import {
   inspectAnimationAsset,
   inspectClipAsset,
   identityTransform,
+  getJointLocalRestPose,
   isHumanoidBoneName,
+  isLeaf,
+  iterateJointsDepthFirst,
+  iterateJointsReverseDepthFirst,
   localToModelPose,
   updateLocalToModelPoseRange,
   multiplyMat4,
@@ -701,6 +705,55 @@ assert.deepEqual(
   [],
   "validateSkeleton should not require optional humanoid parent bones before checking hierarchy"
 );
+const traversalSkeleton = createSkeleton([
+  { name: "root", rest: { translation: [1, 0, 0] } },
+  { name: "spine", parentName: "root", rest: { translation: [0, 1, 0] }, humanoid: "spine" },
+  { name: "arm", parentName: "root", rest: { translation: [0, 0, 1] } },
+  { name: "head", parentName: "spine", rest: { translation: [0, 2, 0] }, humanoid: "head" },
+  { name: "propRoot", parentIndex: NO_PARENT, rest: { translation: [5, 0, 0] } },
+  { name: "propTip", parentName: "propRoot", rest: { translation: [0, 0, 5] } }
+]);
+const spineRest = getJointLocalRestPose(traversalSkeleton, "spine");
+assert.deepEqual(spineRest.translation, [0, 1, 0], "getJointLocalRestPose should resolve named joints");
+spineRest.translation[1] = 99;
+assert.deepEqual(
+  traversalSkeleton.restPose[1]!.translation,
+  [0, 1, 0],
+  "getJointLocalRestPose should return a cloned transform"
+);
+assert.deepEqual(
+  getJointLocalRestPose(traversalSkeleton, "head").translation,
+  [0, 2, 0],
+  "getJointLocalRestPose should resolve humanoid aliases"
+);
+assert.throws(() => getJointLocalRestPose(traversalSkeleton, -1), /rest pose joint index is out of range/);
+assert.equal(isLeaf(traversalSkeleton, "root"), false, "isLeaf should report joints with children as branches");
+assert.equal(isLeaf(traversalSkeleton, "arm"), true, "isLeaf should report childless joints as leaves");
+assert.equal(isLeaf(traversalSkeleton, "spine"), false, "isLeaf should detect non-contiguous descendants");
+assert.equal(isLeaf(traversalSkeleton, "propTip"), true, "isLeaf should handle additional roots");
+assert.deepEqual(
+  Array.from(iterateJointsDepthFirst(traversalSkeleton), (item) => [item.index, item.parentIndex, item.joint.name]),
+  [
+    [0, NO_PARENT, "root"],
+    [1, 0, "spine"],
+    [3, 1, "head"],
+    [2, 0, "arm"],
+    [4, NO_PARENT, "propRoot"],
+    [5, 4, "propTip"]
+  ],
+  "iterateJointsDepthFirst should traverse each root subtree in parent-child order"
+);
+assert.deepEqual(
+  Array.from(iterateJointsDepthFirst(traversalSkeleton, "spine"), (item) => item.joint.name),
+  ["spine", "head"],
+  "iterateJointsDepthFirst should support starting from a resolved joint"
+);
+assert.deepEqual(
+  Array.from(iterateJointsReverseDepthFirst(traversalSkeleton), (item) => item.joint.name),
+  ["propTip", "propRoot", "arm", "head", "spine", "root"],
+  "iterateJointsReverseDepthFirst should visit leaves before their parents"
+);
+assert.throws(() => Array.from(iterateJointsDepthFirst(traversalSkeleton, "missing")), /depth-first traversal joint missing was not found/);
 assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
 assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
 
