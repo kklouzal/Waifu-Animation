@@ -14,6 +14,8 @@ import {
   createSkeleton,
   createThreeAnimationClip,
   normalizeVec3,
+  quatFromAxisAngle,
+  sampleClipToPose,
   sanitizeQuaternionTrackValues,
   toFloat32Array,
   transformPoint
@@ -66,6 +68,34 @@ export const nodClip: AnimationClip = {
     }
   ]
 };
+
+export function createRootMotionTestFixture(): { motionSkeleton: ReturnType<typeof createSkeleton>; motionClip: AnimationClip } {
+  const motionSkeleton = createSkeleton([
+    { name: "root" },
+    { name: "hips", parentName: "root", humanoid: "hips", rest: { translation: [0, 1, 0] } },
+    { name: "spine", parentName: "hips", humanoid: "spine" }
+  ]);
+  const motionClip: AnimationClip = {
+    id: "root-motion",
+    duration: 1,
+    loop: true,
+    tracks: [
+      { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) },
+      {
+        joint: "root",
+        property: "rotation",
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI)])
+      },
+      { humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 1, 0, 0, 1, 6]) }
+    ]
+  };
+  return { motionSkeleton, motionClip };
+}
+
+export function sampleNodPose(): Pose {
+  return sampleClipToPose(skeleton, nodClip, 0.5);
+}
 
 export const invalidValidationStatusManifestEntry = {
   id: "typo-status",
