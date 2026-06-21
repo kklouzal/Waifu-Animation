@@ -344,10 +344,14 @@ export function sliceAnimationTrackWindow(track: AnimationTrack, start: number, 
 
 export function applyThreeTrackPolicy(clip: ThreeAnimationClip, policy: TrackMaskPolicy): ThreeAnimationClip {
   const initialTrackCount = clip.tracks.length;
+  const initialDuration = Number.isFinite(clip.duration) && clip.duration >= 0 ? clip.duration : null;
   const sourceNames = readThreeTrackSourceNames(clip);
   clip.tracks = clip.tracks.filter((track) => threeTrackAllowed(track, policy, sourceNames[track.name])) as KeyframeTrack[];
   writeThreeTrackSourceNames(clip, sourceNames);
-  if (clip.tracks.length !== initialTrackCount) clip.resetDuration();
+  if (clip.tracks.length !== initialTrackCount) {
+    clip.resetDuration();
+    if (initialDuration !== null) clip.duration = initialDuration;
+  }
   return clip;
 }
 
@@ -940,7 +944,13 @@ function trackHasValidShape(track: AnimationTrack): boolean {
   const property = normalizedTrackProperty(track.property);
   if (!property) return false;
   const stride = trackStride(property);
-  return track.times.length >= 2 && track.values.length === track.times.length * stride && track.values.every(Number.isFinite);
+  if (track.times.length < 1 || track.values.length !== track.times.length * stride) return false;
+  let previous = -Infinity;
+  for (const time of track.times) {
+    if (!Number.isFinite(time) || time < 0 || time <= previous) return false;
+    previous = time;
+  }
+  return track.values.every(Number.isFinite);
 }
 
 type FootPlantOffsetObject = Object3D & { __waifuAnimationFootPlantOffset?: Vector3 };

@@ -6414,6 +6414,45 @@ const nonFiniteDurationClip = createThreeAnimationClip(
   }
 );
 assert.equal(Number.isFinite(nonFiniteDurationClip.duration), true, "Three clip creation should not emit non-finite durations");
+const staticThreeRoot = new Object3D();
+const staticThreeBone = new Object3D();
+staticThreeBone.name = "staticHead";
+staticThreeRoot.add(staticThreeBone);
+const staticThreeRotation = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
+const staticThreeClip = createThreeAnimationClip(
+  {
+    id: "static-one-key-three",
+    duration: 1,
+    tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array(staticThreeRotation) }]
+  },
+  {
+    resolveBone: (humanBone) => (humanBone === "head" ? staticThreeBone : null)
+  }
+);
+assert.equal(staticThreeClip.tracks.length, 1, "Three binding should preserve valid single-key static pose tracks");
+assert.deepEqual(Array.from(staticThreeClip.tracks[0]!.times), [0, 1], "single-key Three tracks should be held across the runtime clip window");
+sampleThreeClipOnce(staticThreeRoot, staticThreeClip, 0.5);
+assert.ok(
+  quaternionNearlyEqual(staticThreeBone.quaternion.toArray(), staticThreeRotation, 1e-5),
+  "single-key Three tracks should sample as static local rotations through AnimationMixer"
+);
+const invalidThreeTrackWarnings: string[] = [];
+const invalidThreeTimeClip = createThreeAnimationClip(
+  {
+    id: "invalid-three-time",
+    duration: 1,
+    tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0, Number.NaN]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) }]
+  },
+  {
+    resolveBone: (humanBone) => (humanBone === "head" ? headBone : null),
+    logger: { warn: (...parts: unknown[]) => { invalidThreeTrackWarnings.push(parts.map(String).join(" ")); } }
+  }
+);
+assert.equal(invalidThreeTimeClip.tracks.length, 0, "Three binding should skip tracks with non-finite keyframe times");
+assert.ok(
+  invalidThreeTrackWarnings.some((message) => message.includes("invalid animation track skipped")),
+  "Three binding should report skipped malformed keyframe tracks"
+);
 
 const duplicateRoot = new Object3D();
 const duplicateWrongBone = new Object3D();
@@ -6499,7 +6538,7 @@ assert.equal(
 const strippedHipsTranslationClip = createThreeAnimationClip(hipsTranslationSourceClip, {
   resolveBone: (humanBone) => (humanBone === "hips" ? hipsTranslationBone : null)
 });
-createThreeRuntimeClipsForEntry(
+const strippedHipsRuntimeClips = createThreeRuntimeClipsForEntry(
   {
     id: "stripped-hips-translation",
     label: "Stripped Hips Translation",
@@ -6510,6 +6549,12 @@ createThreeRuntimeClipsForEntry(
   },
   new AnimationMixer(hipsTranslationRuntimeRoot),
   strippedHipsTranslationClip
+);
+assert.equal(strippedHipsTranslationClip.duration, 1, "runtime root-translation stripping should preserve the playback duration even when no tracks remain");
+assert.deepEqual(
+  strippedHipsRuntimeClips.map((clip) => clip.duration),
+  [1, 1],
+  "stripped in-place base clip instances should keep the source playback duration for mixer scheduling"
 );
 assert.equal(
   strippedHipsTranslationClip.tracks.some((track) => track.name === `${hipsTranslationBone.uuid}.position`),
