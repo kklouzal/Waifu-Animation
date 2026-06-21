@@ -19,3 +19,4 @@ export * from "./debug.js";
 export * from "./validation.js";
 export * from "./asset-validation.js";
 export * from "./three.js";
+export * from "./importer-config.js";

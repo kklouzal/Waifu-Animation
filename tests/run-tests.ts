@@ -190,6 +190,17 @@ import {
   validateAnimationInputs,
   validatePackedRuntimeAnimation,
   validateSkinningJob,
+  normalizeAdditiveReferenceImportConfig,
+  normalizeAnimationOptimizationImportConfig,
+  normalizeBakedImportConfig,
+  normalizeOzzOfflineImportConfig,
+  normalizeRawMotionExtractionImportConfig,
+  normalizeUserTrackImportSpecs,
+  toAdditiveAnimationOptions,
+  toAnimationOptimizerOptions,
+  toBakedCameraJointOptions,
+  toRawRootMotionExtractionOptions,
+  toRigidInstanceMatrixOptions,
   zeroVisemes
 } from "../src/index.js";
 
@@ -298,6 +309,148 @@ assert.deepEqual(
   { type: "float3", name: "stats-track", keyCount: 3, linearKeyCount: 2, stepKeyCount: 1, valueComponentCount: 9 },
   "raw user track stats should report key counts and packed component counts"
 );
+const explicitAdditiveImport = normalizeAdditiveReferenceImportConfig({
+  policy: "explicit",
+  pose: [identityTransform()],
+  source: { filename: "additive_pose.fbx" }
+});
+assert.equal(explicitAdditiveImport.issues.length, 0, "valid additive reference config should normalize without issues");
+assert.equal(explicitAdditiveImport.plan.policy, "explicit-pose");
+assert.equal(explicitAdditiveImport.plan.options.referencePose?.length, 1, "explicit additive references should map to additive builder options");
+assert.deepEqual(explicitAdditiveImport.plan.source, { filename: "additive_pose.fbx" }, "additive config should preserve source metadata");
+const skeletonRestAdditiveImport = normalizeAdditiveReferenceImportConfig({ reference: "skeleton" });
+assert.equal(skeletonRestAdditiveImport.plan.requiresSkeletonRestPose, true, "skeleton additive policy should request skeleton rest pose mapping");
+assert.equal(toAdditiveAnimationOptions(skeletonRestAdditiveImport.plan, skeleton).referencePose?.length, skeleton.joints.length, "skeleton additive policy should map to explicit rest-pose options when a skeleton is provided");
+const invalidAdditiveImport = normalizeAdditiveReferenceImportConfig({ policy: "explicit", pose: [{ translation: [Number.NaN, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }] });
+assert.equal(invalidAdditiveImport.plan.policy, "first-key", "invalid explicit additive references should fall back to first keyed sample");
+assert.ok(invalidAdditiveImport.issues.length > 0, "invalid additive reference config should report issues");
+const optimizationImport = normalizeAnimationOptimizationImportConfig({
+  tolerance: 0.01,
+  hierarchyWeight: 0.5,
+  override: [{ name: "head", tolerance: 0.001, weight: 4 }],
+  diagnostics: { sampleFrequency: 12, includeModelSpace: true },
+  source: { config: "optimize" }
+});
+assert.equal(optimizationImport.issues.length, 0, "valid optimization import config should normalize without issues");
+assert.deepEqual(optimizationImport.plan.tolerances, { translation: 0.01, rotation: 0.01, scale: 0.01 });
+assert.equal(optimizationImport.plan.options.jointTolerances?.head?.translation, 0.001, "optimization import config should map per-joint overrides");
+assert.equal(optimizationImport.plan.diagnostics && optimizationImport.plan.diagnostics.sampleFrequency, 12, "optimization diagnostics should preserve sample frequency");
+assert.deepEqual(optimizationImport.plan.source, { config: "optimize" }, "optimization config should preserve source metadata");
+const invalidOptimizationImport = normalizeAnimationOptimizationImportConfig({
+  tolerances: { translation: -1, rotation: Number.NaN },
+  hierarchyWeight: -2,
+  override: [{ name: "head", weight: 0 }]
+});
+assert.ok(invalidOptimizationImport.issues.length >= 3, "invalid optimization config should report tolerance and weight issues");
+assert.equal(Number.isFinite(invalidOptimizationImport.plan.tolerances.translation), true, "invalid optimization tolerances should fall back to finite defaults");
+const importOptimizerRaw = createRawAnimation({
+  id: "import-optimizer",
+  duration: 1,
+  tracks: [
+    {
+      joint: "hips",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 0.5, value: [0.5, 0, 0] },
+        { time: 1, value: [1, 0, 0] }
+      ]
+    }
+  ]
+});
+const mappedOptimizationOptions = toAnimationOptimizerOptions(
+  normalizeAnimationOptimizationImportConfig({ tolerances: { translation: 0.001 }, hierarchyWeight: 0 }).plan,
+  skeleton
+);
+const mappedOptimizationResult = tryOptimizeRawAnimation(importOptimizerRaw, mappedOptimizationOptions);
+assert.equal(mappedOptimizationResult.ok, true, "normalized optimization options should be accepted by the existing raw optimizer");
+const motionImport = normalizeRawMotionExtractionImportConfig({
+  carrier: { joint: "hips" },
+  translation: { axes: ["x", "z"], reference: "absolute", bake: true, loop: true },
+  rotation: { axes: ["y"], reference: "animation", bake: false, loop: true },
+  rawAnimationId: "motion-in-place",
+  source: { take: "walk" }
+});
+assert.equal(motionImport.issues.length, 0, "valid raw motion extraction config should normalize without issues");
+assert.deepEqual(motionImport.plan.translation?.axes, { x: true, y: false, z: true }, "motion translation axes should map to extraction options");
+assert.equal(motionImport.plan.rotation?.mode, "yaw", "yaw-only rotation axes should map to yaw extraction");
+assert.equal(motionImport.plan.nonMutatingBake, true, "baked motion config should expose non-mutating bake intent");
+assert.deepEqual(motionImport.plan.source, { take: "walk" }, "motion config should preserve source metadata");
+const invalidMotionImport = normalizeRawMotionExtractionImportConfig({
+  translation: { axes: ["x", "w"], reference: "bad" },
+  rotation: { axes: 123, mode: "pitch" }
+});
+assert.ok(invalidMotionImport.issues.length >= 3, "invalid motion config should report bad axes, references, and modes");
+const importMotionRaw = createRawAnimation({
+  id: "import-motion",
+  duration: 1,
+  tracks: [
+    {
+      joint: "hips",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 1, value: [2, 1, 3] }
+      ],
+      rotations: [
+        { time: 0, value: [0, 0, 0, 1] },
+        { time: 1, value: quatFromAxisAngle([0, 1, 0], Math.PI / 2) }
+      ]
+    }
+  ]
+});
+const mappedMotionExtraction = extractRawRootMotion(skeleton, importMotionRaw, toRawRootMotionExtractionOptions(motionImport.plan));
+assert.notEqual(mappedMotionExtraction.rawAnimation, importMotionRaw, "raw motion extraction config should still use the existing non-mutating raw extraction path");
+assert.equal(mappedMotionExtraction.rawAnimation.id, "motion-in-place", "raw motion extraction config should preserve requested output raw animation id");
+assert.equal(mappedMotionExtraction.motion.position?.type, "float3", "raw motion extraction config should create position user tracks");
+assert.equal(mappedMotionExtraction.motion.rotation?.type, "quaternion", "raw motion extraction config should create rotation user tracks");
+const userTrackImport = normalizeUserTrackImportSpecs({
+  animations: [
+    {
+      filename: "robot_animation.ozz",
+      tracks: {
+        properties: [
+          { type: "float1", joint_name: "thumb2", property_name: "grasp", filename: "robot_track_grasp.ozz", interpolation: "step" }
+        ]
+      }
+    }
+  ]
+});
+assert.equal(userTrackImport.issues.length, 0, "valid user-channel import specs should normalize without issues");
+assert.equal(userTrackImport.plan.tracks[0]?.name, "thumb2.grasp", "user-channel specs should derive stable track names from source properties");
+assert.equal(userTrackImport.plan.tracks[0]?.type, "float", "Ozz float1 user properties should map to Waifu float tracks");
+assert.equal(userTrackImport.plan.tracks[0]?.interpolation, "step", "user-channel specs should preserve default interpolation metadata");
+assert.equal(userTrackImport.plan.tracks[0]?.source.outputFilename, "robot_track_grasp.ozz", "user-channel specs should preserve future importer output metadata");
+const invalidUserTrackImport = normalizeUserTrackImportSpecs([{ type: "bool", joint_name: "thumb2", property_name: "grasp" }]);
+assert.equal(invalidUserTrackImport.plan.tracks.length, 0, "unsupported user-channel types should be rejected from the normalized plan");
+assert.ok(invalidUserTrackImport.issues.some((issue) => issue.path.endsWith(".type")), "unsupported user-channel types should report explicit type issues");
+const bakedImport = normalizeBakedImportConfig({
+  skeleton: { import: { types: { geometry: true, camera: true } } },
+  camera: { includes: "Camera", caseSensitive: false },
+  rigidInstances: { includes: ["spine"], excludes: ["head"], count: 2 }
+});
+assert.equal(bakedImport.issues.length, 0, "valid baked config should normalize without issues");
+assert.equal(bakedImport.plan.skeletonNodeTypes.geometry, true, "baked config should preserve geometry-as-joints import intent");
+assert.equal(toBakedCameraJointOptions(bakedImport.plan).includes, "Camera", "baked camera metadata should map to baked camera helper options");
+assert.deepEqual(toRigidInstanceMatrixOptions(bakedImport.plan, skeleton).jointIndices, [1], "baked rigid filters should resolve to helper joint indices when a skeleton is available");
+const invalidBakedImport = normalizeBakedImportConfig({ rigidInstances: { jointIndices: [0, -1, Number.NaN], fallbackMatrix: [Number.NaN] } });
+assert.ok(invalidBakedImport.issues.length >= 2, "invalid baked rigid options should report bad joint indices and matrices");
+const combinedImport = normalizeOzzOfflineImportConfig({
+  source: { file: "robot.fbx" },
+  additive_reference: "default",
+  optimization_settings: { tolerance: 0.002, distance: 0.707 },
+  animations: [
+    {
+      filename: "robot_animation.ozz",
+      tracks: {
+        properties: [{ type: "float1", joint_name: "thumb2", property_name: "grasp", filename: "robot_track_grasp.ozz" }]
+      }
+    }
+  ],
+  skeleton: { import: { types: { geometry: true } } }
+});
+assert.equal(combinedImport.plan.additive.policy, "first-key", "combined importer plan should normalize additive reference policy");
+assert.equal(combinedImport.plan.optimization.hierarchyWeight, 0.707, "combined importer plan should map Ozz distance to hierarchy weighting");
+assert.equal(combinedImport.plan.userTracks.tracks[0]?.source.animationName, "robot_animation.ozz", "combined importer plan should preserve animation source metadata for future tooling");
+assert.equal(combinedImport.plan.baked.skeletonNodeTypes.geometry, true, "combined importer plan should preserve baked skeleton node-type metadata");
 const optimizedIdentityTrack = optimizeRawUserTrack({
   type: "float3",
   name: "identity-track",
