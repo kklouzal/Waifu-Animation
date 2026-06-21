@@ -482,6 +482,7 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
 
 function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: number): Transform {
   const translation: Vec3 = [0, 0, 0];
+  const scale: Vec3 = [0, 0, 0];
   const rotationSum: Quat = [0, 0, 0, 0];
   let firstRotation: Quat | undefined;
 
@@ -493,6 +494,9 @@ function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: numbe
     translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
     translation[1] += finiteSigned(delta.translation[1], 0) * normalizedWeight;
     translation[2] += finiteSigned(delta.translation[2], 0) * normalizedWeight;
+    scale[0] += finiteSigned(delta.scale[0], 1) * normalizedWeight;
+    scale[1] += finiteSigned(delta.scale[1], 1) * normalizedWeight;
+    scale[2] += finiteSigned(delta.scale[2], 1) * normalizedWeight;
 
     let rotation = normalizeQuat(delta.rotation);
     const reference = dotQuat(rotationSum, rotationSum) > EPSILON ? rotationSum : firstRotation;
@@ -511,7 +515,7 @@ function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: numbe
   return {
     translation,
     rotation: normalizeQuat(rotationSum),
-    scale: [1, 1, 1]
+    scale
   };
 }
 

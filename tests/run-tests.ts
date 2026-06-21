@@ -3327,6 +3327,11 @@ const blendedMotion = blendMotionDeltas([
   { weight: -5, delta: { translation: [100, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } }
 ]);
 assert.ok(vectorNearlyEqual(blendedMotion.translation, [8, 0, 0], 1e-6), "motion delta blending should normalize positive weights and ignore negative weights");
+const blendedScaledMotion = blendMotionDeltas([
+  { weight: 1, delta: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [2, 3, -4] } },
+  { weight: 3, delta: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [4, 7, 8] } }
+]);
+assert.ok(vectorNearlyEqual(blendedScaledMotion.scale, [3.5, 6, 5], 1e-6), "motion delta blending should preserve weighted scale deltas");
 assert.deepEqual(computeLocomotionBlendWeights(0.25, 3), [0.5, 0.5, 0], "locomotion blend weights should follow the Ozz walk/jog/run triangular profile");
 assert.deepEqual(computeLocomotionBlendWeights(Number.NaN, 3), [1, 0, 0], "non-finite blend ratios should fall back to the first locomotion layer");
 const synchronizedLocomotion = synchronizeLocomotionPlayback(
@@ -3473,6 +3478,63 @@ const unevenRawLoopDistribution = extractRawRootMotion(
 assert.ok(
   vectorNearlyEqual(sampleMotionTracks(unevenRawLoopDistribution.motion, 0.1).transform.translation, [0, 0, 0], 1e-6),
   "raw root-motion loop distribution should spread endpoint drift by key time instead of key ordinal"
+);
+const rawFullRotationLoopDistribution = extractRawRootMotion(
+  motionSkeleton,
+  createRawAnimation({
+    id: "raw-full-rotation-loop-distribution",
+    duration: 1,
+    tracks: [
+      {
+        joint: "root",
+        rotations: [
+          { time: 0, value: [0, 0, 0, 1] },
+          { time: 0.5, value: [0, 0, 0, 1] },
+          { time: 1, value: quatFromAxisAngle([0, 1, 0], Math.PI * 1.5) }
+        ]
+      }
+    ]
+  }),
+  {
+    reference: "absolute",
+    translation: false,
+    rotation: { mode: "full", loop: true }
+  }
+);
+assert.ok(
+  quaternionNearlyEqual(sampleMotionTracks(rawFullRotationLoopDistribution.motion, 0.5).transform.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
+  "raw full-rotation loop distribution should use the shortest quaternion hemisphere"
+);
+const rawLoopedRotationBakeCompensation = extractRawRootMotion(
+  motionSkeleton,
+  createRawAnimation({
+    id: "raw-looped-rotation-bake-compensation",
+    duration: 1,
+    tracks: [
+      {
+        joint: "root",
+        translations: [
+          { time: 0, value: [0, 0, 0] },
+          { time: 0.5, value: [0, 0, 1] },
+          { time: 1, value: [0, 0, 1] }
+        ],
+        rotations: [
+          { time: 0, value: [0, 0, 0, 1] },
+          { time: 0.5, value: [0, 0, 0, 1] },
+          { time: 1, value: quatFromAxisAngle([0, 1, 0], Math.PI * 1.5) }
+        ]
+      }
+    ]
+  }),
+  {
+    reference: "absolute",
+    translation: false,
+    rotation: { mode: "full", bake: true, loop: true }
+  }
+);
+assert.ok(
+  vectorNearlyEqual(rawLoopedRotationBakeCompensation.rawAnimation.tracks[0]!.translations[1]!.value, [0, 0, 1], 1e-6),
+  "raw rotation baking should compensate translations with authored motion before loop distribution changes the exported motion track"
 );
 assert.deepEqual(
   rawMotionExtraction.rawAnimation.tracks[0]!.translations.map((key) => key.value),
@@ -4915,6 +4977,24 @@ assert.deepEqual(
   weightedRootMotionUpdate.rootMotionLayers.map((layer) => [layer.id, layer.normalizedWeight]),
   [["motion-a", 0.75], ["motion-b", 0.25]],
   "weighted root-motion diagnostics should be deterministic"
+);
+const scaledMotionA: AnimationClip = {
+  id: "scaled-motion-a",
+  duration: 1,
+  tracks: [{ joint: "root", property: "scale", times: toFloat32Array([0, 1]), values: toFloat32Array([1, 1, 1, 2, 3, 4]) }]
+};
+const scaledMotionB: AnimationClip = {
+  id: "scaled-motion-b",
+  duration: 1,
+  tracks: [{ joint: "root", property: "scale", times: toFloat32Array([0, 1]), values: toFloat32Array([1, 1, 1, 4, 7, 8]) }]
+};
+const runtimeScaledRootMotion = new AnimationRuntime(motionSkeleton);
+runtimeScaledRootMotion.setLayer("scaled-a", scaledMotionA, { weight: 1, targetWeight: 1, priority: 2 });
+runtimeScaledRootMotion.setLayer("scaled-b", scaledMotionB, { weight: 3, targetWeight: 3, priority: 2 });
+const scaledRootMotionUpdate = runtimeScaledRootMotion.update(1, { collectRootMotion: true });
+assert.ok(
+  vectorNearlyEqual(scaledRootMotionUpdate.rootMotionDelta.scale, [3.5, 6, 7], 1e-6),
+  "runtime root-motion blending should preserve weighted carrier scale deltas"
 );
 
 const runtimeSteadyIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });

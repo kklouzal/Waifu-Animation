@@ -286,6 +286,13 @@ export function extractRawRootMotion(
         interpolation: "linear" as const
       }))
     : [];
+  const rawRotationBakeTrack = rotationSettings?.bake
+    ? buildUserTrack({
+        type: "quaternion",
+        name: `${rawAnimation.id}.${joint || "root"}.raw-motion.rotation:bake`,
+        keyframes: rawRotationKeys
+      } satisfies RawQuaternionTrack)
+    : undefined;
 
   if (translationSettings?.bake) {
     for (let index = 0; index < outputTrack.translations.length; index += 1) {
@@ -322,10 +329,10 @@ export function extractRawRootMotion(
     } satisfies RawQuaternionTrack);
   }
 
-  if (rotationSettings?.bake && motion.rotation) {
+  if (rotationSettings?.bake && (rawRotationBakeTrack || motion.rotation)) {
     for (const key of outputTrack.translations) {
       const ratio = motionSampleRatio(key.time, duration);
-      const motionRotation = sampleUserTrack(motion.rotation, ratio) as Quat;
+      const motionRotation = sampleUserTrack(rawRotationBakeTrack ?? motion.rotation!, ratio) as Quat;
       key.value = rotateVec3ByQuat(invertQuat(motionRotation), key.value);
     }
   }
@@ -501,6 +508,7 @@ export function blendMotionDeltas(layers: readonly MotionBlendLayer[]): Transfor
   if (totalWeight <= EPSILON) return identityTransform();
 
   const translation: Vec3 = [0, 0, 0];
+  const scale: Vec3 = [0, 0, 0];
   const rotationSum: Quat = [0, 0, 0, 0];
   let firstRotation: Quat | undefined;
 
@@ -512,6 +520,9 @@ export function blendMotionDeltas(layers: readonly MotionBlendLayer[]): Transfor
     translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
     translation[1] += finiteSigned(delta.translation[1], 0) * normalizedWeight;
     translation[2] += finiteSigned(delta.translation[2], 0) * normalizedWeight;
+    scale[0] += finiteSigned(delta.scale[0], 1) * normalizedWeight;
+    scale[1] += finiteSigned(delta.scale[1], 1) * normalizedWeight;
+    scale[2] += finiteSigned(delta.scale[2], 1) * normalizedWeight;
 
     let rotation = normalizeQuat(delta.rotation);
     const reference = dotQuat(rotationSum, rotationSum) > EPSILON ? rotationSum : firstRotation;
@@ -530,7 +541,7 @@ export function blendMotionDeltas(layers: readonly MotionBlendLayer[]): Transfor
   return sanitizeMotionTransform({
     translation,
     rotation: normalizeQuat(rotationSum),
-    scale: [1, 1, 1]
+    scale
   });
 }
 
@@ -846,7 +857,10 @@ function loopDistributionAlpha(ratio: number, firstRatio: number, lastRatio: num
 
 function nlerpIdentityToQuat(delta: Quat, alpha: number): Quat {
   const amount = clamp(alpha, 0, 1);
-  const end = normalizeQuat(delta);
+  const normalized = normalizeQuat(delta);
+  const end = dotQuat([0, 0, 0, 1], normalized) < 0
+    ? [-normalized[0], -normalized[1], -normalized[2], -normalized[3]] as Quat
+    : normalized;
   return normalizeQuat([end[0] * amount, end[1] * amount, end[2] * amount, 1 + (end[3] - 1) * amount]);
 }
 
