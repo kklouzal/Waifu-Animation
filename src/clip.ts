@@ -1322,7 +1322,7 @@ function validatePackedKeyController(
   if (keyCountValid && timeRangeValid && valueRangeValid) {
     validatePackedControllerTimesAndValues(issues, controller, index, duration, property, times, values);
   }
-  validatePackedSeekTable(issues, controller, index, iframeTimes);
+  validatePackedSeekTable(issues, controller, index, iframeTimes, times);
 }
 
 function validatePackedControllerTarget(
@@ -1491,7 +1491,8 @@ function validatePackedSeekTable(
   issues: ClipValidationIssue[],
   controller: PackedRuntimeAnimationKeyController,
   index: number,
-  iframeTimes: readonly number[]
+  iframeTimes: readonly number[],
+  times: readonly number[]
 ): void {
   const targetName = controllerTargetName(controller);
   const lower = controller.seekTable?.iframeLowerKeys;
@@ -1516,6 +1517,31 @@ function validatePackedSeekTable(
       return;
     }
   }
+  if (!canValidatePackedSeekTableAgainstTimes(controller, times, iframeTimes)) return;
+
+  const trackTimes = times.slice(controller.timeOffset, controller.timeOffset + controller.keyCount);
+  for (let iframe = 0; iframe < count; iframe += 1) {
+    const [expectedLower, expectedUpper] = packedTrackTimeBracket(trackTimes, iframeTimes[iframe]!);
+    if (lower[iframe] !== expectedLower || upper[iframe] !== expectedUpper) {
+      issues.push({ track: index, joint: targetName, property: controller.property, message: "packed seek table does not match key times" });
+      return;
+    }
+  }
+}
+
+function canValidatePackedSeekTableAgainstTimes(
+  controller: PackedRuntimeAnimationKeyController,
+  times: readonly number[],
+  iframeTimes: readonly number[]
+): boolean {
+  if (!Number.isInteger(controller.timeOffset) || !Number.isInteger(controller.keyCount) || controller.keyCount <= 0) return false;
+  if (controller.timeOffset < 0 || controller.timeOffset + controller.keyCount > times.length) return false;
+  for (let key = 0; key < controller.keyCount; key += 1) {
+    const time = times[controller.timeOffset + key];
+    if (!Number.isFinite(time)) return false;
+    if (key > 0 && time! <= times[controller.timeOffset + key - 1]!) return false;
+  }
+  return iframeTimes.every(Number.isFinite);
 }
 
 function validateFiniteNumberArray(issues: ClipValidationIssue[], values: readonly number[], label: string): void {

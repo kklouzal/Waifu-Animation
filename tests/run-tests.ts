@@ -1957,6 +1957,17 @@ assert.equal(decodedNodClip.id, "nod");
 assert.equal(decodedNodClip.tracks.length, 1);
 assert.deepEqual(Array.from(decodedNodClip.tracks[0]!.times), [0, 0.5, 1]);
 assert.ok(decodedNodClip.tracks[0]!.values instanceof Float32Array);
+const decodedLegacyNodClip = decodeAnimationBinary(createLegacyV1NodBinary(), "legacy-nod");
+assert.equal(decodedLegacyNodClip.id, "legacy-nod");
+assert.equal(decodedLegacyNodClip.loop, true);
+assert.equal(decodedLegacyNodClip.tracks.length, 1);
+assert.equal(decodedLegacyNodClip.tracks[0]!.humanBone, "head");
+assert.equal(decodedLegacyNodClip.tracks[0]!.property, "rotation");
+assert.deepEqual(Array.from(decodedLegacyNodClip.tracks[0]!.times), [0, 0.5, 1]);
+assert.ok(
+  quaternionNearlyEqual(Array.from(decodedLegacyNodClip.tracks[0]!.values.slice(4, 8)), [0.15, 0, 0, 0.9887], 1e-6),
+  "decodeAnimationBinary should read legacy v1 track/string/float offsets using the v1 record size"
+);
 assert.throws(
   () => encodeAnimationBinary({ ...nodClip, id: "binary-non-finite-duration", duration: Number.NaN }),
   /animation clip binary-non-finite-duration is invalid: clip duration must be positive and finite/,
@@ -2791,6 +2802,24 @@ const unsortedPacked = {
 assert.ok(
   validatePackedRuntimeAnimation(unsortedPacked, skeleton).some((issue) => issue.message === "packed key controllers must be sorted"),
   "packed runtime validation should reject out-of-order key controllers"
+);
+const staleSeekTablePacked = {
+  ...packedRuntimeAnimation,
+  keyControllers: packedRuntimeAnimation.keyControllers.map((controller, index) =>
+    index === 1
+      ? {
+          ...controller,
+          seekTable: {
+            iframeLowerKeys: [0, 0, 0, 0, 0],
+            iframeUpperKeys: [0, 0, 0, 0, 0]
+          }
+        }
+      : controller
+  )
+} as unknown as typeof packedRuntimeAnimation;
+assert.ok(
+  validatePackedRuntimeAnimation(staleSeekTablePacked, skeleton).some((issue) => issue.message === "packed seek table does not match key times"),
+  "packed runtime validation should reject seek tables stale against packed key times"
 );
 const wrongPackedSkeleton = createSkeleton([{ name: "only" }]);
 assert.ok(
@@ -6573,6 +6602,45 @@ function makeAuthoredLoopClip(id: string, tracks: readonly string[]): AnimationC
         : makeTransformTrack(humanBone, "quaternion", [0, 0, 0, 1, 0, 0, 0, 1], [0, 1]);
     })
   };
+}
+
+function createLegacyV1NodBinary(): ArrayBuffer {
+  const headerBytes = 32;
+  const legacyTrackBytes = 36;
+  const name = new TextEncoder().encode("head");
+  const floats = [0, 0.5, 1, 0, 0, 0, 1, 0.15, 0, 0, 0.9887, 0, 0, 0, 1];
+  const stringByteOffset = headerBytes + legacyTrackBytes;
+  const floatByteOffset = stringByteOffset + align4ForTest(name.byteLength);
+  const buffer = new ArrayBuffer(floatByteOffset + floats.length * Float32Array.BYTES_PER_ELEMENT);
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+
+  bytes.set(new TextEncoder().encode("WANI"), 0);
+  view.setUint32(4, 1, true);
+  view.setUint32(8, headerBytes, true);
+  view.setUint32(12, legacyTrackBytes, true);
+  view.setFloat32(16, 1, true);
+  view.setUint32(20, 1, true);
+  view.setUint32(24, 1, true);
+  view.setUint32(28, name.byteLength, true);
+
+  view.setUint32(headerBytes, 1, true);
+  view.setUint32(headerBytes + 4, 2, true);
+  view.setUint32(headerBytes + 8, 0, true);
+  view.setUint32(headerBytes + 12, name.byteLength, true);
+  view.setUint32(headerBytes + 16, 0, true);
+  view.setUint32(headerBytes + 20, 3, true);
+  view.setUint32(headerBytes + 24, 3, true);
+  view.setUint32(headerBytes + 28, 0xffffffff, true);
+  view.setUint32(headerBytes + 32, 0, true);
+
+  bytes.set(name, stringByteOffset);
+  new Float32Array(buffer, floatByteOffset, floats.length).set(floats);
+  return buffer;
+}
+
+function align4ForTest(value: number): number {
+  return (value + 3) & ~3;
 }
 
 function attachArmChain(root: Object3D, bones: Map<string, Object3D>, side: "left" | "right", sign: 1 | -1): void {

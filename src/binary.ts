@@ -151,7 +151,7 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
   const flags = view.getUint32(20, true);
   const trackCount = view.getUint32(24, true);
   const stringBytes = view.getUint32(28, true);
-  const stringByteOffset = HEADER_BYTES + trackCount * TRACK_BYTES;
+  const stringByteOffset = HEADER_BYTES + trackCount * trackBytes;
   const floatByteOffset = stringByteOffset + align4(stringBytes);
   if (stringByteOffset + stringBytes > bytes.byteLength || floatByteOffset > bytes.byteLength) {
     throw new Error("animation binary table bounds are invalid");
@@ -163,7 +163,7 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
   const tracks: AnimationTrack[] = [];
 
   for (let index = 0; index < trackCount; index += 1) {
-    const trackOffset = HEADER_BYTES + index * TRACK_BYTES;
+    const trackOffset = HEADER_BYTES + index * trackBytes;
     const targetKind = view.getUint32(trackOffset, true);
     const propertyCode = view.getUint32(trackOffset + 4, true);
     const nameByteOffset = view.getUint32(trackOffset + 8, true);
