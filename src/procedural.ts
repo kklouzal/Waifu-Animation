@@ -63,7 +63,7 @@ export type AttentionTarget = {
 export class AttentionScheduler {
   private readonly random: RandomSource;
   private nextSwitchAt = 0;
-  private current = -1;
+  private currentId: string | null = null;
 
   constructor(seed: string | number) {
     this.random = createSeededRandom(seed);
@@ -71,12 +71,14 @@ export class AttentionScheduler {
 
   choose(nowMs: number, targets: readonly AttentionTarget[], minDwellMs = 900, maxDwellMs = 3200): AttentionTarget | null {
     if (targets.length === 0) {
-      this.current = -1;
+      this.currentId = null;
       this.nextSwitchAt = 0;
       return null;
     }
     const now = finiteNonNegative(nowMs, 0);
-    const currentTarget = this.current >= 0 && this.current < targets.length ? targets[this.current] : null;
+    const currentTarget = this.currentId
+      ? (targets.find((target) => target.id === this.currentId && isEligibleAttentionTarget(target)) ?? null)
+      : null;
     if (now >= this.nextSwitchAt || !currentTarget || !isEligibleAttentionTarget(currentTarget)) {
       let total = 0;
       let lastEligible = -1;
@@ -87,26 +89,27 @@ export class AttentionScheduler {
         lastEligible = i;
       }
       if (total <= 0 || lastEligible < 0) {
-        this.current = -1;
+        this.currentId = null;
         this.nextSwitchAt = 0;
         return null;
       }
       let pick = this.random() * total;
-      this.current = lastEligible;
+      this.currentId = targets[lastEligible]!.id;
       for (let i = 0; i < targets.length; i += 1) {
         const target = targets[i]!;
         if (!isEligibleAttentionTarget(target)) continue;
         pick -= finiteAttentionWeight(target.weight);
         if (pick <= 0) {
-          this.current = i;
+          this.currentId = target.id;
           break;
         }
       }
       const minDwell = finiteNonNegative(minDwellMs, 900);
       const maxDwell = Math.max(minDwell, finiteNonNegative(maxDwellMs, 3200));
       this.nextSwitchAt = now + randomRange(this.random, minDwell, maxDwell);
+      return targets.find((target) => target.id === this.currentId && isEligibleAttentionTarget(target)) ?? null;
     }
-    return this.current >= 0 ? (targets[this.current] ?? null) : null;
+    return currentTarget;
   }
 }
 

@@ -5737,6 +5737,42 @@ const finitePositionAttention = invalidPositionAttention.choose(1_000, [
   { id: "valid-position", position: [0, 1, 1], weight: 1 }
 ]);
 assert.equal(finitePositionAttention?.id, "valid-position", "invalid attention target positions should be ignored");
+const reorderedDwellAttention = new AttentionScheduler("attention-reorder-dwell");
+assert.equal(
+  reorderedDwellAttention.choose(
+    100,
+    [
+      { id: "focus", position: [0, 0, 1], weight: 1 },
+      { id: "future", position: [1, 0, 1], weight: 0 }
+    ],
+    10_000,
+    10_000
+  )?.id,
+  "focus"
+);
+assert.equal(
+  reorderedDwellAttention.choose(
+    101,
+    [
+      { id: "future", position: [1, 0, 1], weight: 5 },
+      { id: "focus", position: [0, 0, 1], weight: 1 }
+    ],
+    10_000,
+    10_000
+  )?.id,
+  "focus",
+  "attention scheduler should preserve the same target id through reordering before dwell expires"
+);
+const missingDwellAttention = new AttentionScheduler("attention-missing-dwell");
+assert.equal(
+  missingDwellAttention.choose(100, [{ id: "initial", position: [0, 0, 1], weight: 1 }], 10_000, 10_000)?.id,
+  "initial"
+);
+assert.equal(
+  missingDwellAttention.choose(101, [{ id: "replacement", position: [1, 0, 1], weight: 1 }], 10_000, 10_000)?.id,
+  "replacement",
+  "missing current attention target id should be reselected before dwell expires"
+);
 const disabledDwellAttention = new AttentionScheduler("attention-disabled-dwell");
 assert.equal(
   disabledDwellAttention.choose(100, [{ id: "initial", position: [0, 0, 1], weight: 1 }], 10_000, 10_000)?.id,
