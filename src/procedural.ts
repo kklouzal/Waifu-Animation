@@ -1,4 +1,4 @@
-import { type RandomSource, type Vec3, clamp, clamp01, createSeededRandom, dampValue, finiteNonNegative, normalizeVec3, randomRange, smoothPulse } from "./math.js";
+import { type RandomSource, type Vec3, clamp, clamp01, createSeededRandom, dampValue, finiteNonNegative, finiteSigned, normalizeVec3, randomRange, smoothPulse } from "./math.js";
 
 export type LookAtDistribution = {
   eyes: { yaw: number; pitch: number; weight: number };
@@ -18,12 +18,8 @@ export type LookAtOptions = {
   torsoWeight?: number;
 };
 
-function finiteOption(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) ? value : fallback;
-}
-
 function finiteOption01(value: number | undefined, fallback: number): number {
-  return clamp01(finiteOption(value, fallback));
+  return clamp01(finiteSigned(value, fallback));
 }
 
 function finiteAttentionWeight(value: number): number {
