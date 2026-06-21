@@ -226,7 +226,17 @@ export function extractRootMotion(
 
   return {
     motion,
-    bakedClip: bakeExtractedRootMotionClip(skeleton, clip, jointIndex, translationSettings, rotationSettings, translationReference, rotationReference, options.bakedClipId)
+    bakedClip: bakeExtractedRootMotionClip(
+      skeleton,
+      clip,
+      jointIndex,
+      translationSettings,
+      rotationSettings,
+      translationReference,
+      rotationReference,
+      motion.rotation,
+      options.bakedClipId
+    )
   };
 }
 
@@ -729,9 +739,11 @@ function loopMotionTrack<T extends "float3" | "quaternion">(track: UserTrack<T>)
     const first: Quat = [track.values[firstOffset]!, track.values[firstOffset + 1]!, track.values[firstOffset + 2]!, track.values[firstOffset + 3]!];
     const last: Quat = [track.values[lastOffset]!, track.values[lastOffset + 1]!, track.values[lastOffset + 2]!, track.values[lastOffset + 3]!];
     const delta = multiplyQuat(first, invertQuat(last));
+    const firstRatio = track.ratios[0] ?? 0;
+    const lastRatio = track.ratios[track.ratios.length - 1] ?? 1;
     for (let key = 0; key < track.ratios.length; key += 1) {
       const offset = key * stride;
-      const alpha = key / (track.ratios.length - 1);
+      const alpha = loopDistributionAlpha(track.ratios[key]!, firstRatio, lastRatio, key, track.ratios.length - 1);
       const value: Quat = [track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!, track.values[offset + 3]!];
       track.values.set(multiplyQuat(nlerpIdentityToQuat(delta, alpha), value), offset);
     }
@@ -743,9 +755,11 @@ function loopMotionTrack<T extends "float3" | "quaternion">(track: UserTrack<T>)
     track.values[firstOffset + 1]! - track.values[lastOffset + 1]!,
     track.values[firstOffset + 2]! - track.values[lastOffset + 2]!
   ];
+  const firstRatio = track.ratios[0] ?? 0;
+  const lastRatio = track.ratios[track.ratios.length - 1] ?? 1;
   for (let key = 0; key < track.ratios.length; key += 1) {
     const offset = key * stride;
-    const alpha = key / (track.ratios.length - 1);
+    const alpha = loopDistributionAlpha(track.ratios[key]!, firstRatio, lastRatio, key, track.ratios.length - 1);
     track.values[offset] = track.values[offset]! + delta[0] * alpha;
     track.values[offset + 1] = track.values[offset + 1]! + delta[1] * alpha;
     track.values[offset + 2] = track.values[offset + 2]! + delta[2] * alpha;
@@ -805,8 +819,10 @@ function distributeLoopingRawMotionKeyframes(
   if (type === "quaternion") {
     const keys = keyframes as Array<{ value: Quat; ratio: number; interpolation: "linear" }>;
     const delta = multiplyQuat(keys[0]!.value, invertQuat(keys[keys.length - 1]!.value));
+    const firstRatio = keys[0]!.ratio;
+    const lastRatio = keys[keys.length - 1]!.ratio;
     for (let index = 0; index < keys.length; index += 1) {
-      const alpha = index / (keys.length - 1);
+      const alpha = loopDistributionAlpha(keys[index]!.ratio, firstRatio, lastRatio, index, keys.length - 1);
       keys[index]!.value = multiplyQuat(nlerpIdentityToQuat(delta, alpha), keys[index]!.value);
     }
     return;
@@ -814,10 +830,18 @@ function distributeLoopingRawMotionKeyframes(
 
   const keys = keyframes as Array<{ value: Vec3; ratio: number; interpolation: "linear" }>;
   const delta = subVec3(keys[0]!.value, keys[keys.length - 1]!.value);
+  const firstRatio = keys[0]!.ratio;
+  const lastRatio = keys[keys.length - 1]!.ratio;
   for (let index = 0; index < keys.length; index += 1) {
-    const alpha = index / (keys.length - 1);
+    const alpha = loopDistributionAlpha(keys[index]!.ratio, firstRatio, lastRatio, index, keys.length - 1);
     keys[index]!.value = addVec3(keys[index]!.value, [delta[0] * alpha, delta[1] * alpha, delta[2] * alpha]);
   }
+}
+
+function loopDistributionAlpha(ratio: number, firstRatio: number, lastRatio: number, keyIndex: number, lastKeyIndex: number): number {
+  const span = lastRatio - firstRatio;
+  if (Number.isFinite(ratio) && Number.isFinite(span) && span > EPSILON) return clamp((ratio - firstRatio) / span, 0, 1);
+  return lastKeyIndex > 0 ? keyIndex / lastKeyIndex : 0;
 }
 
 function nlerpIdentityToQuat(delta: Quat, alpha: number): Quat {
@@ -844,12 +868,15 @@ function bakeExtractedRootMotionClip(
   rotation: ResolvedRotationExtraction | null,
   translationReference: Transform,
   rotationReference: Transform,
+  motionRotation: UserTrack<"quaternion"> | undefined,
   bakedClipId: string | undefined
 ): AnimationClip {
   return {
     ...clip,
     id: bakedClipId ?? `${clip.id}:baked-root-motion`,
-    tracks: clip.tracks.map((track) => bakeCarrierTrack(skeleton, track, jointIndex, translation, rotation, translationReference, rotationReference)),
+    tracks: clip.tracks.map((track) =>
+      bakeCarrierTrack(skeleton, track, jointIndex, translation, rotation, translationReference, rotationReference, motionRotation, clip.duration)
+    ),
     ...(clip.metadata ? { metadata: { ...clip.metadata } } : {})
   };
 }
@@ -861,7 +888,9 @@ function bakeCarrierTrack(
   translation: ResolvedTranslationExtraction | null,
   rotation: ResolvedRotationExtraction | null,
   translationReference: Transform,
-  rotationReference: Transform
+  rotationReference: Transform,
+  motionRotation: UserTrack<"quaternion"> | undefined,
+  duration: number
 ): AnimationTrack {
   const property = normalizedTrackProperty(track.property);
   const copy: AnimationTrack = {
@@ -878,6 +907,18 @@ function bakeCarrierTrack(
       if (translation.axes.x) copy.values[offset] = translationReference.translation[0];
       if (translation.axes.y) copy.values[offset + 1] = translationReference.translation[1];
       if (translation.axes.z) copy.values[offset + 2] = translationReference.translation[2];
+    }
+  }
+
+  if (property === "translation" && rotation?.bake && motionRotation) {
+    for (let key = 0; key < copy.times.length; key += 1) {
+      const offset = key * 3;
+      const motionRatio = motionSampleRatio(copy.times[key]!, duration);
+      const rotationValue = sampleUserTrack(motionRotation, motionRatio) as Quat;
+      copy.values.set(
+        rotateVec3ByQuat(invertQuat(rotationValue), [copy.values[offset]!, copy.values[offset + 1]!, copy.values[offset + 2]!]),
+        offset
+      );
     }
   }
 

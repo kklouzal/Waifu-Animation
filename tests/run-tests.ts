@@ -3064,6 +3064,57 @@ assert.deepEqual(
   [0, 0.25, 0],
   "root-motion baking should leave unrelated tracks unchanged"
 );
+
+const rotationBakeTranslationClip: AnimationClip = {
+  id: "rotation-bake-translation-compensation",
+  duration: 1,
+  tracks: [
+    { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) },
+    {
+      joint: "root",
+      property: "rotation",
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)])
+    }
+  ]
+};
+const rotationBakeTranslation = extractRootMotion(motionSkeleton, rotationBakeTranslationClip, {
+  reference: "absolute",
+  translation: false,
+  rotation: { mode: "yaw", bake: true }
+});
+const rotationBakeTranslationRaw = createRawAnimation({
+  id: "raw-rotation-bake-translation-compensation",
+  duration: 1,
+  tracks: [
+    {
+      joint: "root",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 1, value: [0, 0, 1] }
+      ],
+      rotations: [
+        { time: 0, value: [0, 0, 0, 1] },
+        { time: 1, value: quatFromAxisAngle([0, 1, 0], Math.PI / 2) }
+      ]
+    }
+  ]
+});
+const rawRotationBakeTranslation = extractRawRootMotion(motionSkeleton, rotationBakeTranslationRaw, {
+  reference: "absolute",
+  translation: false,
+  rotation: { mode: "yaw", bake: true }
+});
+const compensatedTranslation = rotateVec3ByQuat(invertQuat(quatFromAxisAngle([0, 1, 0], Math.PI / 2)), [0, 0, 1]);
+assert.ok(rotationBakeTranslation.bakedClip, "rotation-only root-motion baking should still clone an in-place clip");
+assert.ok(
+  vectorNearlyEqual(sampleClipToPose(motionSkeleton, rotationBakeTranslation.bakedClip!, 1, { loop: false })[0]!.translation, compensatedTranslation, 1e-6),
+  "clip root-motion rotation baking should compensate carrier translation keys into the baked orientation"
+);
+assert.ok(
+  vectorNearlyEqual(rawRotationBakeTranslation.rawAnimation.tracks[0]!.translations[1]!.value, compensatedTranslation, 1e-6),
+  "raw root-motion rotation baking should document the matching translation compensation"
+);
 const wrappedExtractedDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 0.75, 2.25, { loop: true });
 assert.ok(vectorNearlyEqual(wrappedExtractedDelta.delta.translation, [15, 0, 7.5], 1e-5), "motion tracks should accumulate multi-loop forward deltas");
 assert.ok(
@@ -3172,6 +3223,46 @@ assert.ok(vectorNearlyEqual(sampleMotionTracks(rawMotionExtraction.motion, 0.5).
 assert.ok(
   quaternionNearlyEqual(sampleMotionTracks(rawMotionExtraction.motion, 0.5).transform.rotation, quatFromAxisAngle([0, 1, 0], Math.PI), 1e-5),
   "raw motion extraction should preserve the middle yaw channel while loopifying endpoints"
+);
+const unevenLoopDistributionClip: AnimationClip = {
+  id: "uneven-loop-distribution",
+  duration: 1,
+  tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 0.1, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 10, 0, 0]) }]
+};
+const unevenClipLoopDistribution = extractRootMotion(motionSkeleton, unevenLoopDistributionClip, {
+  reference: "absolute",
+  translation: { loop: true },
+  rotation: false
+});
+assert.ok(
+  vectorNearlyEqual(sampleMotionTracks(unevenClipLoopDistribution.motion, 0.1).transform.translation, [0, 0, 0], 1e-6),
+  "clip root-motion loop distribution should spread endpoint drift by key time instead of key ordinal"
+);
+const unevenRawLoopDistribution = extractRawRootMotion(
+  motionSkeleton,
+  createRawAnimation({
+    id: "raw-uneven-loop-distribution",
+    duration: 1,
+    tracks: [
+      {
+        joint: "root",
+        translations: [
+          { time: 0, value: [0, 0, 0] },
+          { time: 0.1, value: [1, 0, 0] },
+          { time: 1, value: [10, 0, 0] }
+        ]
+      }
+    ]
+  }),
+  {
+    reference: "absolute",
+    translation: { loop: true },
+    rotation: false
+  }
+);
+assert.ok(
+  vectorNearlyEqual(sampleMotionTracks(unevenRawLoopDistribution.motion, 0.1).transform.translation, [0, 0, 0], 1e-6),
+  "raw root-motion loop distribution should spread endpoint drift by key time instead of key ordinal"
 );
 assert.deepEqual(
   rawMotionExtraction.rawAnimation.tracks[0]!.translations.map((key) => key.value),
