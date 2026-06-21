@@ -17,9 +17,7 @@ export type SourceTrackMaskPolicy = {
   exclude?: SourceTrackRule[];
 };
 
-const ARM_TRACK_RULE = /(shoulder|upperArm|lowerArm|hand)/i;
 const FINGER_TRACK_RULE = /(thumb|index|middle|ring|little)/i;
-const ARM_SOURCE_TRACK_RULE = /^(left|right)(Shoulder|UpperArm|LowerArm|Hand)/;
 const FINGER_SOURCE_TRACK_RULE = /^(left|right)(Thumb|Index|Middle|Ring|Little)/;
 const ROOT_CARRIER_POSITION_RULE = /^(?:hips|root|pelvis)\.position$/i;
 

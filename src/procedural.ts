@@ -441,7 +441,7 @@ export class PresencePlanner {
     }
 
     const cueAmounts = { ...this.cueAmounts };
-    const motion = this.computeMotion(elapsedSeconds, behavior, affect, cueAmounts, speaking, targetMouth);
+    const motion = this.computeMotion(elapsedSeconds, behavior, cueAmounts, speaking, targetMouth);
     return {
       cueAmounts,
       lookAtTarget: this.gazeTarget(elapsedSeconds, energy, affect, behavior),
@@ -464,7 +464,6 @@ export class PresencePlanner {
   private computeMotion(
     elapsedSeconds: number,
     behavior: Required<PresenceBehavior>,
-    affect: Required<PresenceAffect>,
     cueAmounts: PresenceCueAmounts,
     speaking: boolean,
     targetMouth: number

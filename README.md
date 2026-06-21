@@ -45,6 +45,7 @@ npm test
 - `runtime`: deterministic layer stack, crossfades, priorities, explicit root-motion delta collection, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters.
 - `manifest`: manifest includes, duplicate/id validation, clip asset inspection, usable/rejected clip helpers.
+- `importer-config`: typed planning helpers for Ozz-style offline config slices without owning extraction tooling.
 - `procedural`: look-at distribution, seeded attention/idle scheduling helpers.
 - `ik`: two-bone IK and target clamping foundations.
 - `face`: viseme mixer, expression mixer, blink scheduler.

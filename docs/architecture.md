@@ -13,6 +13,7 @@
 - `runtime`: weighted layer stack, priorities, first-class override crossfade orchestration, additive layers, optional evaluation diagnostics, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
 - `manifest`: manifest include loading, duplicate/id validation, root-motion policy/provenance metadata readers, clip asset inspection, usable/rejected manifest helpers.
+- `importer-config`: app-agnostic Ozz-style offline import planning for additive references, raw motion extraction, optimization, user tracks, baked camera joints, and rigid instances.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.
 - `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, pelvis compensation, target clamping, and explicit skipped/clamped statuses.

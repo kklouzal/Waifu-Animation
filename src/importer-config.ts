@@ -125,7 +125,6 @@ const DEFAULT_OPTIMIZER_TOLERANCES: Required<AnimationOptimizerTolerances> = {
 
 const OZZ_DEFAULT_TRANSLATION_AXES: Required<MotionExtractionAxisMask> = { x: true, y: false, z: true };
 const OZZ_DEFAULT_ROTATION_AXES: Required<MotionExtractionAxisMask> = { x: false, y: true, z: false };
-const ALL_TRANSLATION_AXES: Required<MotionExtractionAxisMask> = { x: true, y: true, z: true };
 const DEFAULT_BAKED_NODE_TYPES: BakedSkeletonNodeTypes = {
   skeleton: true,
   marker: false,
