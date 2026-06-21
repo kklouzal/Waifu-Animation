@@ -1,12 +1,16 @@
 import {
   type AnimationClip,
   type AnimationTrack,
+  type RawAnimation,
+  type RawAnimationJointTrack,
   type SampleOptions,
   type SampleRepairDiagnostic,
+  cloneRawAnimation,
   normalizedTrackProperty,
   resolveTrackJointIndex,
   sampleClipToPose,
-  sampleTime
+  sampleTime,
+  validateRawAnimation
 } from "./clip.js";
 import {
   type Quat,
@@ -107,6 +111,11 @@ export type RootMotionExtractionResult = {
   bakedClip?: AnimationClip;
 };
 
+export type RawRootMotionExtractionResult = {
+  motion: ExtractedRootMotion;
+  rawAnimation: RawAnimation;
+};
+
 export type MotionTrackSampleOptions = {
   loop?: boolean;
 };
@@ -130,6 +139,10 @@ export type MotionAccumulatorUpdateOptions = {
 export type MotionBlendLayer = {
   weight: number;
   delta: Transform;
+};
+
+export type ExtractRawRootMotionOptions = Omit<ExtractRootMotionOptions, "sampleTimes" | "bakedClipId"> & {
+  rawAnimationId?: string;
 };
 
 type ResolvedTranslationExtraction = {
@@ -215,6 +228,109 @@ export function extractRootMotion(
     motion,
     bakedClip: bakeExtractedRootMotionClip(skeleton, clip, jointIndex, translationSettings, rotationSettings, translationReference, rotationReference, options.bakedClipId)
   };
+}
+
+export function extractRawRootMotion(
+  skeleton: Skeleton,
+  rawAnimation: RawAnimation,
+  options: ExtractRawRootMotionOptions = {}
+): RawRootMotionExtractionResult {
+  const issues = validateRawAnimation(rawAnimation, skeleton);
+  if (issues.length > 0) throw new Error(`raw animation is invalid: ${issues.map(formatRawMotionIssue).join("; ")}`);
+
+  const diagnostics = options.diagnostics;
+  const jointIndex = resolveMotionCarrierIndex(skeleton, options.carrier, diagnostics);
+  const trackIndex = resolveRawMotionCarrierTrackIndex(skeleton, rawAnimation, jointIndex);
+  if (trackIndex < 0) {
+    throw new Error(`raw motion carrier joint ${jointIndex} does not map to a raw animation track`);
+  }
+
+  const sourceTrack = rawAnimation.tracks[trackIndex]!;
+  const output = cloneRawAnimation(rawAnimation);
+  if (options.rawAnimationId !== undefined) output.id = options.rawAnimationId;
+  const outputTrack = output.tracks[trackIndex]!;
+  const duration = finiteMotionDuration(rawAnimation.duration);
+  const translationSettings = resolveTranslationExtraction(options);
+  const rotationSettings = resolveRotationExtraction(options);
+  const translationReference = resolveRawTranslationReference(skeleton, sourceTrack, jointIndex, translationSettings?.reference ?? options.reference ?? "skeleton");
+  const rotationReference = resolveRawRotationReference(skeleton, sourceTrack, jointIndex, rotationSettings?.reference ?? options.reference ?? "skeleton");
+  const joint = skeleton.joints[jointIndex]?.name ?? sourceTrack.joint ?? String(sourceTrack.humanBone ?? "");
+
+  const motion: ExtractedRootMotion = {
+    duration,
+    loop: options.loop ?? rawAnimation.loop ?? false,
+    carrier: { jointIndex, joint }
+  };
+
+  const rawPositionKeys = translationSettings
+    ? sourceTrack.translations.map((key) => ({
+        ratio: motionSampleRatio(key.time, duration),
+        value: extractRawMotionTranslation(key.value, translationReference, translationSettings.axes),
+        interpolation: "linear" as const
+      }))
+    : [];
+  const rawRotationKeys = rotationSettings
+    ? sourceTrack.rotations.map((key) => ({
+        ratio: motionSampleRatio(key.time, duration),
+        value: extractMotionRotation({ translation: [0, 0, 0], rotation: key.value, scale: [1, 1, 1] }, { translation: [0, 0, 0], rotation: rotationReference, scale: [1, 1, 1] }, rotationSettings.mode),
+        interpolation: "linear" as const
+      }))
+    : [];
+
+  if (translationSettings?.bake) {
+    for (let index = 0; index < outputTrack.translations.length; index += 1) {
+      const key = outputTrack.translations[index]!;
+      const motionValue = rawPositionKeys[index]?.value ?? [0, 0, 0];
+      key.value = subVec3(key.value, motionValue);
+    }
+  }
+
+  if (rotationSettings?.bake) {
+    for (let index = 0; index < outputTrack.rotations.length; index += 1) {
+      const key = outputTrack.rotations[index]!;
+      const motionValue = rawRotationKeys[index]?.value ?? [0, 0, 0, 1];
+      key.value = multiplyQuat(invertQuat(motionValue), key.value);
+    }
+  }
+
+  if (rotationSettings?.loop) distributeLoopingRawMotionKeyframes(rawRotationKeys, "quaternion");
+  if (translationSettings?.loop) distributeLoopingRawMotionKeyframes(rawPositionKeys, "float3");
+
+  if (translationSettings) {
+    motion.position = buildUserTrack({
+      type: "float3",
+      name: `${rawAnimation.id}.${joint || "root"}.raw-motion.position`,
+      keyframes: rawPositionKeys
+    } satisfies RawFloat3Track);
+  }
+
+  if (rotationSettings) {
+    motion.rotation = buildUserTrack({
+      type: "quaternion",
+      name: `${rawAnimation.id}.${joint || "root"}.raw-motion.rotation`,
+      keyframes: rawRotationKeys
+    } satisfies RawQuaternionTrack);
+  }
+
+  if (rotationSettings?.bake && motion.rotation) {
+    for (const key of outputTrack.translations) {
+      const ratio = motionSampleRatio(key.time, duration);
+      const motionRotation = sampleUserTrack(motion.rotation, ratio) as Quat;
+      key.value = rotateVec3ByQuat(invertQuat(motionRotation), key.value);
+    }
+  }
+
+  return { motion, rawAnimation: output };
+}
+
+export class MotionExtractor {
+  extract(skeleton: Skeleton, clip: AnimationClip, options: ExtractRootMotionOptions = {}): RootMotionExtractionResult {
+    return extractRootMotion(skeleton, clip, options);
+  }
+
+  extractRaw(skeleton: Skeleton, rawAnimation: RawAnimation, options: ExtractRawRootMotionOptions = {}): RawRootMotionExtractionResult {
+    return extractRawRootMotion(skeleton, rawAnimation, options);
+  }
 }
 
 export function sampleMotionIntervalDelta(
@@ -609,9 +725,115 @@ function loopMotionTrack<T extends "float3" | "quaternion">(track: UserTrack<T>)
   const stride = track.type === "quaternion" ? 4 : 3;
   const firstOffset = 0;
   const lastOffset = (track.ratios.length - 1) * stride;
-  for (let component = 0; component < stride; component += 1) {
-    track.values[lastOffset + component] = track.values[firstOffset + component]!;
+  if (track.type === "quaternion") {
+    const first: Quat = [track.values[firstOffset]!, track.values[firstOffset + 1]!, track.values[firstOffset + 2]!, track.values[firstOffset + 3]!];
+    const last: Quat = [track.values[lastOffset]!, track.values[lastOffset + 1]!, track.values[lastOffset + 2]!, track.values[lastOffset + 3]!];
+    const delta = multiplyQuat(first, invertQuat(last));
+    for (let key = 0; key < track.ratios.length; key += 1) {
+      const offset = key * stride;
+      const alpha = key / (track.ratios.length - 1);
+      const value: Quat = [track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!, track.values[offset + 3]!];
+      track.values.set(multiplyQuat(nlerpIdentityToQuat(delta, alpha), value), offset);
+    }
+    return;
   }
+
+  const delta: Vec3 = [
+    track.values[firstOffset]! - track.values[lastOffset]!,
+    track.values[firstOffset + 1]! - track.values[lastOffset + 1]!,
+    track.values[firstOffset + 2]! - track.values[lastOffset + 2]!
+  ];
+  for (let key = 0; key < track.ratios.length; key += 1) {
+    const offset = key * stride;
+    const alpha = key / (track.ratios.length - 1);
+    track.values[offset] = track.values[offset]! + delta[0] * alpha;
+    track.values[offset + 1] = track.values[offset + 1]! + delta[1] * alpha;
+    track.values[offset + 2] = track.values[offset + 2]! + delta[2] * alpha;
+  }
+}
+
+function resolveRawMotionCarrierTrackIndex(skeleton: Skeleton, rawAnimation: RawAnimation, jointIndex: number): number {
+  for (let index = 0; index < rawAnimation.tracks.length; index += 1) {
+    if (resolveRawAnimationTrackJointIndex(skeleton, rawAnimation.tracks[index]!) === jointIndex) return index;
+  }
+  if (rawAnimation.tracks.length === skeleton.joints.length && jointIndex >= 0 && jointIndex < rawAnimation.tracks.length) return jointIndex;
+  return -1;
+}
+
+function resolveRawAnimationTrackJointIndex(skeleton: Skeleton, track: RawAnimationJointTrack): number {
+  if (track.joint !== undefined) return resolveJointIndex(skeleton, track.joint);
+  if (track.humanBone !== undefined && isHumanoidBoneName(track.humanBone)) return resolveHumanoidIndex(skeleton, track.humanBone);
+  return -1;
+}
+
+function resolveRawTranslationReference(
+  skeleton: Skeleton,
+  track: RawAnimationJointTrack,
+  jointIndex: number,
+  reference: MotionExtractionReference
+): Vec3 {
+  if (reference === "absolute" || jointIndex < 0) return [0, 0, 0];
+  if (reference === "animation" && track.translations.length > 0) return cloneTransform({ translation: track.translations[0]!.value }).translation;
+  return cloneTransform(skeleton.restPose[jointIndex]).translation;
+}
+
+function resolveRawRotationReference(
+  skeleton: Skeleton,
+  track: RawAnimationJointTrack,
+  jointIndex: number,
+  reference: MotionExtractionReference
+): Quat {
+  if (reference === "absolute" || jointIndex < 0) return [0, 0, 0, 1];
+  if (reference === "animation" && track.rotations.length > 0) return cloneQuat(track.rotations[0]!.value);
+  return cloneQuat(skeleton.restPose[jointIndex]?.rotation);
+}
+
+function extractRawMotionTranslation(sample: Vec3, reference: Vec3, axes: Required<MotionExtractionAxisMask>): Vec3 {
+  const delta = subVec3(sample, reference);
+  return [
+    axes.x ? finiteSigned(delta[0], 0) : 0,
+    axes.y ? finiteSigned(delta[1], 0) : 0,
+    axes.z ? finiteSigned(delta[2], 0) : 0
+  ];
+}
+
+function distributeLoopingRawMotionKeyframes(
+  keyframes: Array<{ value: Vec3; ratio: number; interpolation: "linear" }> | Array<{ value: Quat; ratio: number; interpolation: "linear" }>,
+  type: "float3" | "quaternion"
+): void {
+  if (keyframes.length < 2) return;
+  if (type === "quaternion") {
+    const keys = keyframes as Array<{ value: Quat; ratio: number; interpolation: "linear" }>;
+    const delta = multiplyQuat(keys[0]!.value, invertQuat(keys[keys.length - 1]!.value));
+    for (let index = 0; index < keys.length; index += 1) {
+      const alpha = index / (keys.length - 1);
+      keys[index]!.value = multiplyQuat(nlerpIdentityToQuat(delta, alpha), keys[index]!.value);
+    }
+    return;
+  }
+
+  const keys = keyframes as Array<{ value: Vec3; ratio: number; interpolation: "linear" }>;
+  const delta = subVec3(keys[0]!.value, keys[keys.length - 1]!.value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const alpha = index / (keys.length - 1);
+    keys[index]!.value = addVec3(keys[index]!.value, [delta[0] * alpha, delta[1] * alpha, delta[2] * alpha]);
+  }
+}
+
+function nlerpIdentityToQuat(delta: Quat, alpha: number): Quat {
+  const amount = clamp(alpha, 0, 1);
+  const end = normalizeQuat(delta);
+  return normalizeQuat([end[0] * amount, end[1] * amount, end[2] * amount, 1 + (end[3] - 1) * amount]);
+}
+
+function formatRawMotionIssue(issue: { track?: number; key?: number; joint?: string; property?: string; message: string }): string {
+  const parts = [];
+  if (issue.track !== undefined) parts.push(`track ${issue.track}`);
+  if (issue.key !== undefined) parts.push(`key ${issue.key}`);
+  if (issue.joint !== undefined) parts.push(issue.joint);
+  if (issue.property !== undefined) parts.push(issue.property);
+  parts.push(issue.message);
+  return parts.join(" ");
 }
 
 function bakeExtractedRootMotionClip(

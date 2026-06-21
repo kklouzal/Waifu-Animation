@@ -12,6 +12,8 @@ import {
   type SampleRepairDiagnostic,
   type Skeleton,
   AnimationBuilder,
+  AdditiveAnimationBuilder,
+  AnimationOptimizer,
   PACKED_RUNTIME_ANIMATION_FORMAT,
   PACKED_RUNTIME_ANIMATION_VERSION,
   AttentionScheduler,
@@ -32,6 +34,7 @@ import {
   calculateThreeOverlayFade,
   calculateThreeRuntimeStartTime,
   clearThreeFootPlantOffsets,
+  computeLocomotionBlendWeights,
   blendPoses,
   breathingWeight,
   clamp01,
@@ -101,6 +104,7 @@ import {
   retargetQuaternionTrackValues,
   blendMotionDeltas,
   buildSkeletonFromRawSkeleton,
+  buildAdditiveAnimationClip,
   buildAnimationFromRawAnimation,
   buildPackedRuntimeAnimation,
   buildUserTrack,
@@ -113,8 +117,11 @@ import {
   getRawUserTrackStats,
   getPackedRuntimeAnimationStats,
   MotionAccumulator,
+  MotionExtractor,
   MotionSampler,
+  optimizeRawAnimation,
   optimizeRawUserTrack,
+  extractRawRootMotion,
   sampleMotionCarrier,
   sampleMotionIntervalDelta,
   sampleMotionTracks,
@@ -130,20 +137,27 @@ import {
   sampleTrack,
   getAnimationClipStats,
   sampleUserTrack,
+  compareAnimationSampleError,
   sanitizeQuaternionTrackValues,
   SkeletonBuilder,
+  applyAimIkChildToParentChainToPose,
   solveAimIk,
+  createHumanoidLookAtAimChain,
   applyAimIkChainToPose,
   applyAimIkModelCorrection,
   applyTwoBoneIkLocalCorrections,
   modelCorrectionToLocalPostCorrection,
   solveFootPlant,
+  solveOzzFootIk,
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   solveTwoBoneIkModel,
   toFloat32Array,
   triggerFloatTrackEdges,
+  synchronizeLocomotionPlayback,
+  tryOptimizeRawAnimation,
   tryBuildAnimationFromRawAnimation,
+  tryBuildAdditiveAnimationClip,
   tryBuildPackedRuntimeAnimation,
   tryBuildUserTrack,
   transformPoint,
@@ -983,6 +997,220 @@ assert.deepEqual(rawAnimation.tracks[0]!.rotations[1]!.value, [0, 0, 0, -1], "An
 assert.equal(validateClip(rawBuiltClip, skeleton).length, 0, "built raw animations should pass runtime clip validation");
 assert.equal(buildAnimationFromRawAnimation(rawAnimation, skeleton).tracks.length, rawBuiltClip.tracks.length, "buildAnimationFromRawAnimation should expose the same builder path");
 
+const rawOptimizerSource = createRawAnimation({
+  id: "raw-optimizer",
+  name: "Raw Optimizer",
+  duration: 2,
+  loop: true,
+  metadata: { source: "optimizer-fixture" },
+  tracks: [
+    {
+      joint: "hips",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 1, value: [1, 2, 3] },
+        { time: 2, value: [2, 4, 6] }
+      ]
+    },
+    {
+      joint: "spine",
+      scales: [
+        { time: 0, value: [1, 1, 1] },
+        { time: 1, value: [1.5, 1.5, 1.5] },
+        { time: 2, value: [2, 2, 2] }
+      ]
+    },
+    {
+      humanBone: "head",
+      rotations: [
+        { time: 0, value: quatFromAxisAngle([0, 1, 0], 0) },
+        { time: 1, value: quatFromAxisAngle([0, 1, 0], Math.PI / 4) },
+        { time: 2, value: quatFromAxisAngle([0, 1, 0], Math.PI / 2) }
+      ]
+    }
+  ]
+});
+const rawOptimizerSourceSnapshot = JSON.stringify(rawOptimizerSource);
+const rawOptimizerResult = new AnimationOptimizer().tryOptimize(rawOptimizerSource, {
+  skeleton,
+  tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 }
+});
+assert.equal(rawOptimizerResult.ok, true, "AnimationOptimizer should return an optimized raw animation for valid input");
+if (rawOptimizerResult.ok) {
+  assert.equal(rawOptimizerResult.rawAnimation.id, rawOptimizerSource.id);
+  assert.equal(rawOptimizerResult.rawAnimation.name, rawOptimizerSource.name);
+  assert.equal(rawOptimizerResult.rawAnimation.loop, true);
+  assert.deepEqual(rawOptimizerResult.rawAnimation.metadata, { source: "optimizer-fixture" });
+  assert.equal(rawOptimizerResult.stats.inputKeyCount, 9);
+  assert.equal(rawOptimizerResult.stats.outputKeyCount, 6);
+  assert.equal(rawOptimizerResult.stats.removedKeyCount, 3);
+  assert.equal(rawOptimizerResult.rawAnimation.tracks[0]!.translations.length, 2, "linear translation keys should be reduced");
+  assert.equal(rawOptimizerResult.rawAnimation.tracks[1]!.scales.length, 2, "linear scale keys should be reduced");
+  assert.equal(rawOptimizerResult.rawAnimation.tracks[2]!.rotations.length, 2, "slerp-linear rotation keys should be reduced");
+  assert.deepEqual(
+    rawOptimizerResult.rawAnimation.tracks[0]!.translations.map((key) => key.time),
+    [0, 2],
+    "raw animation optimization should preserve first and last translation keys"
+  );
+  assert.deepEqual(
+    rawOptimizerResult.rawAnimation.tracks[1]!.scales.map((key) => key.time),
+    [0, 2],
+    "raw animation optimization should preserve first and last scale keys"
+  );
+  assert.deepEqual(
+    rawOptimizerResult.rawAnimation.tracks[2]!.rotations.map((key) => key.time),
+    [0, 2],
+    "raw animation optimization should preserve first and last rotation keys"
+  );
+  assert.notEqual(rawOptimizerResult.rawAnimation.tracks[0]!.translations, rawOptimizerSource.tracks[0]!.translations);
+  const optimizedRuntimeClip = buildAnimationFromRawAnimation(rawOptimizerResult.rawAnimation, skeleton);
+  const runtimeSampleError = compareAnimationSampleError(rawOptimizerSource, optimizedRuntimeClip, { skeleton, sampleFrequency: 8 });
+  assert.equal(runtimeSampleError.sampleCount, 17);
+  assert.ok(runtimeSampleError.translation.max < 1e-5, "raw/runtime sample-error comparison should report preserved translation samples");
+  assert.ok(runtimeSampleError.scale.max < 1e-5, "raw/runtime sample-error comparison should report preserved scale samples");
+  assert.ok(runtimeSampleError.rotation.max < 1e-5, "raw/runtime sample-error comparison should report preserved shortest-path rotation samples");
+}
+assert.equal(JSON.stringify(rawOptimizerSource), rawOptimizerSourceSnapshot, "raw animation optimization should not mutate source raw animation data");
+const optimizedRawViaFunction = optimizeRawAnimation(rawOptimizerSource, { skeleton, tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 } });
+assert.equal(optimizedRawViaFunction.tracks[0]!.translations.length, 2, "optimizeRawAnimation should expose the same reduction path");
+
+const rawOptimizerShortestQuaternion = createRawAnimation({
+  id: "raw-optimizer-shortest-quaternion",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "head",
+      rotations: [
+        { time: 0, value: [0, 0, 0, 1] },
+        { time: 0.5, value: [0, 0, 0, -1] },
+        { time: 1, value: [0, 0, 0, 1] }
+      ]
+    }
+  ]
+});
+const optimizedShortestQuaternionRaw = optimizeRawAnimation(rawOptimizerShortestQuaternion, { skeleton, tolerances: { rotation: 0 } });
+assert.equal(
+  optimizedShortestQuaternionRaw.tracks[0]!.rotations.length,
+  2,
+  "raw animation optimization should treat sign-equivalent quaternions as shortest-path equivalent"
+);
+
+const hierarchyToleranceRawAnimation = createRawAnimation({
+  id: "hierarchy-tolerance-raw",
+  duration: 2,
+  tracks: [
+    {
+      joint: "hips",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 1, value: [0.05, 0, 0] },
+        { time: 2, value: [0, 0, 0] }
+      ]
+    }
+  ]
+});
+const hierarchyLooseOptimization = optimizeRawAnimation(hierarchyToleranceRawAnimation, { skeleton, tolerances: { translation: 0.1 } });
+assert.equal(hierarchyLooseOptimization.tracks[0]!.translations.length, 2, "loose root tolerance should remove small root deviations");
+const hierarchySensitiveOptimization = optimizeRawAnimation(hierarchyToleranceRawAnimation, { skeleton, tolerances: { translation: 0.1 }, hierarchyWeight: 1 });
+assert.equal(
+  hierarchySensitiveOptimization.tracks[0]!.translations.length,
+  3,
+  "hierarchy weighting should make parent-joint optimization stricter when descendants would inherit the error"
+);
+const jointWeightedOptimization = optimizeRawAnimation(hierarchyToleranceRawAnimation, {
+  skeleton,
+  tolerances: { translation: 0.1 },
+  jointTolerances: { hips: { weight: 10 } }
+});
+assert.equal(jointWeightedOptimization.tracks[0]!.translations.length, 3, "per-joint optimizer weights should make matching joints stricter");
+
+const firstFrameAdditiveSourceClip: AnimationClip = {
+  id: "first-frame-additive-source",
+  name: "First Frame Additive Source",
+  duration: 1,
+  loop: true,
+  metadata: { source: "authored" },
+  tracks: [
+    {
+      humanBone: "hips",
+      property: "translation",
+      times: toFloat32Array([0.25, 1]),
+      values: toFloat32Array([4, 10, 0, 7, 16, 0])
+    },
+    {
+      humanBone: "head",
+      property: "rotation",
+      times: toFloat32Array([0, 1]),
+      values: sanitizeQuaternionTrackValues([
+        ...quatFromAxisAngle([0, 1, 0], Math.PI / 4),
+        ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)
+      ])
+    }
+  ]
+};
+const firstFrameAdditiveClip = new AdditiveAnimationBuilder().build(firstFrameAdditiveSourceClip, skeleton);
+assert.equal(firstFrameAdditiveClip.id, firstFrameAdditiveSourceClip.id);
+assert.equal(firstFrameAdditiveClip.name, firstFrameAdditiveSourceClip.name);
+assert.equal(firstFrameAdditiveClip.loop, true);
+assert.deepEqual(firstFrameAdditiveClip.metadata, { source: "authored" });
+assert.notEqual(firstFrameAdditiveClip.tracks[0]!.times, firstFrameAdditiveSourceClip.tracks[0]!.times, "additive builder should not alias source track times");
+assert.equal(validateClip(firstFrameAdditiveClip, skeleton).length, 0, "first-frame additive clips should be valid ordinary AnimationClips");
+const firstFrameStartDelta = additiveDeltaPose(skeleton.restPose, sampleClipToPose(skeleton, firstFrameAdditiveClip, 0.25, { loop: false }));
+assert.ok(vectorNearlyEqual(firstFrameStartDelta[0]!.translation, [0, 0, 0], 1e-6), "default additive builder should use each channel's first key as the translation reference");
+const firstFrameEndDelta = additiveDeltaPose(skeleton.restPose, sampleClipToPose(skeleton, firstFrameAdditiveClip, 1, { loop: false }));
+assert.ok(vectorNearlyEqual(firstFrameEndDelta[0]!.translation, [3, 6, 0], 1e-6), "first-frame additive builder should preserve translation deltas through rest-pose sampling");
+assert.ok(
+  quaternionNearlyEqual(firstFrameEndDelta[2]!.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
+  "first-frame additive builder should encode rotation deltas from the first keyed rotation"
+);
+const runtimeFirstFrameAdditive = new AnimationRuntime(skeleton);
+runtimeFirstFrameAdditive.setLayer("additive", firstFrameAdditiveClip, { time: 1, loop: false, weight: 1, targetWeight: 1, blendMode: "additive" });
+assert.ok(
+  vectorNearlyEqual(runtimeFirstFrameAdditive.evaluate().localPose[0]!.translation, [3, 7, 0], 1e-6),
+  "generated additive clips should compose through the existing runtime additive layer path"
+);
+
+const explicitReferencePose = clonePose(skeleton.restPose);
+explicitReferencePose[3]!.translation = [1, 0, 0];
+explicitReferencePose[3]!.rotation = quatFromAxisAngle([0, 1, 0], Math.PI / 6);
+const explicitReferenceAdditiveSourceClip: AnimationClip = {
+  id: "explicit-reference-additive-source",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "leftUpperArm",
+      property: "translation",
+      times: toFloat32Array([0]),
+      values: toFloat32Array([4, 0, 0])
+    },
+    {
+      humanBone: "leftUpperArm",
+      property: "rotation",
+      times: toFloat32Array([0]),
+      values: sanitizeQuaternionTrackValues(quatFromAxisAngle([0, 1, 0], (Math.PI * 5) / 12))
+    }
+  ]
+};
+const explicitReferenceAdditiveClip = buildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, { referencePose: explicitReferencePose });
+const explicitReferenceDelta = additiveDeltaPose(skeleton.restPose, sampleClipToPose(skeleton, explicitReferenceAdditiveClip, 0, { loop: false }));
+assert.ok(vectorNearlyEqual(explicitReferenceDelta[3]!.translation, [3, 0, 0], 1e-6), "explicit reference poses should drive additive translation deltas");
+assert.ok(
+  quaternionNearlyEqual(explicitReferenceDelta[3]!.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
+  "explicit reference poses should drive additive rotation deltas"
+);
+const shortReferenceAdditiveBuild = tryBuildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, { referencePose: explicitReferencePose.slice(0, 1) });
+assert.equal(shortReferenceAdditiveBuild.ok, false, "additive builder should reject reference poses shorter than the skeleton");
+if (!shortReferenceAdditiveBuild.ok) {
+  assert.ok(shortReferenceAdditiveBuild.issues.some((issue) => issue.message.includes("reference pose length 1 does not match skeleton 4")));
+}
+const nonFiniteReferencePose = clonePose(skeleton.restPose);
+nonFiniteReferencePose[0]!.translation = [Number.NaN, 0, 0];
+assert.throws(
+  () => buildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, { referencePose: nonFiniteReferencePose }),
+  /reference pose transform is not finite/,
+  "additive builder should fail clearly on non-finite reference transforms"
+);
+
 const clonedRawAnimation = cloneRawAnimation(rawAnimation);
 assert.notEqual(clonedRawAnimation, rawAnimation, "cloneRawAnimation should create a new raw animation object");
 assert.notEqual(clonedRawAnimation.tracks[0], rawAnimation.tracks[0], "cloneRawAnimation should clone raw joint tracks");
@@ -1004,10 +1232,27 @@ assert.ok(
 );
 const missingRawAnimationBuild = tryBuildAnimationFromRawAnimation(missingRawAnimation, skeleton);
 assert.equal(missingRawAnimationBuild.ok, false, "tryBuildAnimationFromRawAnimation should return issues instead of a clip for invalid raw input");
+const missingRawAnimationOptimization = tryOptimizeRawAnimation(missingRawAnimation, { skeleton });
+assert.equal(missingRawAnimationOptimization.ok, false, "tryOptimizeRawAnimation should return issues instead of optimized raw data for invalid input");
+if (!missingRawAnimationOptimization.ok) {
+  assert.equal(missingRawAnimationOptimization.rawAnimation, null);
+  assert.equal(missingRawAnimationOptimization.stats, null);
+  assert.ok(missingRawAnimationOptimization.issues.some((issue) => issue.message === "raw animation track does not map to skeleton"));
+}
 assert.throws(
   () => buildAnimationFromRawAnimation(missingRawAnimation, skeleton),
   /raw animation track does not map to skeleton/,
   "buildAnimationFromRawAnimation should reject skeleton mapping failures"
+);
+assert.throws(
+  () => optimizeRawAnimation(missingRawAnimation, { skeleton }),
+  /raw animation track does not map to skeleton/,
+  "optimizeRawAnimation should reject skeleton mapping failures"
+);
+assert.equal(
+  tryOptimizeRawAnimation(rawOptimizerSource, { tolerances: { translation: Number.NaN } }).ok,
+  false,
+  "tryOptimizeRawAnimation should reject invalid optimizer tolerances through structured issues"
 );
 
 const duplicateRawAnimation = createRawAnimation({
@@ -2641,6 +2886,91 @@ const blendedMotion = blendMotionDeltas([
   { weight: -5, delta: { translation: [100, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } }
 ]);
 assert.ok(vectorNearlyEqual(blendedMotion.translation, [8, 0, 0], 1e-6), "motion delta blending should normalize positive weights and ignore negative weights");
+assert.deepEqual(computeLocomotionBlendWeights(0.25, 3), [0.5, 0.5, 0], "locomotion blend weights should follow the Ozz walk/jog/run triangular profile");
+assert.deepEqual(computeLocomotionBlendWeights(Number.NaN, 3), [1, 0, 0], "non-finite blend ratios should fall back to the first locomotion layer");
+const synchronizedLocomotion = synchronizeLocomotionPlayback(
+  [
+    { id: "walk", duration: 1 },
+    { id: "jog", duration: 0.5 },
+    { id: "run", duration: 0.25 }
+  ],
+  { blendRatio: 0.25, phase: 0.5 }
+);
+assert.ok(Math.abs(synchronizedLocomotion.synchronizedDuration - 0.75) < 1e-6, "locomotion speed sync should use weighted clip durations as the shared cycle");
+assert.deepEqual(
+  synchronizedLocomotion.layers.map((layer) => layer.weight),
+  [0.5, 0.5, 0],
+  "locomotion speed sync should expose deterministic derived weights"
+);
+assert.ok(Math.abs(synchronizedLocomotion.layers[0]!.playbackSpeed - 4 / 3) < 1e-6, "walk playback should speed up to the synchronized cycle");
+assert.ok(Math.abs(synchronizedLocomotion.layers[1]!.playbackSpeed - 2 / 3) < 1e-6, "jog playback should slow relative to walk when its authored duration is shorter");
+assert.ok(Math.abs(synchronizedLocomotion.layers[0]!.time - 0.5) < 1e-6 && Math.abs(synchronizedLocomotion.layers[1]!.time - 0.25) < 1e-6, "synchronized locomotion should report per-clip local times at the shared phase");
+const zeroLocomotionSync = synchronizeLocomotionPlayback([
+  { id: "zero-duration", duration: 0, weight: 1 },
+  { id: "zero-weight", duration: 1, weight: 0 }
+]);
+assert.equal(zeroLocomotionSync.synchronizedDuration, 0, "zero-duration and zero-weight locomotion sets should not invent a synchronized cycle");
+assert.deepEqual(
+  zeroLocomotionSync.layers.map((layer) => [layer.id, layer.playbackSpeed, layer.active]),
+  [["zero-duration", 0, false], ["zero-weight", 0, false]],
+  "locomotion speed sync should keep zero-duration/zero-weight layers deterministic"
+);
+
+const rawMotionSource = createRawAnimation({
+  id: "raw-motion-source",
+  duration: 1,
+  loop: true,
+  tracks: [
+    {
+      joint: "root",
+      translations: [
+        { time: 0, value: [0, 0, 0] },
+        { time: 0.5, value: [6, 1, 0] },
+        { time: 1, value: [10, 2, 4] }
+      ],
+      rotations: [
+        { time: 0, value: quatFromAxisAngle([0, 1, 0], 0) },
+        { time: 0.5, value: quatFromAxisAngle([0, 1, 0], Math.PI) },
+        { time: 1, value: quatFromAxisAngle([0, 1, 0], Math.PI * 2) }
+      ]
+    },
+    {
+      joint: "spine",
+      translations: [{ time: 0, value: [0, 0.25, 0] }]
+    }
+  ]
+});
+const rawMotionSnapshot = JSON.stringify(rawMotionSource);
+const rawMotionExtraction = extractRawRootMotion(motionSkeleton, rawMotionSource, {
+  reference: "absolute",
+  translation: { axes: { x: true, y: false, z: true }, bake: true, loop: true },
+  rotation: { mode: "yaw", bake: true, loop: true },
+  rawAnimationId: "raw-motion-in-place"
+});
+assert.equal(rawMotionExtraction.rawAnimation.id, "raw-motion-in-place");
+assert.equal(JSON.stringify(rawMotionSource), rawMotionSnapshot, "raw motion extraction should not mutate editable raw animation input");
+assert.ok(vectorNearlyEqual(sampleMotionTracks(rawMotionExtraction.motion, 0).transform.translation, sampleMotionTracks(rawMotionExtraction.motion, 1).transform.translation, 1e-6), "raw motion loop distribution should make extracted translation endpoints match");
+assert.ok(
+  quaternionNearlyEqual(sampleMotionTracks(rawMotionExtraction.motion, 0).transform.rotation, sampleMotionTracks(rawMotionExtraction.motion, 1).transform.rotation, 1e-5),
+  "raw motion loop distribution should make extracted rotation endpoints match"
+);
+assert.ok(vectorNearlyEqual(sampleMotionTracks(rawMotionExtraction.motion, 0.5).transform.translation, [1, 0, -2], 1e-5), "raw motion loop distribution should spread endpoint translation error across channel keys");
+assert.ok(
+  quaternionNearlyEqual(sampleMotionTracks(rawMotionExtraction.motion, 0.5).transform.rotation, quatFromAxisAngle([0, 1, 0], Math.PI), 1e-5),
+  "raw motion extraction should preserve the middle yaw channel while loopifying endpoints"
+);
+assert.deepEqual(
+  rawMotionExtraction.rawAnimation.tracks[0]!.translations.map((key) => key.value),
+  [[0, 0, 0], [0, 1, 0], [0, 2, 0]],
+  "raw motion baking should remove selected carrier translation axes and preserve unselected local motion"
+);
+assert.ok(
+  quaternionNearlyEqual(rawMotionExtraction.rawAnimation.tracks[0]!.rotations[1]!.value, [0, 0, 0, 1], 1e-5),
+  "raw motion baking should remove extracted yaw from the raw carrier rotation channel"
+);
+const rawClassExtraction = new MotionExtractor().extractRaw(motionSkeleton, rawMotionSource, { translation: false, rotation: false });
+assert.equal(rawClassExtraction.motion.position, undefined, "MotionExtractor class should expose raw extraction without forcing position tracks");
+assert.equal(rawClassExtraction.motion.rotation, undefined, "MotionExtractor class should expose raw extraction without forcing rotation tracks");
 const preservedExtractionInspection = inspectClipAsset(
   {
     id: "preserved-extracted-root-motion",
@@ -5342,6 +5672,42 @@ assert.equal(aimChain.corrections.length, 2);
 assert.ok(aimChain.corrections.every((correction) => correction.localCorrection.every(Number.isFinite)), "aim chain corrections should stay finite");
 assert.ok(dotVec3(matrixDirection(aimChainModels[2]!, [1, 0, 0]), aimChainTargetDirection) > 0.999, "aim chain helper should solve and apply corrections in deterministic model/local spaces");
 
+const humanoidLookAtSkeleton = createSkeleton([
+  { name: "hips", humanoid: "hips" },
+  { name: "spine", parentName: "hips", humanoid: "spine" },
+  { name: "neck", parentName: "spine", humanoid: "neck" },
+  { name: "head", parentName: "neck", humanoid: "head" }
+]);
+const humanoidLookAtChain = createHumanoidLookAtAimChain(humanoidLookAtSkeleton, { bones: ["head", "neck", "spine"], jointWeight: 0.5, guaranteeLast: true });
+assert.deepEqual(
+  humanoidLookAtChain.map((joint) => joint.joint),
+  [3, 2, 1],
+  "humanoid look-at policy should choose an available child-to-parent aim chain from skeleton metadata"
+);
+assert.equal(humanoidLookAtChain[2]!.weight, 1, "humanoid look-at policy can force the parent-most joint to full weight like the Ozz sample");
+const propagatedAimPose = clonePose(aimApplicationSkeleton.restPose);
+const propagatedAimModels = localToModelPose(aimApplicationSkeleton, propagatedAimPose);
+const propagatedAim = applyAimIkChildToParentChainToPose({
+  skeleton: aimApplicationSkeleton,
+  localPose: propagatedAimPose,
+  modelPose: propagatedAimModels,
+  joints: [{ joint: 2, weight: 0.45, offset: [0.05, 0, 0] }, { joint: 1, weight: 1 }],
+  target: headTarget,
+  forward: [1, 0, 0],
+  up: [0, 1, 0],
+  pole: [0, 1, 0]
+});
+const propagatedHeadPosition = modelPosition(propagatedAimModels[2]!);
+const propagatedTargetDirection = normalizeVec3([
+  headTarget[0] - propagatedHeadPosition[0],
+  headTarget[1] - propagatedHeadPosition[1],
+  headTarget[2] - propagatedHeadPosition[2]
+]);
+assert.equal(propagatedAim.corrections.length, 2);
+assert.equal(propagatedAim.updatedFrom, 1, "child-to-parent aim propagation should refresh the parent-most edited joint range once");
+assert.ok(propagatedAim.corrections.every((correction) => correction.localCorrection.every(Number.isFinite)), "child-to-parent propagated aim corrections should stay finite");
+assert.ok(dotVec3(matrixDirection(propagatedAimModels[2]!, [1, 0, 0]), propagatedTargetDirection) > 0.95, "child-to-parent aim propagation should keep the child joint directed toward the target");
+
 const footPlant = solveFootPlant(
   [
     {
@@ -5442,6 +5808,45 @@ assert.ok(
   invalidInputFootPlant.legs.every((leg) => leg.initialAnkle.every(Number.isFinite) && leg.targetAnkle.every(Number.isFinite) && (leg.ik?.end.every(Number.isFinite) ?? true)),
   "foot plant should keep leg outputs finite for non-finite contact inputs"
 );
+
+const ozzFootIkSkeleton = createSkeleton([
+  { name: "hips", humanoid: "hips", rest: { translation: [0, 1, 0] } },
+  { name: "leftUpperLeg", parentName: "hips", humanoid: "leftUpperLeg", rest: { translation: [-0.12, -0.05, 0] } },
+  { name: "leftLowerLeg", parentName: "leftUpperLeg", humanoid: "leftLowerLeg", rest: { translation: [0, -0.46, 0.02] } },
+  { name: "leftFoot", parentName: "leftLowerLeg", humanoid: "leftFoot", rest: { translation: [0, -0.42, -0.02] } },
+  { name: "rightUpperLeg", parentName: "hips", humanoid: "rightUpperLeg", rest: { translation: [0.12, -0.05, 0] } },
+  { name: "rightLowerLeg", parentName: "rightUpperLeg", humanoid: "rightLowerLeg", rest: { translation: [0, -0.46, 0.02] } },
+  { name: "rightFoot", parentName: "rightLowerLeg", humanoid: "rightFoot", rest: { translation: [0, -0.42, -0.02] } }
+]);
+const ozzFootIkPose = clonePose(ozzFootIkSkeleton.restPose);
+const ozzFootIkModels = localToModelPose(ozzFootIkSkeleton, ozzFootIkPose);
+const ozzFootIkRays: Array<{ id: string; start: [number, number, number]; ankle: [number, number, number] }> = [];
+const ozzFootIk = solveOzzFootIk({
+  skeleton: ozzFootIkSkeleton,
+  modelPose: ozzFootIkModels,
+  footHeight: 0.08,
+  rayHeight: 0.5,
+  maxAnkleCorrection: 0.5,
+  raycast: (ray) => {
+    ozzFootIkRays.push({ id: ray.id, start: ray.start, ankle: ray.ankle });
+    return { point: [ray.ankle[0], 0, ray.ankle[2]], normal: [0, 1, 0] };
+  }
+});
+assert.equal(ozzFootIk.plantedCount, 2, "Ozz-style foot IK wrapper should resolve default humanoid legs and floor contacts");
+assert.deepEqual(
+  ozzFootIk.legs.map((leg) => [leg.id, leg.hipJoint, leg.kneeJoint, leg.ankleJoint]),
+  [["left", 1, 2, 3], ["right", 4, 5, 6]],
+  "Ozz-style foot IK wrapper should expose resolved leg joint indices"
+);
+assert.ok(ozzFootIkRays.every((ray) => ray.start[1] > ray.ankle[1]), "Ozz-style foot IK wrapper should cast down from above each ankle by default");
+assert.ok(ozzFootIk.legs.every((leg) => leg.ankleAim?.jointCorrection.every(Number.isFinite)), "Ozz-style foot IK wrapper should include finite ankle aim corrections for planted feet");
+const missingOzzFootIk = solveOzzFootIk({
+  skeleton: ozzFootIkSkeleton,
+  modelPose: ozzFootIkModels,
+  legs: [{ id: "custom", hip: "missing", knee: "leftLowerLeg", ankle: "leftFoot" }]
+});
+assert.equal(missingOzzFootIk.plantedCount, 0);
+assert.ok(missingOzzFootIk.issues.some((issue) => issue === "custom: missing leg joints"), "Ozz-style foot IK wrapper should report unresolved explicit leg presets");
 
 const pelvisBone = new Object3D();
 pelvisBone.name = "hips";

@@ -1,7 +1,7 @@
-import { type Quat, type Transform, type Vec3, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
+import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, ONE_VEC3, addVec3, cloneNormalizedQuat, cloneQuat, cloneTransform, cloneVec3, clamp, dotQuat, ensureShortestQuat, euclideanModulo, lerpVec3, multiplyQuat, normalizeQuat, slerpQuat, transformDelta } from "./math.js";
 import { type Pose, readPoseTransformOrRest } from "./pose.js";
 import { retargetQuaternionSample } from "./retargeting.js";
-import { type HumanoidBoneName, type Skeleton, createRestPose, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
+import { type HumanoidBoneName, type Skeleton, createRestPose, isHumanoidBoneName, localToModelPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
 export type TrackProperty = "translation" | "rotation" | "scale" | "position" | "quaternion";
 export type NormalizedTrackProperty = "translation" | "rotation" | "scale";
@@ -99,6 +99,133 @@ export type RawAnimationValidationIssue = {
 export type AnimationBuildResult =
   | { ok: true; clip: AnimationClip; issues: [] }
   | { ok: false; clip: null; issues: RawAnimationValidationIssue[] };
+
+export type AdditiveAnimationClipBuildOptions = {
+  /** Explicit reference pose to subtract from the source clip. Defaults to each source channel's first keyed value. */
+  referencePose?: readonly Transform[];
+};
+
+export type AdditiveAnimationClipBuildResult =
+  | { ok: true; clip: AnimationClip; issues: [] }
+  | { ok: false; clip: null; issues: ClipValidationIssue[] };
+
+export type AnimationOptimizerTolerances = {
+  /** Local-space translation distance tolerance. Defaults to 1e-3. */
+  translation?: number;
+  /** Local-space quaternion angle tolerance in radians. Defaults to 1e-3. */
+  rotation?: number;
+  /** Local-space scale distance tolerance. Defaults to 1e-3. */
+  scale?: number;
+};
+
+export type AnimationOptimizerJointTolerance = AnimationOptimizerTolerances & {
+  /** Multiplies joint sensitivity. Values above 1 make effective tolerances stricter. */
+  weight?: number;
+};
+
+export type AnimationOptimizerOptions = {
+  /** Optional skeleton used for target validation, hierarchy sensitivity, and joint override resolution. */
+  skeleton?: Skeleton;
+  /** Base local-space tolerances. Rotation is measured as quaternion shortest-path angle in radians. */
+  tolerances?: AnimationOptimizerTolerances;
+  /** Optional joint-name, humanoid-name, or numeric-index tolerance overrides. */
+  jointTolerances?: Readonly<Record<string, AnimationOptimizerJointTolerance>>;
+  /** Additional sensitivity per descendant joint. 0 disables hierarchy weighting. Defaults to 0. */
+  hierarchyWeight?: number;
+  /** Optional post-optimization raw-vs-optimized sample diagnostics. Requires a skeleton. */
+  sampleError?: boolean | AnimationOptimizerSampleErrorOptions;
+};
+
+export type AnimationOptimizerSampleErrorOptions = {
+  /** Explicit validation sample times. Defaults to fixed-rate samples over the source duration. */
+  sampleTimes?: readonly number[];
+  /** Fixed-rate validation fallback when sampleTimes is omitted. Defaults to 30 Hz. */
+  sampleFrequency?: number;
+  /** Loop handling passed to both sampled sources. Defaults to the source loop flag. */
+  loop?: boolean;
+  /** Optional rest pose used when sampling both sources. */
+  restPose?: readonly Transform[];
+  /** Include propagated model-space diagnostics. Defaults to true for optimizer sample diagnostics. */
+  includeModelSpace?: boolean;
+};
+
+export type AnimationOptimizationChannelStats = {
+  track: number;
+  property: NormalizedTrackProperty;
+  inputKeyCount: number;
+  outputKeyCount: number;
+  removedKeyCount: number;
+  tolerance: number;
+  jointWeight: number;
+  hierarchyWeight: number;
+  descendantCount: number;
+  joint?: string;
+  humanBone?: string;
+  jointIndex?: number;
+};
+
+export type AnimationOptimizationStats = {
+  inputKeyCount: number;
+  outputKeyCount: number;
+  removedKeyCount: number;
+  channels: AnimationOptimizationChannelStats[];
+  sampleError?: AnimationSampleErrorReport;
+};
+
+export type RawAnimationOptimizationResult =
+  | { ok: true; rawAnimation: RawAnimation; issues: []; stats: AnimationOptimizationStats }
+  | { ok: false; rawAnimation: null; issues: RawAnimationValidationIssue[]; stats: null };
+
+export type AnimationSampleErrorMetric = {
+  rms: number;
+  max: number;
+  maxSample?: number;
+  maxTime?: number;
+  maxJointIndex?: number;
+  maxJoint?: string;
+};
+
+export type AnimationSampleErrorReport = {
+  sampleCount: number;
+  jointSampleCount: number;
+  times: readonly number[];
+  translation: AnimationSampleErrorMetric;
+  rotation: AnimationSampleErrorMetric;
+  scale: AnimationSampleErrorMetric;
+  modelSpace?: AnimationModelSpaceSampleErrorReport;
+};
+
+export type AnimationModelSpaceJointSampleError = {
+  jointIndex: number;
+  joint: string;
+  position: AnimationSampleErrorMetric;
+  rotation: AnimationSampleErrorMetric;
+  scale: AnimationSampleErrorMetric;
+};
+
+export type AnimationModelSpaceSampleErrorReport = {
+  sampleCount: number;
+  jointSampleCount: number;
+  times: readonly number[];
+  position: AnimationSampleErrorMetric;
+  rotation: AnimationSampleErrorMetric;
+  scale: AnimationSampleErrorMetric;
+  joints: readonly AnimationModelSpaceJointSampleError[];
+};
+
+export type AnimationSampleErrorOptions = {
+  skeleton: Skeleton;
+  /** Explicit sample times. Defaults to fixed-rate samples over the reference duration. */
+  sampleTimes?: readonly number[];
+  /** Fixed-rate fallback when sampleTimes is omitted. Defaults to 30 Hz. */
+  sampleFrequency?: number;
+  /** Loop handling passed to both sampled sources. Defaults to each source's loop flag. */
+  loop?: boolean;
+  /** Optional rest pose used when sampling both sources. */
+  restPose?: readonly Transform[];
+  /** Also report propagated model-space position/rotation/scale error through the skeleton hierarchy. */
+  includeModelSpace?: boolean;
+};
 
 export type SampleRepairDiagnostic = ClipValidationIssue & {
   sample?: number;
@@ -457,6 +584,67 @@ export class AnimationBuilder {
   }
 }
 
+export function tryOptimizeRawAnimation(rawAnimation: RawAnimation, options: AnimationOptimizerOptions = {}): RawAnimationOptimizationResult {
+  const issues = validateRawAnimation(rawAnimation, options.skeleton);
+  validateAnimationOptimizerOptions(issues, options);
+  if (issues.length > 0) return { ok: false, rawAnimation: null, issues, stats: null };
+
+  const optimized = optimizeValidatedRawAnimation(rawAnimation, options);
+  const optimizedIssues = validateRawAnimation(optimized.rawAnimation, options.skeleton);
+  if (optimizedIssues.length > 0) return { ok: false, rawAnimation: null, issues: optimizedIssues, stats: null };
+  return { ok: true, rawAnimation: optimized.rawAnimation, issues: [], stats: optimized.stats };
+}
+
+export function optimizeRawAnimation(rawAnimation: RawAnimation, options: AnimationOptimizerOptions = {}): RawAnimation {
+  const result = tryOptimizeRawAnimation(rawAnimation, options);
+  if (!result.ok) {
+    throw new Error(`raw animation optimization failed: ${result.issues.map(formatRawAnimationIssue).join("; ")}`);
+  }
+  return result.rawAnimation;
+}
+
+export class AnimationOptimizer {
+  optimize(rawAnimation: RawAnimation, options: AnimationOptimizerOptions = {}): RawAnimation {
+    return optimizeRawAnimation(rawAnimation, options);
+  }
+
+  tryOptimize(rawAnimation: RawAnimation, options: AnimationOptimizerOptions = {}): RawAnimationOptimizationResult {
+    return tryOptimizeRawAnimation(rawAnimation, options);
+  }
+}
+
+export function tryBuildAdditiveAnimationClip(
+  clip: AnimationClip,
+  skeleton: Skeleton,
+  options: AdditiveAnimationClipBuildOptions = {}
+): AdditiveAnimationClipBuildResult {
+  const issues = validateClip(clip, skeleton);
+  validateAdditiveReferencePose(issues, skeleton, skeleton.restPose, "skeleton rest pose");
+  if (options.referencePose !== undefined) {
+    validateAdditiveReferencePose(issues, skeleton, options.referencePose, "reference pose");
+  }
+  if (issues.length > 0) return { ok: false, clip: null, issues };
+
+  const additiveClip = buildValidatedAdditiveAnimationClip(clip, skeleton, options);
+  const additiveIssues = validateClip(additiveClip, skeleton);
+  if (additiveIssues.length > 0) return { ok: false, clip: null, issues: additiveIssues };
+  return { ok: true, clip: additiveClip, issues: [] };
+}
+
+export function buildAdditiveAnimationClip(clip: AnimationClip, skeleton: Skeleton, options: AdditiveAnimationClipBuildOptions = {}): AnimationClip {
+  const result = tryBuildAdditiveAnimationClip(clip, skeleton, options);
+  if (!result.ok) {
+    throw new Error(`additive animation clip cannot be built: ${result.issues.map(formatClipIssue).join("; ")}`);
+  }
+  return result.clip;
+}
+
+export class AdditiveAnimationBuilder {
+  build(clip: AnimationClip, skeleton: Skeleton, options: AdditiveAnimationClipBuildOptions = {}): AnimationClip {
+    return buildAdditiveAnimationClip(clip, skeleton, options);
+  }
+}
+
 export function tryBuildPackedRuntimeAnimation(clip: AnimationClip, skeleton?: Skeleton): PackedRuntimeAnimationBuildResult {
   const issues = validatePackableClip(clip, skeleton);
   if (issues.length > 0) return { ok: false, animation: null, issues };
@@ -660,6 +848,60 @@ export function sampleRawAnimation(rawAnimation: RawAnimation, timeSeconds: numb
 export function sampleRawAnimationAtRatio(rawAnimation: RawAnimation, ratio: number, options: RawAnimationRatioSampleOptions = {}): Pose {
   assertValidRawAnimation(rawAnimation, options.skeleton);
   return sampleValidatedRawAnimation(rawAnimation, sampleRawAnimationRatioToTime(rawAnimation, ratio), options);
+}
+
+export function compareAnimationSampleError(
+  reference: RawAnimation | AnimationClip,
+  candidate: RawAnimation | AnimationClip,
+  options: AnimationSampleErrorOptions
+): AnimationSampleErrorReport {
+  assertValidAnimationSampleSource(reference, options.skeleton, "reference");
+  assertValidAnimationSampleSource(candidate, options.skeleton, "candidate");
+  const times = readAnimationSampleErrorTimes(reference, options);
+  const translation = createSampleErrorAccumulator();
+  const rotation = createSampleErrorAccumulator();
+  const scale = createSampleErrorAccumulator();
+  const modelSpace = options.includeModelSpace === true ? createModelSpaceSampleErrorAccumulator(options.skeleton) : undefined;
+  const restPose = options.restPose;
+
+  for (let sampleIndex = 0; sampleIndex < times.length; sampleIndex += 1) {
+    const time = times[sampleIndex]!;
+    const referencePose = sampleAnimationSource(reference, time, options.skeleton, options.loop, restPose);
+    const candidatePose = sampleAnimationSource(candidate, time, options.skeleton, options.loop, restPose);
+    for (let jointIndex = 0; jointIndex < options.skeleton.joints.length; jointIndex += 1) {
+      const a = referencePose[jointIndex]!;
+      const b = candidatePose[jointIndex]!;
+      pushSampleError(translation, vec3Error(a.translation, b.translation), sampleIndex, time, jointIndex);
+      pushSampleError(rotation, quaternionAngleError(a.rotation, b.rotation), sampleIndex, time, jointIndex);
+      pushSampleError(scale, vec3Error(a.scale, b.scale), sampleIndex, time, jointIndex);
+    }
+    if (modelSpace) {
+      pushModelSpaceSampleError(modelSpace, options.skeleton, referencePose, candidatePose, sampleIndex, time);
+    }
+  }
+
+  const jointSampleCount = times.length * options.skeleton.joints.length;
+  const report: AnimationSampleErrorReport = {
+    sampleCount: times.length,
+    jointSampleCount,
+    times,
+    translation: finishSampleErrorAccumulator(translation, jointSampleCount, options.skeleton),
+    rotation: finishSampleErrorAccumulator(rotation, jointSampleCount, options.skeleton),
+    scale: finishSampleErrorAccumulator(scale, jointSampleCount, options.skeleton)
+  };
+  if (modelSpace) {
+    report.modelSpace = finishModelSpaceSampleErrorAccumulator(modelSpace, times.length, jointSampleCount, times, options.skeleton);
+  }
+  return report;
+}
+
+export function compareAnimationModelSpaceSampleError(
+  reference: RawAnimation | AnimationClip,
+  candidate: RawAnimation | AnimationClip,
+  options: AnimationSampleErrorOptions
+): AnimationModelSpaceSampleErrorReport {
+  const report = compareAnimationSampleError(reference, candidate, { ...options, includeModelSpace: true });
+  return report.modelSpace!;
 }
 
 type PackedRuntimeAnimationBuildTrack = {
@@ -1337,6 +1579,276 @@ function cloneImmutableMetadataValue(value: unknown): unknown {
   return value;
 }
 
+const DEFAULT_ANIMATION_OPTIMIZER_TOLERANCES: Required<AnimationOptimizerTolerances> = {
+  translation: 1e-3,
+  rotation: 1e-3,
+  scale: 1e-3
+};
+
+function validateAnimationOptimizerOptions(issues: RawAnimationValidationIssue[], options: AnimationOptimizerOptions): void {
+  const tolerances = options.tolerances;
+  if (tolerances !== undefined && (typeof tolerances !== "object" || tolerances === null)) {
+    issues.push({ message: "animation optimizer tolerances must be an object" });
+  } else {
+    for (const property of RAW_ANIMATION_PROPERTY_ORDER) {
+      validateAnimationOptimizerTolerance(issues, tolerances?.[property], `animation optimizer ${property} tolerance`);
+    }
+  }
+  validateAnimationOptimizerTolerance(issues, options.hierarchyWeight, "animation optimizer hierarchyWeight");
+  const jointTolerances = options.jointTolerances;
+  if (jointTolerances === undefined) return;
+  if (typeof jointTolerances !== "object" || jointTolerances === null) {
+    issues.push({ message: "animation optimizer jointTolerances must be an object" });
+    return;
+  }
+  for (const [joint, tolerance] of Object.entries(jointTolerances)) {
+    if (typeof tolerance !== "object" || tolerance === null) {
+      issues.push({ joint, message: "animation optimizer joint tolerance override must be an object" });
+      continue;
+    }
+    for (const property of RAW_ANIMATION_PROPERTY_ORDER) {
+      validateAnimationOptimizerTolerance(issues, tolerance[property], `animation optimizer ${joint}.${property} tolerance`, joint, property);
+    }
+    validateAnimationOptimizerTolerance(issues, tolerance.weight, `animation optimizer ${joint}.weight`, joint);
+    if (tolerance.weight !== undefined && tolerance.weight <= 0) {
+      issues.push({ joint, message: "animation optimizer joint weight must be positive" });
+    }
+  }
+}
+
+function validateAnimationOptimizerTolerance(
+  issues: RawAnimationValidationIssue[],
+  value: number | undefined,
+  label: string,
+  joint?: string,
+  property?: NormalizedTrackProperty
+): void {
+  if (value === undefined) return;
+  if (!Number.isFinite(value) || value < 0) {
+    const issue: RawAnimationValidationIssue = { message: `${label} must be finite and non-negative` };
+    if (joint !== undefined) issue.joint = joint;
+    if (property !== undefined) issue.property = property;
+    issues.push(issue);
+  }
+}
+
+function optimizeValidatedRawAnimation(rawAnimation: RawAnimation, options: AnimationOptimizerOptions): { rawAnimation: RawAnimation; stats: AnimationOptimizationStats } {
+  const descendantCounts = options.skeleton ? countSkeletonDescendants(options.skeleton) : [];
+  const channels: AnimationOptimizationChannelStats[] = [];
+  let inputKeyCount = 0;
+  let outputKeyCount = 0;
+
+  const tracks = readRawAnimationTracks(rawAnimation).map((track, trackIndex): RawAnimationJointTrack => {
+    const target = readRawAnimationTarget(track, options.skeleton);
+    const translations = optimizeRawAnimationVec3Keys(track.translations, "translation", track, trackIndex, target, options, descendantCounts, channels);
+    const rotations = optimizeRawAnimationQuaternionKeys(track.rotations, track, trackIndex, target, options, descendantCounts, channels);
+    const scales = optimizeRawAnimationVec3Keys(track.scales, "scale", track, trackIndex, target, options, descendantCounts, channels);
+    inputKeyCount += track.translations.length + track.rotations.length + track.scales.length;
+    outputKeyCount += translations.length + rotations.length + scales.length;
+    const optimized: RawAnimationJointTrack = { translations, rotations, scales };
+    if (track.joint !== undefined) optimized.joint = track.joint;
+    if (track.humanBone !== undefined) optimized.humanBone = track.humanBone;
+    return optimized;
+  });
+
+  const optimized: RawAnimation = {
+    id: rawAnimation.id,
+    duration: rawAnimation.duration,
+    tracks
+  };
+  if (rawAnimation.name !== undefined) optimized.name = rawAnimation.name;
+  if (rawAnimation.loop !== undefined) optimized.loop = rawAnimation.loop;
+  if (rawAnimation.metadata !== undefined) optimized.metadata = { ...rawAnimation.metadata };
+  return {
+    rawAnimation: optimized,
+    stats: {
+      inputKeyCount,
+      outputKeyCount,
+      removedKeyCount: inputKeyCount - outputKeyCount,
+      channels
+    }
+  };
+}
+
+function optimizeRawAnimationVec3Keys(
+  keys: readonly RawAnimationVec3Key[],
+  property: "translation" | "scale",
+  track: RawAnimationJointTrack,
+  trackIndex: number,
+  target: { key: string; name: string; jointIndex: number },
+  options: AnimationOptimizerOptions,
+  descendantCounts: readonly number[],
+  stats: AnimationOptimizationChannelStats[]
+): RawAnimationVec3Key[] {
+  const tolerance = resolveAnimationOptimizerTolerance(property, track, target, options, descendantCounts);
+  const optimized = decimateRawAnimationKeys(keys, property, tolerance.effective);
+  pushAnimationOptimizationChannelStats(stats, track, trackIndex, target, property, keys.length, optimized.length, tolerance);
+  return optimized as RawAnimationVec3Key[];
+}
+
+function optimizeRawAnimationQuaternionKeys(
+  keys: readonly RawAnimationQuaternionKey[],
+  track: RawAnimationJointTrack,
+  trackIndex: number,
+  target: { key: string; name: string; jointIndex: number },
+  options: AnimationOptimizerOptions,
+  descendantCounts: readonly number[],
+  stats: AnimationOptimizationChannelStats[]
+): RawAnimationQuaternionKey[] {
+  const tolerance = resolveAnimationOptimizerTolerance("rotation", track, target, options, descendantCounts);
+  const optimized = decimateRawAnimationKeys(keys, "rotation", tolerance.effective);
+  pushAnimationOptimizationChannelStats(stats, track, trackIndex, target, "rotation", keys.length, optimized.length, tolerance);
+  return optimized as RawAnimationQuaternionKey[];
+}
+
+type ResolvedAnimationOptimizerTolerance = {
+  effective: number;
+  jointWeight: number;
+  hierarchyWeight: number;
+  descendantCount: number;
+};
+
+function resolveAnimationOptimizerTolerance(
+  property: NormalizedTrackProperty,
+  track: RawAnimationJointTrack,
+  target: { key: string; name: string; jointIndex: number },
+  options: AnimationOptimizerOptions,
+  descendantCounts: readonly number[]
+): ResolvedAnimationOptimizerTolerance {
+  const override = readAnimationOptimizerJointTolerance(track, target, options);
+  const base = override?.[property] ?? options.tolerances?.[property] ?? DEFAULT_ANIMATION_OPTIMIZER_TOLERANCES[property];
+  const jointWeight = override?.weight ?? 1;
+  const hierarchyWeight = options.hierarchyWeight ?? 0;
+  const descendantCount = target.jointIndex >= 0 ? descendantCounts[target.jointIndex] ?? 0 : 0;
+  return {
+    effective: base / jointWeight / (1 + hierarchyWeight * descendantCount),
+    jointWeight,
+    hierarchyWeight,
+    descendantCount
+  };
+}
+
+function readAnimationOptimizerJointTolerance(
+  track: RawAnimationJointTrack,
+  target: { key: string; name: string; jointIndex: number },
+  options: AnimationOptimizerOptions
+): AnimationOptimizerJointTolerance | undefined {
+  const jointTolerances = options.jointTolerances;
+  if (!jointTolerances) return undefined;
+  const keys: string[] = [];
+  if (track.joint !== undefined) keys.push(track.joint);
+  if (track.humanBone !== undefined) keys.push(track.humanBone);
+  if (target.jointIndex >= 0) {
+    keys.push(String(target.jointIndex));
+    const joint = options.skeleton?.joints[target.jointIndex];
+    if (joint) {
+      keys.push(joint.name);
+      if (joint.humanoid !== undefined) keys.push(joint.humanoid);
+    }
+  }
+  for (const key of keys) {
+    const tolerance = jointTolerances[key];
+    if (tolerance !== undefined) return tolerance;
+  }
+  return undefined;
+}
+
+function pushAnimationOptimizationChannelStats(
+  stats: AnimationOptimizationChannelStats[],
+  track: RawAnimationJointTrack,
+  trackIndex: number,
+  target: { jointIndex: number },
+  property: NormalizedTrackProperty,
+  inputKeyCount: number,
+  outputKeyCount: number,
+  tolerance: ResolvedAnimationOptimizerTolerance
+): void {
+  if (inputKeyCount === 0) return;
+  const item: AnimationOptimizationChannelStats = {
+    track: trackIndex,
+    property,
+    inputKeyCount,
+    outputKeyCount,
+    removedKeyCount: inputKeyCount - outputKeyCount,
+    tolerance: tolerance.effective,
+    jointWeight: tolerance.jointWeight,
+    hierarchyWeight: tolerance.hierarchyWeight,
+    descendantCount: tolerance.descendantCount
+  };
+  if (track.joint !== undefined) item.joint = track.joint;
+  if (track.humanBone !== undefined) item.humanBone = track.humanBone;
+  if (target.jointIndex >= 0) item.jointIndex = target.jointIndex;
+  stats.push(item);
+}
+
+function decimateRawAnimationKeys(
+  keys: readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[],
+  property: NormalizedTrackProperty,
+  tolerance: number
+): (RawAnimationVec3Key | RawAnimationQuaternionKey)[] {
+  if (keys.length <= 2) return keys.map((key) => cloneRawAnimationKey(key, property));
+
+  const included = new Array<boolean>(keys.length).fill(false);
+  included[0] = true;
+  included[keys.length - 1] = true;
+  markRawAnimationRequiredKeys(keys, property, 0, keys.length - 1, tolerance, included);
+  return keys.filter((_, index) => included[index]).map((key) => cloneRawAnimationKey(key, property));
+}
+
+function markRawAnimationRequiredKeys(
+  keys: readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[],
+  property: NormalizedTrackProperty,
+  left: number,
+  right: number,
+  tolerance: number,
+  included: boolean[]
+): void {
+  if (right - left <= 1) return;
+  let maxError = -1;
+  let candidate = -1;
+  for (let index = left + 1; index < right; index += 1) {
+    const error = rawAnimationKeyInterpolationError(keys[left]!, keys[right]!, keys[index]!, property);
+    if (error > maxError) {
+      maxError = error;
+      candidate = index;
+    }
+  }
+  if (candidate < 0 || maxError <= tolerance) return;
+  included[candidate] = true;
+  markRawAnimationRequiredKeys(keys, property, left, candidate, tolerance, included);
+  markRawAnimationRequiredKeys(keys, property, candidate, right, tolerance, included);
+}
+
+function rawAnimationKeyInterpolationError(
+  left: RawAnimationVec3Key | RawAnimationQuaternionKey,
+  right: RawAnimationVec3Key | RawAnimationQuaternionKey,
+  key: RawAnimationVec3Key | RawAnimationQuaternionKey,
+  property: NormalizedTrackProperty
+): number {
+  const alpha = right.time > left.time ? (key.time - left.time) / (right.time - left.time) : 0;
+  if (property === "rotation") {
+    const expected = slerpQuat(normalizeQuat(cloneQuat((left as RawAnimationQuaternionKey).value)), normalizeQuat(cloneQuat((right as RawAnimationQuaternionKey).value)), alpha);
+    return quaternionAngleError(expected, normalizeQuat(cloneQuat((key as RawAnimationQuaternionKey).value)));
+  }
+  const expected = lerpVec3(cloneVec3((left as RawAnimationVec3Key).value), cloneVec3((right as RawAnimationVec3Key).value), alpha);
+  return vec3Error(expected, cloneVec3((key as RawAnimationVec3Key).value));
+}
+
+function cloneRawAnimationKey(key: RawAnimationVec3Key | RawAnimationQuaternionKey, property: NormalizedTrackProperty): RawAnimationVec3Key | RawAnimationQuaternionKey {
+  return property === "rotation" ? cloneRawAnimationQuaternionKey(key as RawAnimationQuaternionKey) : cloneRawAnimationVec3Key(key as RawAnimationVec3Key);
+}
+
+function countSkeletonDescendants(skeleton: Skeleton): number[] {
+  const counts = new Array<number>(skeleton.joints.length).fill(0);
+  for (let index = skeleton.joints.length - 1; index >= 0; index -= 1) {
+    const parent = skeleton.joints[index]?.parentIndex ?? -1;
+    if (parent >= 0 && parent < counts.length) {
+      counts[parent] = (counts[parent] ?? 0) + 1 + (counts[index] ?? 0);
+    }
+  }
+  return counts;
+}
+
 function buildValidatedAnimationFromRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): AnimationClip {
   const channels = collectRawAnimationChannels(rawAnimation, skeleton).sort(compareRawAnimationChannels);
   const tracks = channels.map((channel): AnimationTrack => {
@@ -1373,6 +1885,94 @@ function buildValidatedAnimationFromRawAnimation(rawAnimation: RawAnimation, ske
   return clip;
 }
 
+function buildValidatedAdditiveAnimationClip(clip: AnimationClip, skeleton: Skeleton, options: AdditiveAnimationClipBuildOptions): AnimationClip {
+  const tracks = clip.tracks.map((track): AnimationTrack => {
+    const property = normalizedTrackProperty(track.property)!;
+    const stride = trackStride(property);
+    const jointIndex = resolveTrackJointIndex(skeleton, track);
+    const restTransform = skeleton.restPose[jointIndex]!;
+    const referenceTransform = options.referencePose?.[jointIndex] ?? sampleClipToPose(skeleton, clip, track.times[0]!, {
+      loop: false,
+      restPose: skeleton.restPose,
+      skipUnsupportedTracks: true
+    })[jointIndex]!;
+    const times = Float32Array.from(track.times);
+    const values = new Float32Array(track.values.length);
+    let previousRotation: Quat | undefined;
+
+    for (let keyIndex = 0; keyIndex < track.times.length; keyIndex += 1) {
+      const sampleTransform = sampleClipToPose(skeleton, clip, track.times[keyIndex]!, {
+        loop: false,
+        restPose: skeleton.restPose,
+        skipUnsupportedTracks: true
+      })[jointIndex]!;
+      const value = encodeAdditiveTrackValue(restTransform, referenceTransform, sampleTransform, property);
+      const offset = keyIndex * stride;
+      if (property === "rotation") {
+        let rotation = value as Quat;
+        if (previousRotation) rotation = ensureShortestQuat(previousRotation, rotation);
+        values.set(rotation, offset);
+        previousRotation = rotation;
+      } else {
+        values.set(value as Vec3, offset);
+      }
+    }
+
+    const additiveTrack: AnimationTrack = { property, times, values };
+    if (track.joint !== undefined) additiveTrack.joint = track.joint;
+    if (track.humanBone !== undefined) additiveTrack.humanBone = track.humanBone;
+    return additiveTrack;
+  });
+
+  const additiveClip: AnimationClip = {
+    id: clip.id,
+    duration: clip.duration,
+    tracks
+  };
+  if (clip.name !== undefined) additiveClip.name = clip.name;
+  if (clip.loop !== undefined) additiveClip.loop = clip.loop;
+  if (clip.metadata !== undefined) additiveClip.metadata = { ...clip.metadata };
+  return additiveClip;
+}
+
+function encodeAdditiveTrackValue(
+  restTransform: Transform,
+  referenceTransform: Transform,
+  sampleTransform: Transform,
+  property: NormalizedTrackProperty
+): Vec3 | Quat {
+  const delta = transformDelta(referenceTransform, sampleTransform);
+  if (property === "translation") return addVec3(restTransform.translation, delta.translation);
+  if (property === "rotation") return multiplyQuat(restTransform.rotation, delta.rotation);
+  return [
+    restTransform.scale[0] * delta.scale[0],
+    restTransform.scale[1] * delta.scale[1],
+    restTransform.scale[2] * delta.scale[2]
+  ];
+}
+
+function validateAdditiveReferencePose(issues: ClipValidationIssue[], skeleton: Skeleton, pose: readonly Transform[], label: string): void {
+  if (pose.length !== skeleton.joints.length) {
+    issues.push({ joint: `<${label}>`, index: -1, message: `${label} length ${pose.length} does not match skeleton ${skeleton.joints.length}` });
+    return;
+  }
+  for (let index = 0; index < pose.length; index += 1) {
+    const transform = pose[index];
+    if (!transform || !isValidAdditiveReferenceTransform(transform)) {
+      issues.push({ joint: skeleton.joints[index]?.name ?? String(index), index, message: `${label} transform is not finite or quaternion is invalid` });
+    }
+  }
+}
+
+function isValidAdditiveReferenceTransform(transform: Transform): boolean {
+  return (
+    transform.translation.every(Number.isFinite) &&
+    transform.rotation.every(Number.isFinite) &&
+    transform.scale.every(Number.isFinite) &&
+    Math.hypot(...transform.rotation) > EPSILON
+  );
+}
+
 function assertValidRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): void {
   const issues = validateRawAnimation(rawAnimation, skeleton);
   if (issues.length > 0) {
@@ -1407,6 +2007,96 @@ function sampleValidatedRawAnimation(rawAnimation: RawAnimation, time: number, o
     output[jointIndex] = transform;
   }
   return output;
+}
+
+type AnimationSampleErrorAccumulator = {
+  sum: number;
+  max: number;
+  maxSample?: number;
+  maxTime?: number;
+  maxJointIndex?: number;
+};
+
+function assertValidAnimationSampleSource(source: RawAnimation | AnimationClip, skeleton: Skeleton, label: string): void {
+  if (isRawAnimationSampleSource(source)) {
+    const issues = validateRawAnimation(source, skeleton);
+    if (issues.length > 0) throw new Error(`${label} raw animation is invalid: ${issues.map(formatRawAnimationIssue).join("; ")}`);
+    return;
+  }
+  const issues = validateClip(source as AnimationClip, skeleton);
+  if (issues.length > 0) throw new Error(`${label} animation clip is invalid: ${issues.map(formatClipIssue).join("; ")}`);
+}
+
+function isRawAnimationSampleSource(source: RawAnimation | AnimationClip): source is RawAnimation {
+  return Array.isArray(source.tracks) && source.tracks.some((track) => "translations" in track || "rotations" in track || "scales" in track);
+}
+
+function readAnimationSampleErrorTimes(reference: RawAnimation | AnimationClip, options: AnimationSampleErrorOptions): readonly number[] {
+  if (options.sampleTimes !== undefined) {
+    const times = Array.from(options.sampleTimes);
+    if (times.some((time) => !Number.isFinite(time))) throw new Error("animation sample error sampleTimes must contain finite values");
+    return Object.freeze(times);
+  }
+  const frequency = options.sampleFrequency ?? 30;
+  return Object.freeze(createFixedRateSamplingTimes(readAnimationSampleSourceDuration(reference), frequency).times);
+}
+
+function readAnimationSampleSourceDuration(source: RawAnimation | AnimationClip): number {
+  return Number.isFinite(source.duration) && source.duration > 0 ? source.duration : 0;
+}
+
+function sampleAnimationSource(
+  source: RawAnimation | AnimationClip,
+  time: number,
+  skeleton: Skeleton,
+  loop: boolean | undefined,
+  restPose: readonly Transform[] | undefined
+): Pose {
+  if (isRawAnimationSampleSource(source)) {
+    const options: RawAnimationSampleOptions = { skeleton, loop: loop ?? source.loop ?? false };
+    if (restPose !== undefined) options.restPose = restPose;
+    return sampleRawAnimation(source, time, options);
+  }
+  const options: SampleOptions = { loop: loop ?? (source as AnimationClip).loop ?? false };
+  if (restPose !== undefined) options.restPose = restPose;
+  return sampleClipToPose(skeleton, source as AnimationClip, time, options);
+}
+
+function createSampleErrorAccumulator(): AnimationSampleErrorAccumulator {
+  return { sum: 0, max: 0 };
+}
+
+function pushSampleError(accumulator: AnimationSampleErrorAccumulator, error: number, sample: number, time: number, jointIndex: number): void {
+  accumulator.sum += error * error;
+  if (error > accumulator.max) {
+    accumulator.max = error;
+    accumulator.maxSample = sample;
+    accumulator.maxTime = time;
+    accumulator.maxJointIndex = jointIndex;
+  }
+}
+
+function finishSampleErrorAccumulator(accumulator: AnimationSampleErrorAccumulator, sampleCount: number, skeleton: Skeleton): AnimationSampleErrorMetric {
+  const metric: AnimationSampleErrorMetric = {
+    rms: sampleCount > 0 ? Math.sqrt(accumulator.sum / sampleCount) : 0,
+    max: accumulator.max
+  };
+  if (accumulator.maxSample !== undefined) metric.maxSample = accumulator.maxSample;
+  if (accumulator.maxTime !== undefined) metric.maxTime = accumulator.maxTime;
+  if (accumulator.maxJointIndex !== undefined) {
+    metric.maxJointIndex = accumulator.maxJointIndex;
+    const joint = skeleton.joints[accumulator.maxJointIndex];
+    if (joint !== undefined) metric.maxJoint = joint.name;
+  }
+  return metric;
+}
+
+function vec3Error(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+function quaternionAngleError(a: Quat, b: Quat): number {
+  return 2 * Math.acos(Math.min(1, Math.abs(dotQuat(normalizeQuat(a), normalizeQuat(b)))));
 }
 
 function sampleRawAnimationJointTrackNoValidate(track: RawAnimationJointTrack, time: number): Transform {

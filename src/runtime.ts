@@ -1,4 +1,4 @@
-import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, dampAlpha, dotQuat, finiteNonNegative, finiteSigned, identityTransform, lerpTransform, normalizeQuat } from "./math.js";
+import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, clamp01, dampAlpha, dotQuat, finiteNonNegative, finiteSigned, identityTransform, lerpTransform, normalizeQuat } from "./math.js";
 import { type AnimationClip, type ClipValidationIssue, type SampleRepairDiagnostic, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
 import { type MotionCarrier, sampleMotionIntervalDelta } from "./motion.js";
 import {
@@ -95,6 +95,92 @@ export type RuntimeEvaluation = {
   activeLayers: Array<Pick<AnimationLayer, "id" | "time" | "weight" | "targetWeight" | "priority" | "blendMode">>;
   diagnostics?: RuntimeEvaluationDiagnostic[];
 };
+
+export type LocomotionBlendLayerInput = {
+  id?: string;
+  clip?: Pick<AnimationClip, "duration">;
+  duration?: number;
+  weight?: number;
+  time?: number;
+};
+
+export type LocomotionPlaybackSyncOptions = {
+  /** Optional Ozz blend-sample style parameter used to derive triangular walk/jog/run weights. */
+  blendRatio?: number;
+  /** Shared normalized cycle phase used to report synchronized local times. Defaults to 0. */
+  phase?: number;
+};
+
+export type LocomotionPlaybackSyncLayer = {
+  id: string;
+  duration: number;
+  weight: number;
+  normalizedWeight: number;
+  playbackSpeed: number;
+  time: number;
+  ratio: number;
+  active: boolean;
+};
+
+export type LocomotionPlaybackSynchronization = {
+  synchronizedDuration: number;
+  totalWeight: number;
+  activeWeight: number;
+  phase: number;
+  layers: LocomotionPlaybackSyncLayer[];
+};
+
+export function computeLocomotionBlendWeights(blendRatio: number, layerCount: number): number[] {
+  if (!Number.isInteger(layerCount) || layerCount <= 0) return [];
+  if (layerCount === 1) return [1];
+  const ratio = clamp01(Number.isFinite(blendRatio) ? blendRatio : 0);
+  const interval = 1 / (layerCount - 1);
+  const weights: number[] = [];
+  for (let index = 0; index < layerCount; index += 1) {
+    const center = index * interval;
+    weights.push(Math.max(0, (interval - Math.abs(ratio - center)) * (layerCount - 1)));
+  }
+  return weights;
+}
+
+export function synchronizeLocomotionPlayback(
+  layers: readonly LocomotionBlendLayerInput[],
+  options: LocomotionPlaybackSyncOptions = {}
+): LocomotionPlaybackSynchronization {
+  const weights = options.blendRatio === undefined ? null : computeLocomotionBlendWeights(options.blendRatio, layers.length);
+  const phase = clamp01(Number.isFinite(options.phase) ? options.phase! : 0);
+  const durations = layers.map(readLocomotionLayerDuration);
+  const rawWeights = layers.map((layer, index) => finiteNonNegative(weights?.[index] ?? layer.weight, 0));
+  const totalWeight = rawWeights.reduce((sum, weight) => sum + weight, 0);
+  let activeWeight = 0;
+  let weightedDuration = 0;
+
+  for (let index = 0; index < layers.length; index += 1) {
+    const duration = durations[index]!;
+    const weight = rawWeights[index]!;
+    if (weight <= EPSILON || duration <= EPSILON) continue;
+    activeWeight += weight;
+    weightedDuration += duration * weight;
+  }
+
+  const synchronizedDuration = activeWeight > EPSILON ? weightedDuration / activeWeight : 0;
+  const outputLayers = layers.map((layer, index): LocomotionPlaybackSyncLayer => {
+    const duration = durations[index]!;
+    const weight = rawWeights[index]!;
+    return {
+      id: layer.id ?? String(index),
+      duration,
+      weight,
+      normalizedWeight: totalWeight > EPSILON ? weight / totalWeight : 0,
+      playbackSpeed: synchronizedDuration > EPSILON && duration > EPSILON ? duration / synchronizedDuration : 0,
+      time: duration > EPSILON ? duration * phase : 0,
+      ratio: phase,
+      active: weight > EPSILON && duration > EPSILON
+    };
+  });
+
+  return { synchronizedDuration, totalWeight, activeWeight, phase, layers: outputLayers };
+}
 
 export class AnimationRuntime {
   readonly skeleton: Skeleton;
@@ -298,6 +384,10 @@ export class AnimationRuntime {
 
 function sanitizeLayerWeight(blendMode: LayerBlendMode, value: number | undefined, fallback: number): number {
   return blendMode === "additive" ? finiteSigned(value, fallback) : finiteNonNegative(value, fallback);
+}
+
+function readLocomotionLayerDuration(layer: LocomotionBlendLayerInput): number {
+  return finiteNonNegative(layer.duration ?? layer.clip?.duration, 0);
 }
 
 function sanitizeLayerState(layer: AnimationLayer): AnimationLayer {

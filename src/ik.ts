@@ -24,7 +24,7 @@ import {
   scaleVec3,
   subVec3
 } from "./math.js";
-import { type Skeleton, updateLocalToModelPoseRange } from "./skeleton.js";
+import { type HumanoidBoneName, type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex, updateLocalToModelPoseRange } from "./skeleton.js";
 
 const MIN_IK_REACH = 1e-5;
 const DEFAULT_IK_SOFTEN = 0.998;
@@ -221,6 +221,26 @@ export type ApplyAimIkChainResult = {
   localPose: Transform[];
   modelPose: Mat4[];
   corrections: AimIkChainCorrection[];
+};
+
+export type ApplyAimIkChildToParentChainResult = ApplyAimIkChainResult & {
+  updatedFrom: number;
+  updatedTo: number;
+};
+
+export type HumanoidLookAtAimBone = "head" | "neck" | "upperChest" | "chest" | "spine";
+
+export type HumanoidLookAtAimChainOptions = {
+  bones?: readonly HumanoidLookAtAimBone[];
+  weights?: Partial<Record<HumanoidLookAtAimBone, number>>;
+  jointWeight?: number;
+  chainWeight?: number;
+  guaranteeLast?: boolean;
+  forward?: Vec3;
+  offset?: Vec3;
+  up?: Vec3;
+  pole?: Vec3;
+  twistAngle?: number;
 };
 
 export function solveAimIk(input: AimIkInput): AimIkResult {
@@ -458,6 +478,99 @@ export function applyAimIkChainToPose(input: ApplyAimIkChainInput): ApplyAimIkCh
     corrections.push({ joint, aim, localCorrection: applied.localCorrection });
   }
   return { localPose: input.localPose, modelPose: input.modelPose, corrections };
+}
+
+export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput): ApplyAimIkChildToParentChainResult {
+  const corrections: AimIkChainCorrection[] = [];
+  let previousJoint = -1;
+  let previousForward = input.forward ?? ([1, 0, 0] as Vec3);
+  let previousOffset = input.offset ?? ([0, 0, 0] as Vec3);
+  let previousLocalCorrection: Quat | null = null;
+  let updatedFrom = input.skeleton.joints.length;
+
+  for (const jointInput of input.joints) {
+    const jointConfig = typeof jointInput === "number" ? { joint: jointInput } : jointInput;
+    const joint = requireJointIndex(input.skeleton, jointConfig.joint, "joint");
+    const jointModel = input.modelPose[joint];
+    if (!jointModel) throw new Error(`modelPose is missing joint ${joint}`);
+
+    const propagated = previousLocalCorrection && previousJoint >= 0
+      ? propagateAimChainOffset(input.modelPose[previousJoint]!, jointModel, previousForward, previousOffset, previousLocalCorrection)
+      : null;
+    const forward = jointConfig.forward ?? propagated?.forward ?? input.forward;
+    const offset = jointConfig.offset ?? propagated?.offset ?? input.offset;
+    const aim = solveAimIk({
+      joint: jointModel,
+      ...(input.target === undefined ? {} : { target: input.target }),
+      ...(input.targetDirection === undefined ? {} : { targetDirection: input.targetDirection }),
+      ...(forward === undefined ? {} : { forward }),
+      ...(offset === undefined ? {} : { offset }),
+      ...(jointConfig.up === undefined && input.up === undefined ? {} : { up: jointConfig.up ?? input.up! }),
+      ...(jointConfig.pole === undefined && input.pole === undefined ? {} : { pole: jointConfig.pole ?? input.pole! }),
+      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined ? {} : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
+      ...(jointConfig.weight === undefined && input.weight === undefined ? {} : { weight: jointConfig.weight ?? input.weight! })
+    });
+    const localCorrection = modelCorrectionToLocalPostCorrection(jointModel, aim.jointCorrection);
+    multiplyPoseRotation(input.localPose, joint, localCorrection, "joint");
+    corrections.push({ joint, aim, localCorrection });
+    updatedFrom = Math.min(updatedFrom, joint);
+    previousJoint = joint;
+    previousForward = forward ?? previousForward;
+    previousOffset = offset ?? previousOffset;
+    previousLocalCorrection = localCorrection;
+  }
+
+  const updatedTo = sanitizeUpdateTo(input.updateTo, input.skeleton.joints.length);
+  if (corrections.length > 0) {
+    updateLocalToModelPoseRange(input.skeleton, input.localPose, input.modelPose, { from: updatedFrom, to: updatedTo });
+  } else {
+    updatedFrom = updatedTo;
+  }
+  return { localPose: input.localPose, modelPose: input.modelPose, corrections, updatedFrom, updatedTo };
+}
+
+export function createHumanoidLookAtAimChain(skeleton: Skeleton, options: HumanoidLookAtAimChainOptions = {}): AimIkChainJointInput[] {
+  const bones = options.bones ?? DEFAULT_HUMANOID_LOOK_AT_AIM_CHAIN;
+  const chain: AimIkChainJointInput[] = [];
+  const chainWeight = sanitizeUnitWeight(options.chainWeight, 1);
+  const jointWeight = sanitizeUnitWeight(options.jointWeight, 0.5);
+
+  for (const bone of bones) {
+    const joint = resolveHumanoidIndex(skeleton, bone as HumanoidBoneName);
+    if (joint < 0) continue;
+    const configured = options.weights?.[bone];
+    const weight = configured === undefined ? jointWeight * DEFAULT_HUMANOID_LOOK_AT_WEIGHTS[bone] : sanitizeUnitWeight(configured, DEFAULT_HUMANOID_LOOK_AT_WEIGHTS[bone]);
+    const item: AimIkChainJointInput = { joint, weight: weight * chainWeight };
+    if (options.forward !== undefined) item.forward = options.forward;
+    if (options.offset !== undefined) item.offset = options.offset;
+    if (options.up !== undefined) item.up = options.up;
+    if (options.pole !== undefined) item.pole = options.pole;
+    if (options.twistAngle !== undefined) item.twistAngle = options.twistAngle;
+    chain.push(item);
+  }
+
+  if (options.guaranteeLast && chain.length > 0) {
+    chain[chain.length - 1] = { ...chain[chain.length - 1]!, weight: chainWeight };
+  }
+  return chain;
+}
+
+const DEFAULT_HUMANOID_LOOK_AT_AIM_CHAIN: readonly HumanoidLookAtAimBone[] = ["head", "neck", "upperChest", "chest", "spine"];
+const DEFAULT_HUMANOID_LOOK_AT_WEIGHTS: Readonly<Record<HumanoidLookAtAimBone, number>> = {
+  head: 1,
+  neck: 0.72,
+  upperChest: 0.42,
+  chest: 0.3,
+  spine: 0.2
+};
+
+function propagateAimChainOffset(previousModel: Mat4, jointModel: Mat4, forward: Vec3, offset: Vec3, correction: Quat): { forward: Vec3; offset: Vec3 } {
+  const correctedForwardModel = transformLinearVector(previousModel, rotateVec3ByQuat(correction, forward));
+  const correctedOffsetModel = addVec3(matrixTranslation(previousModel), transformLinearVector(previousModel, rotateVec3ByQuat(correction, offset)));
+  return {
+    forward: inverseTransformVector(jointModel, correctedForwardModel),
+    offset: inverseTransformPoint(jointModel, correctedOffsetModel)
+  };
 }
 
 function modelMatrixFromTransform(value: ModelJointTransform): Mat4 {
@@ -788,6 +901,58 @@ export type FootPlantResult = {
   issues: string[];
 };
 
+export type OzzFootIkSide = "left" | "right";
+
+export type OzzFootIkRay = {
+  id: string;
+  side?: OzzFootIkSide;
+  ankle: Vec3;
+  start: Vec3;
+  direction: Vec3;
+  length: number;
+};
+
+export type OzzFootIkRaycast = (ray: OzzFootIkRay) => GroundContact | null | undefined;
+
+export type OzzFootIkLegPreset = {
+  id?: string;
+  side?: OzzFootIkSide;
+  hip?: number | string;
+  knee?: number | string;
+  ankle?: number | string;
+  pole?: Vec3;
+  ankleUp?: Vec3;
+  footForward?: Vec3;
+  footHeight?: number;
+  influence?: number;
+  maxStretch?: number;
+  maxAnkleCorrection?: number;
+};
+
+export type OzzFootIkOptions = FootPlantOptions & {
+  skeleton: Skeleton;
+  modelPose: readonly Mat4[];
+  legs?: readonly OzzFootIkLegPreset[];
+  contacts?: Readonly<Record<string, GroundContact | null | undefined>>;
+  raycast?: OzzFootIkRaycast;
+  rayHeight?: number;
+  rayLength?: number;
+  aimAnkles?: boolean;
+};
+
+export type OzzFootIkLegResult = FootPlantLegResult & {
+  side?: OzzFootIkSide;
+  hipJoint: number;
+  kneeJoint: number;
+  ankleJoint: number;
+  ray?: OzzFootIkRay;
+  ankleAim?: AimIkResult;
+};
+
+export type OzzFootIkResult = Omit<FootPlantResult, "legs"> & {
+  legs: OzzFootIkLegResult[];
+};
+
 export function computeAnkleTargetFromGround(contact: GroundContact, footHeight: number): Vec3 {
   const point = finiteVec3(contact.point, [0, 0, 0]);
   const normal = normalizeVec3(finiteVec3(contact.normal, [0, 1, 0]), [0, 1, 0]);
@@ -922,6 +1087,143 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     legs,
     issues
   };
+}
+
+export function solveOzzFootIk(input: OzzFootIkOptions): OzzFootIkResult {
+  const issues: string[] = [];
+  const resolvedLegs = resolveOzzFootIkLegs(input, issues);
+  const footPlantInput: FootPlantLegInput[] = [];
+
+  for (const leg of resolvedLegs) {
+    const hip = matrixTranslation(input.modelPose[leg.hipJoint]!);
+    const knee = matrixTranslation(input.modelPose[leg.kneeJoint]!);
+    const ankle = matrixTranslation(input.modelPose[leg.ankleJoint]!);
+    const contact = resolveOzzFootIkContact(input, leg, ankle);
+    if (!contact.ground) issues.push(`${leg.id}: missing floor contact`);
+    footPlantInput.push({
+      id: leg.id,
+      hip,
+      knee,
+      ankle,
+      ...(contact.ground ? { ground: contact.ground } : {}),
+      ...(leg.pole ? { pole: leg.pole } : {}),
+      ...(leg.footHeight === undefined ? {} : { footHeight: leg.footHeight }),
+      ...(leg.influence === undefined ? {} : { influence: leg.influence }),
+      ...(leg.maxStretch === undefined ? {} : { maxStretch: leg.maxStretch }),
+      ...(leg.maxAnkleCorrection === undefined ? {} : { maxAnkleCorrection: leg.maxAnkleCorrection })
+    });
+  }
+
+  const plan = solveFootPlant(footPlantInput, input);
+  const legs = plan.legs.map((leg, index): OzzFootIkLegResult => {
+    const resolved = resolvedLegs[index]!;
+    const result: OzzFootIkLegResult = {
+      ...leg,
+      hipJoint: resolved.hipJoint,
+      kneeJoint: resolved.kneeJoint,
+      ankleJoint: resolved.ankleJoint
+    };
+    if (resolved.side !== undefined) result.side = resolved.side;
+    if (resolved.ray !== undefined) result.ray = resolved.ray;
+    if (input.aimAnkles !== false && leg.planted) {
+      const ankleModel = input.modelPose[resolved.ankleJoint];
+      if (ankleModel) {
+        const footForward = resolved.footForward ?? ([0, 0, 1] as Vec3);
+        result.ankleAim = solveAimIk({
+          joint: ankleModel,
+          target: addVec3(leg.targetAnkle, leg.groundNormal),
+          forward: resolved.ankleUp ?? [0, 1, 0],
+          up: footForward,
+          pole: transformLinearVector(ankleModel, footForward),
+          ...(resolved.influence === undefined ? {} : { weight: resolved.influence })
+        });
+      }
+    }
+    return result;
+  });
+
+  return {
+    pelvisOffset: plan.pelvisOffset,
+    plantedCount: plan.plantedCount,
+    lowestCorrection: plan.lowestCorrection,
+    legs,
+    issues: [...issues, ...plan.issues]
+  };
+}
+
+type ResolvedOzzFootIkLeg = Required<Pick<OzzFootIkLegResult, "id" | "hipJoint" | "kneeJoint" | "ankleJoint">> &
+  Pick<OzzFootIkLegPreset, "side" | "pole" | "ankleUp" | "footForward" | "footHeight" | "influence" | "maxStretch" | "maxAnkleCorrection"> & {
+    ray?: OzzFootIkRay;
+  };
+
+const DEFAULT_OZZ_FOOT_IK_LEGS: readonly OzzFootIkLegPreset[] = [
+  { id: "left", side: "left", hip: "leftUpperLeg", knee: "leftLowerLeg", ankle: "leftFoot" },
+  { id: "right", side: "right", hip: "rightUpperLeg", knee: "rightLowerLeg", ankle: "rightFoot" }
+];
+
+function resolveOzzFootIkLegs(input: OzzFootIkOptions, issues: string[]): ResolvedOzzFootIkLeg[] {
+  const presets = input.legs ?? DEFAULT_OZZ_FOOT_IK_LEGS;
+  const legs: ResolvedOzzFootIkLeg[] = [];
+  for (const preset of presets) {
+    const side = preset.side;
+    const id = preset.id ?? side ?? String(legs.length);
+    const hipJoint = resolveOzzFootIkJoint(input.skeleton, preset.hip ?? sideHumanoid(side, "UpperLeg"));
+    const kneeJoint = resolveOzzFootIkJoint(input.skeleton, preset.knee ?? sideHumanoid(side, "LowerLeg"));
+    const ankleJoint = resolveOzzFootIkJoint(input.skeleton, preset.ankle ?? sideHumanoid(side, "Foot"));
+    if (hipJoint < 0 || kneeJoint < 0 || ankleJoint < 0) {
+      issues.push(`${id}: missing leg joints`);
+      continue;
+    }
+    if (!input.modelPose[hipJoint] || !input.modelPose[kneeJoint] || !input.modelPose[ankleJoint]) {
+      issues.push(`${id}: missing model pose joints`);
+      continue;
+    }
+    const leg: ResolvedOzzFootIkLeg = { id, hipJoint, kneeJoint, ankleJoint };
+    if (side !== undefined) leg.side = side;
+    if (preset.pole !== undefined) leg.pole = preset.pole;
+    if (preset.ankleUp !== undefined) leg.ankleUp = preset.ankleUp;
+    if (preset.footForward !== undefined) leg.footForward = preset.footForward;
+    if (preset.footHeight !== undefined) leg.footHeight = preset.footHeight;
+    if (preset.influence !== undefined) leg.influence = preset.influence;
+    if (preset.maxStretch !== undefined) leg.maxStretch = preset.maxStretch;
+    if (preset.maxAnkleCorrection !== undefined) leg.maxAnkleCorrection = preset.maxAnkleCorrection;
+    legs.push(leg);
+  }
+  return legs;
+}
+
+function resolveOzzFootIkContact(input: OzzFootIkOptions, leg: ResolvedOzzFootIkLeg, ankle: Vec3): { ground?: GroundContact } {
+  const configured = input.contacts?.[leg.id];
+  if (configured) return { ground: configured };
+  const rayHeight = finiteNonNegative(input.rayHeight, 0.5);
+  const direction = normalizeVec3(input.down ?? [0, -1, 0], [0, -1, 0]);
+  const ray: OzzFootIkRay = {
+    id: leg.id,
+    ankle,
+    start: addVec3(ankle, scaleVec3(direction, -rayHeight)),
+    direction,
+    length: finiteNonNegative(input.rayLength, rayHeight + finiteNonNegative(input.maxAnkleCorrection, 0.5) + finiteNonNegative(input.footHeight, 0.08) + 0.25)
+  };
+  if (leg.side !== undefined) ray.side = leg.side;
+  leg.ray = ray;
+  const hit = input.raycast?.(ray) ?? null;
+  if (!hit) return {};
+  return { ground: { ...hit, rayStart: hit.rayStart ?? ray.start } };
+}
+
+function resolveOzzFootIkJoint(skeleton: Skeleton, reference: number | string | undefined): number {
+  if (reference === undefined) return -1;
+  if (typeof reference === "number") return Number.isInteger(reference) && reference >= 0 && reference < skeleton.joints.length ? reference : -1;
+  if (isHumanoidBoneName(reference)) {
+    const humanoid = resolveHumanoidIndex(skeleton, reference);
+    if (humanoid >= 0) return humanoid;
+  }
+  return resolveJointIndex(skeleton, reference);
+}
+
+function sideHumanoid(side: OzzFootIkSide | undefined, suffix: "UpperLeg" | "LowerLeg" | "Foot"): HumanoidBoneName | undefined {
+  if (!side) return undefined;
+  return `${side}${suffix}` as HumanoidBoneName;
 }
 
 function sanitizeFootPlantLegInput(input: FootPlantLegInput): FootPlantLegInput {
