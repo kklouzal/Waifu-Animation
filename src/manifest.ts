@@ -45,6 +45,16 @@ export type ClipAssetInspection = {
 };
 
 export type RootMotionPolicy = "none" | "preserved" | "stripped-to-in-place";
+export type RootMotionProvenance =
+  | "unknown"
+  | "not-authored"
+  | "preserved-in-clip"
+  | "stripped-during-conversion"
+  | "requires-runtime-stripping";
+export type RootMotionMetadata = {
+  policy: RootMotionPolicy;
+  provenance: RootMotionProvenance;
+};
 
 export type AssetLoader = (url: string) => Promise<unknown>;
 
@@ -181,8 +191,10 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
     if (typeof sourceRootMotion === "string") {
       if (!isRootMotionPolicy(sourceRootMotion)) return `has invalid source.rootMotion policy ${String(sourceRootMotion)}`;
     } else if (typeof sourceRootMotion === "object" && sourceRootMotion !== null && "policy" in sourceRootMotion) {
-      const policy = (sourceRootMotion as { policy?: unknown }).policy;
+      const policy = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).policy;
+      const provenance = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).provenance;
       if (!isRootMotionPolicy(policy)) return `has invalid source.rootMotion.policy ${String(policy)}`;
+      if (provenance !== undefined && !isRootMotionProvenance(provenance)) return `has invalid source.rootMotion.provenance ${String(provenance)}`;
     } else {
       return "has invalid source.rootMotion metadata";
     }
@@ -195,6 +207,8 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
 function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {
   const clipPolicy = clip.metadata?.rootMotionPolicy;
   if (clipPolicy !== undefined && !isRootMotionPolicy(clipPolicy)) return `has invalid clip rootMotionPolicy ${String(clipPolicy)}`;
+  const clipProvenance = clip.metadata?.rootMotionProvenance;
+  if (clipProvenance !== undefined && !isRootMotionProvenance(clipProvenance)) return `has invalid clip rootMotionProvenance ${String(clipProvenance)}`;
   return null;
 }
 
@@ -239,23 +253,51 @@ function isRootCarrierJointName(joint: string | undefined): boolean {
 }
 
 export function readRootMotionPolicy(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionPolicy | null {
+  return readRootMotionMetadata(entry, clip)?.policy ?? null;
+}
+
+export function readRootMotionProvenance(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionProvenance {
+  return readRootMotionMetadata(entry, clip)?.provenance ?? "unknown";
+}
+
+export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionMetadata | null {
   const entrySource = entry.source ?? {};
   const clipMetadata = clip?.metadata ?? {};
   const sourceRootMotion = entrySource.rootMotion;
-  if (typeof sourceRootMotion === "string" && isRootMotionPolicy(sourceRootMotion)) return sourceRootMotion;
+  if (typeof sourceRootMotion === "string" && isRootMotionPolicy(sourceRootMotion)) return { policy: sourceRootMotion, provenance: "unknown" };
   if (typeof sourceRootMotion === "object" && sourceRootMotion && "policy" in sourceRootMotion) {
-    const policy = (sourceRootMotion as { policy?: unknown }).policy;
-    if (isRootMotionPolicy(policy)) return policy;
+    const metadata = sourceRootMotion as { policy?: unknown; provenance?: unknown };
+    if (isRootMotionPolicy(metadata.policy)) {
+      return {
+        policy: metadata.policy,
+        provenance: isRootMotionProvenance(metadata.provenance) ? metadata.provenance : "unknown"
+      };
+    }
   }
   const sourcePolicy = entrySource.rootMotionPolicy;
-  if (isRootMotionPolicy(sourcePolicy)) return sourcePolicy;
+  if (isRootMotionPolicy(sourcePolicy)) return { policy: sourcePolicy, provenance: "unknown" };
   const clipPolicy = clipMetadata.rootMotionPolicy;
-  if (isRootMotionPolicy(clipPolicy)) return clipPolicy;
+  if (isRootMotionPolicy(clipPolicy)) {
+    return {
+      policy: clipPolicy,
+      provenance: isRootMotionProvenance(clipMetadata.rootMotionProvenance) ? clipMetadata.rootMotionProvenance : "unknown"
+    };
+  }
   return null;
 }
 
 function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {
   return value === "none" || value === "preserved" || value === "stripped-to-in-place";
+}
+
+function isRootMotionProvenance(value: unknown): value is RootMotionProvenance {
+  return (
+    value === "unknown" ||
+    value === "not-authored" ||
+    value === "preserved-in-clip" ||
+    value === "stripped-during-conversion" ||
+    value === "requires-runtime-stripping"
+  );
 }
 
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {

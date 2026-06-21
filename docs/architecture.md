@@ -12,7 +12,7 @@
 - `pose`: pose cloning, normalized blending, additive deltas, joint masks, and pose validation.
 - `runtime`: weighted layer stack, priorities, first-class override crossfade orchestration, additive layers, optional evaluation diagnostics, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
-- `manifest`: manifest include loading, duplicate/id validation, clip asset inspection, usable/rejected manifest helpers.
+- `manifest`: manifest include loading, duplicate/id validation, root-motion policy/provenance metadata readers, clip asset inspection, usable/rejected manifest helpers.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.
 - `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
@@ -66,7 +66,7 @@ Ozz's C++ implementation and SIMD memory layout are not copied. Runtime animatio
 Waifu consumes this package for reusable concerns:
 
 - deterministic math and seeded randomness;
-- manifest include loading and clip asset inspection;
+- manifest include loading, root-motion policy/provenance reporting, and clip asset inspection;
 - decoding `.waifuanim.bin` payloads and converting decoded clips to Three tracks;
 - retargeting quaternion tracks from source rest pose to active VRM rest pose;
 - constructing base, overlay, and debug runtime clip lanes for authored clips played through Three `AnimationMixer`;
@@ -76,5 +76,7 @@ Waifu consumes this package for reusable concerns:
 - deterministic presence scheduling, gaze target planning, non-skeletal look-at cues, and reusable bounded procedural target planning through `PresencePlanner`;
 - foot-plant planning data plus optional Three.js pelvis/leg/ankle correction application hooks as reusable library surfaces;
 - declarative root/body/finger track policies.
+
+Root-motion policy is not treated as conversion provenance. `source.rootMotion.policy: "stripped-to-in-place"` still drives runtime root-carrier stripping where applicable, while optional `source.rootMotion.provenance` and asset-report carrier counts let consumers tell whether the current binary was already stripped during conversion or still contains carrier tracks that require runtime stripping. Older manifests without provenance remain valid and report unknown provenance.
 
 Current Waifu runtime policy consumes authored skeletal animation through Three `AnimationMixer` plus non-skeletal look-at/face/viseme cues. Future migrations can move final pose application from Three `AnimationMixer` onto the package's local-pose runtime or opt into the package's reusable IK/look-at/foot-plant/procedural skeletal hooks.

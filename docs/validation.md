@@ -16,7 +16,7 @@ Current coverage includes:
 - VRM humanoid identifier and hierarchy validation for skeleton joints, humanoid maps, and clip `humanBone` tracks;
 - quaternion sanitization and shortest-path retargeting, including normalized `sourceRestQuaternion` metadata, binary source-rest roundtrips, malformed source-rest encode rejection, and rotation sample quaternion validation;
 - malformed binary payload rejection, including invalid target kinds, malformed optional metadata presence flags, and misaligned float tables;
-- manifest metadata hardening, including malformed runtime JSON status/root-motion policy rejection, structural unusable-clip filtering, asset-report classification of structural rejects, and rejected-report surfacing;
+- manifest metadata hardening, including malformed runtime JSON status/root-motion policy/provenance rejection, structural unusable-clip filtering, asset-report classification of structural rejects, and rejected-report surfacing;
 - local clip sampling;
 - local-to-model pose conversion;
 - Ozz-style attachment transform composition from joint model matrices plus offsets, including target resolution, pre-resolved attachment bindings, batch bound evaluation, offset sanitization/rejection, and invalid input handling;
@@ -98,10 +98,12 @@ Final broad visual validation after the foot-plant hook:
 
 The active Waifu manifest expands to 564 entries: 9 curated paid clips plus 555 generated Mocap Online entries. The current manifest has zero entries marked `rejected` or `quarantined`, and the latest asset inspection reported zero clip asset issues.
 
-The generated Mocap Online library now records explicit root-motion policy metadata:
+Root-motion manifest metadata is intentionally split between policy and provenance. `source.rootMotion.policy` says how consumers should treat the runtime clip (`none`, `preserved`, or `stripped-to-in-place`). Optional `source.rootMotion.provenance` records how the root-carrier translation reached that state (`not-authored`, `preserved-in-clip`, `stripped-during-conversion`, or `requires-runtime-stripping`). Legacy manifests that only set `{ "policy": "stripped-to-in-place" }` remain readable and report `rootMotionProvenance: "unknown"`; asset reports also include root-carrier translation track counts so consumers can distinguish current binary state from missing provenance.
+
+The generated Mocap Online library currently records explicit root-motion policy metadata but not conversion provenance:
 
 - 223 generated `root-motion-*` entries are marked `source.rootMotion.policy: "stripped-to-in-place"`.
-- Those clips currently omit hips/pelvis translation tracks; they are validated as in-place debug/runtime candidates, not as preserved root-motion clips.
+- Those clips currently omit hips/pelvis translation tracks; package asset reports expose this as zero root-carrier translation tracks with unknown provenance until the Waifu conversion manifest records `source.rootMotion.provenance: "stripped-during-conversion"`.
 - `visual:animations` now samples representative paid idle/conversation clips plus walk, jog, and stand-to-walk root-motion candidates.
 
 ## Known Limits

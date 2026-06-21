@@ -6,7 +6,8 @@ import {
   type AssetValidationStatus,
   inspectClipAsset,
   isInvalidAssetValidationStatus,
-  readRootMotionPolicy
+  readRootMotionPolicy,
+  readRootMotionProvenance
 } from "./manifest.js";
 import { cloneNormalizedQuat, dotQuat } from "./math.js";
 import { type Skeleton } from "./skeleton.js";
@@ -33,6 +34,9 @@ export type AnimationAssetValidationEntry = {
   posture: string;
   compatibleStates: string[];
   rootMotionPolicy: string;
+  rootMotionProvenance: string;
+  rootCarrierTranslationTrackCount: number;
+  movingRootCarrierTranslationTrackCount: number;
   jointCoverage: string[];
   trackCount: number;
   issues: AnimationAssetValidationIssue[];
@@ -347,14 +351,64 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function assetReportMetadata(entry: AnimationManifestEntry, clip?: AnimationClip): Pick<AnimationAssetValidationEntry, "category" | "posture" | "rootMotionPolicy"> {
+function assetReportMetadata(
+  entry: AnimationManifestEntry,
+  clip?: AnimationClip
+): Pick<
+  AnimationAssetValidationEntry,
+  "category" | "posture" | "rootMotionPolicy" | "rootMotionProvenance" | "rootCarrierTranslationTrackCount" | "movingRootCarrierTranslationTrackCount"
+> {
+  const carrierSummary = clip ? rootCarrierTranslationSummary(entry, clip) : { total: 0, moving: 0 };
   return {
     category: readString(entry.source?.category) ?? classifyCategory(entry, clip),
     posture: readString(entry.source?.posture) ?? classifyPosture(entry),
-    rootMotionPolicy: readRootMotionPolicyLabel(entry, clip)
+    rootMotionPolicy: readRootMotionPolicyLabel(entry, clip),
+    rootMotionProvenance: readRootMotionProvenance(entry, clip),
+    rootCarrierTranslationTrackCount: carrierSummary.total,
+    movingRootCarrierTranslationTrackCount: carrierSummary.moving
   };
 }
 
 function readRootMotionPolicyLabel(entry: AnimationManifestEntry, clip?: AnimationClip): string {
   return readRootMotionPolicy(entry, clip) ?? "none";
+}
+
+function rootCarrierTranslationSummary(entry: AnimationManifestEntry, clip: AnimationClip): { total: number; moving: number } {
+  const playbackWindow = resolvePlaybackWindow(entry, clip);
+  let total = 0;
+  let moving = 0;
+  for (const track of clip.tracks) {
+    if (!isRootCarrierTranslationTrack(track)) continue;
+    total += 1;
+    if (playbackWindow && rootCarrierTranslationTrackHasMotion(track, playbackWindow)) moving += 1;
+  }
+  return { total, moving };
+}
+
+function isRootCarrierTranslationTrack(track: AnimationClip["tracks"][number]): boolean {
+  return normalizedTrackProperty(track.property) === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
+}
+
+function rootCarrierTranslationTrackHasMotion(track: AnimationClip["tracks"][number], window: { start: number; end: number }): boolean {
+  if (track.times.length < 2 || track.values.length !== track.times.length * 3) return false;
+  const base = sampleTrack(track, window.start);
+  const sampleTimes = [window.end];
+  for (const time of track.times) {
+    if (time > window.start && time < window.end) sampleTimes.push(time);
+  }
+  for (const time of sampleTimes) {
+    if (translationSamplesDiffer(base, sampleTrack(track, time))) return true;
+  }
+  return false;
+}
+
+function translationSamplesDiffer(base: ArrayLike<number>, sample: ArrayLike<number>): boolean {
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (Math.abs((sample[axis] ?? 0) - (base[axis] ?? 0)) > 1e-4) return true;
+  }
+  return false;
+}
+
+function isRootCarrierJointName(joint: string | undefined): boolean {
+  return joint === "root" || joint === "Root" || joint === "hips" || joint === "Hips" || joint === "pelvis" || joint === "Pelvis";
 }

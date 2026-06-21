@@ -56,6 +56,8 @@ import {
   decodeAnimationBinary,
   encodeAnimationBinary,
   NO_PARENT,
+  readRootMotionMetadata,
+  readRootMotionProvenance,
   readActiveThreeRuntimeClipSnapshots,
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
@@ -1601,7 +1603,8 @@ const malformedValidationStatusManifest = {
     { id: "accepted", label: "Accepted", url: "/accepted.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "accepted" } },
     { id: "invalid-root-motion-policy", label: "Invalid Root Motion Policy", url: "/invalid-root-motion-policy.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: { policy: "keep-everything" } } },
     { id: "invalid-root-motion-shape", label: "Invalid Root Motion Shape", url: "/invalid-root-motion-shape.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: true } },
-    { id: "invalid-root-motion-policy-alias", label: "Invalid Root Motion Policy Alias", url: "/invalid-root-motion-policy-alias.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotionPolicy: "keep-everything" } }
+    { id: "invalid-root-motion-policy-alias", label: "Invalid Root Motion Policy Alias", url: "/invalid-root-motion-policy-alias.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotionPolicy: "keep-everything" } },
+    { id: "invalid-root-motion-provenance", label: "Invalid Root Motion Provenance", url: "/invalid-root-motion-provenance.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: { policy: "stripped-to-in-place", provenance: "converted" } } }
   ]
 } as unknown as AnimationManifest;
 const malformedValidationStatusIssues = validateManifest(malformedValidationStatusManifest);
@@ -1625,6 +1628,10 @@ assert.ok(
   malformedValidationStatusIssues.includes("invalid-root-motion-policy-alias has invalid source.rootMotionPolicy keep-everything"),
   "validateManifest should report invalid source.rootMotionPolicy aliases from runtime JSON"
 );
+assert.ok(
+  malformedValidationStatusIssues.includes("invalid-root-motion-provenance has invalid source.rootMotion.provenance converted"),
+  "validateManifest should report invalid source.rootMotion.provenance values from runtime JSON"
+);
 assert.deepEqual(
   usableManifestClips(malformedValidationStatusManifest).map((entry) => entry.id),
   ["valid", "accepted"],
@@ -1639,9 +1646,38 @@ assert.deepEqual(
     ["rejected", "manifest marks clip rejected"],
     ["invalid-root-motion-policy", "has invalid source.rootMotion.policy keep-everything"],
     ["invalid-root-motion-shape", "has invalid source.rootMotion metadata"],
-    ["invalid-root-motion-policy-alias", "has invalid source.rootMotionPolicy keep-everything"]
+    ["invalid-root-motion-policy-alias", "has invalid source.rootMotionPolicy keep-everything"],
+    ["invalid-root-motion-provenance", "has invalid source.rootMotion.provenance converted"]
   ],
   "rejectedAnimationReport should surface malformed validation status through the existing rejected logging path"
+);
+const convertedStrippedRootMotionEntry = {
+  id: "root-motion-converted-stripped",
+  label: "Root Motion Converted Stripped",
+  url: "/root-motion-converted-stripped.waifuanim.bin",
+  format: WAIFU_ANIMATION_BINARY_FORMAT,
+  source: { rootMotion: { policy: "stripped-to-in-place", provenance: "stripped-during-conversion" } }
+};
+assert.deepEqual(
+  readRootMotionMetadata(convertedStrippedRootMotionEntry),
+  { policy: "stripped-to-in-place", provenance: "stripped-during-conversion" },
+  "root-motion metadata should expose conversion-time stripping separately from the runtime policy"
+);
+assert.deepEqual(
+  validateManifest({ version: 1, clips: [convertedStrippedRootMotionEntry] }),
+  [],
+  "valid root-motion provenance metadata should pass manifest validation"
+);
+assert.equal(
+  readRootMotionProvenance({
+    id: "legacy-stripped",
+    label: "Legacy Stripped",
+    url: "/legacy-stripped.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "stripped-to-in-place" } }
+  }),
+  "unknown",
+  "legacy stripped-to-in-place manifests should remain readable with unknown provenance"
 );
 const structurallyInvalidManifest = {
   version: 1,
@@ -2174,6 +2210,16 @@ assert.equal(
   ).accepted,
   true
 );
+const convertedStrippedRootMotionInspection = inspectAnimationAsset(
+  convertedStrippedRootMotionEntry,
+  rootMotionRotationOnlyClip,
+  skeleton
+);
+assert.equal(convertedStrippedRootMotionInspection.status, "accepted");
+assert.equal(convertedStrippedRootMotionInspection.rootMotionPolicy, "stripped-to-in-place");
+assert.equal(convertedStrippedRootMotionInspection.rootMotionProvenance, "stripped-during-conversion");
+assert.equal(convertedStrippedRootMotionInspection.rootCarrierTranslationTrackCount, 0);
+assert.equal(convertedStrippedRootMotionInspection.movingRootCarrierTranslationTrackCount, 0);
 const strippedRootMotionMovingHipsInspection = inspectClipAsset(
   {
     id: "root-motion-stripped-moving-hips",
@@ -2405,6 +2451,20 @@ assert.equal(
   true,
   "preserved root-motion clips should accept hips translation tracks"
 );
+const preservedRootMotionReportInspection = inspectAnimationAsset(
+  {
+    id: "root-motion-hips-preserved-report",
+    label: "Root Motion Hips Preserved Report",
+    url: "/root-motion-hips-preserved-report.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "preserved", provenance: "preserved-in-clip" } }
+  },
+  preservedRootMotionHipsClip
+);
+assert.equal(preservedRootMotionReportInspection.rootMotionPolicy, "preserved");
+assert.equal(preservedRootMotionReportInspection.rootMotionProvenance, "preserved-in-clip");
+assert.equal(preservedRootMotionReportInspection.rootCarrierTranslationTrackCount, 1);
+assert.equal(preservedRootMotionReportInspection.movingRootCarrierTranslationTrackCount, 1);
 assert.equal(
   inspectClipAsset(
     {
