@@ -6538,6 +6538,61 @@ const clearedFootPlant = clearThreeFootPlantOffsets({
 });
 assert.equal(clearedFootPlant.cleared, true);
 assert.ok(Math.abs(pelvisBone.position.y) < 1e-6);
+const ikOnlyPelvis = new Object3D();
+ikOnlyPelvis.name = "hips";
+const ikOnlyHip = new Object3D();
+ikOnlyHip.name = "leftUpperLeg";
+ikOnlyHip.position.set(0, 1, 0);
+const ikOnlyKnee = new Object3D();
+ikOnlyKnee.name = "leftLowerLeg";
+ikOnlyKnee.position.set(0.5, -0.5, 0);
+const ikOnlyAnkle = new Object3D();
+ikOnlyAnkle.name = "leftFoot";
+ikOnlyAnkle.position.set(-0.5, -0.5, 0);
+ikOnlyPelvis.add(ikOnlyHip);
+ikOnlyHip.add(ikOnlyKnee);
+ikOnlyKnee.add(ikOnlyAnkle);
+ikOnlyPelvis.updateMatrixWorld(true);
+const ikOnlyInitialAnkle = ikOnlyAnkle.getWorldPosition(new Vector3()).clone();
+const ikOnlyPlant = solveFootPlant(
+  [
+    {
+      id: "left",
+      hip: ikOnlyHip.getWorldPosition(new Vector3()).toArray() as [number, number, number],
+      knee: ikOnlyKnee.getWorldPosition(new Vector3()).toArray() as [number, number, number],
+      ankle: ikOnlyInitialAnkle.toArray() as [number, number, number],
+      ground: { point: [0, -0.2, 0], normal: [0, 1, 0], rayStart: [0, 1, 0] },
+      footHeight: 0,
+      maxAnkleCorrection: 2,
+      maxStretch: 1
+    }
+  ],
+  { footHeight: 0, maxAnkleCorrection: 2, maxPelvisOffset: 1, pelvisCompensation: 1, maxStretch: 1 }
+);
+assert.ok(ikOnlyPlant.pelvisOffset[1] < -0.19, "IK-only foot plant fixture should normally assign the correction to pelvis motion");
+const ikOnlyTarget = new Vector3(...ikOnlyPlant.legs[0]!.targetAnkle);
+const ikOnlyDistanceBefore = ikOnlyInitialAnkle.distanceTo(ikOnlyTarget);
+const ikOnlyApply = applyThreeFootPlantResult(ikOnlyPlant, {
+  resolveBone: (bone) =>
+    ({
+      hips: ikOnlyPelvis,
+      leftUpperLeg: ikOnlyHip,
+      leftLowerLeg: ikOnlyKnee,
+      leftFoot: ikOnlyAnkle
+    })[bone] ?? null,
+  pelvis: "hips",
+  legs: [{ id: "left", hip: "leftUpperLeg", knee: "leftLowerLeg", ankle: "leftFoot", alignAnkleToGround: false }],
+  applyPelvis: false,
+  applyLegIk: true
+});
+ikOnlyPelvis.updateMatrixWorld(true);
+assert.equal(ikOnlyApply.pelvisApplied, false, "IK-only foot plant application should respect disabled pelvis motion");
+assert.equal(ikOnlyApply.legs[0]!.appliedHip, true);
+assert.equal(ikOnlyApply.legs[0]!.appliedKnee, true);
+assert.ok(
+  ikOnlyAnkle.getWorldPosition(new Vector3()).distanceTo(ikOnlyTarget) < ikOnlyDistanceBefore * 0.01,
+  "Three foot plant IK should resolve from the actual applied pose when pelvis correction is disabled"
+);
 const fallbackSpeedPelvis = new Object3D();
 fallbackSpeedPelvis.name = "hips";
 const fallbackSpeedFootPlant = applyThreeFootPlantResult(footPlant, {

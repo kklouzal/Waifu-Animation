@@ -894,16 +894,18 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
     }
 
     if (applyLegIk) {
+      const hip = options.resolveBone(binding.hip);
+      const knee = options.resolveBone(binding.knee);
+      const ankle = binding.ankle ? options.resolveBone(binding.ankle) : null;
       if (leg.ik) {
-        const hip = options.resolveBone(binding.hip);
-        const knee = options.resolveBone(binding.knee);
+        const ik = resolveFootPlantIkForAppliedPose(leg, hip, knee, ankle, shouldResolveFootPlantIkFromAppliedPose(result.pelvisOffset, amount, pelvisApplied));
         if (hip) {
-          applied.appliedHip = applyWorldQuaternionCorrection(hip, leg.ik.rootCorrection, legAmount);
+          applied.appliedHip = applyWorldQuaternionCorrection(hip, ik.rootCorrection, legAmount);
         } else {
           issues.push(`${binding.id}: missing hip bone ${binding.hip}`);
         }
         if (knee) {
-          applied.appliedKnee = applyWorldQuaternionCorrection(knee, leg.ik.jointCorrection, legAmount);
+          applied.appliedKnee = applyWorldQuaternionCorrection(knee, ik.jointCorrection, legAmount);
         } else {
           issues.push(`${binding.id}: missing knee bone ${binding.knee}`);
         }
@@ -930,6 +932,26 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
     legs,
     issues
   };
+}
+
+function shouldResolveFootPlantIkFromAppliedPose(pelvisOffset: Vec3, amount: number, pelvisApplied: boolean): boolean {
+  return lengthVec3(pelvisOffset) > 1e-6 && (!pelvisApplied || amount < 0.999);
+}
+
+function resolveFootPlantIkForAppliedPose(
+  leg: FootPlantResult["legs"][number],
+  hip: Object3D | null | undefined,
+  knee: Object3D | null | undefined,
+  ankle: Object3D | null | undefined,
+  useAppliedPose: boolean
+): NonNullable<FootPlantResult["legs"][number]["ik"]> {
+  if (!useAppliedPose || !hip || !knee || !ankle) return leg.ik!;
+  return solveTwoBoneIkCorrections({
+    root: objectWorldVec3(hip),
+    joint: objectWorldVec3(knee),
+    end: objectWorldVec3(ankle),
+    target: leg.targetAnkle
+  });
 }
 
 function resolvePlaybackWindow(clip: AnimationClip, playback: AnimationManifestEntry["playback"] | undefined, minimumDuration: number): { start: number; end: number } {
