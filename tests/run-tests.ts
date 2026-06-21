@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AnimationMixer, LoopOnce, Object3D, Quaternion, Vector3 } from "three";
+import { AnimationMixer, BufferGeometry, Float32BufferAttribute, LoopOnce, Object3D, Quaternion, Vector3 } from "three";
 import {
   AnimationRuntime,
   AnimationSamplingContext,
@@ -29,6 +29,7 @@ import {
   applyThreeFootPlantResult,
   applyThreeLocomotionUpperBodyPosture,
   applyThreePresenceTargets,
+  buildThreeSkinningDebugSegments,
   calculateThreeBaseLoopSeamWindow,
   calculateThreeBaseLoopTransitionWeights,
   calculateThreeOverlayFade,
@@ -50,6 +51,7 @@ import {
   createJointMask,
   DEFAULT_BLEND_THRESHOLD,
   createThreeAnimationClip,
+  createThreeSkinningDebugGeometry,
   createThreeRuntimeClipsForEntry,
   calculateThreeRuntimeInfluence,
   createSubtreeJointMask,
@@ -61,6 +63,7 @@ import {
   readActiveThreeRuntimeClipSnapshots,
   readThreeRuntimeClipSnapshot,
   prepareThreeRuntimeAction,
+  skinThreeBufferGeometry,
   additiveDeltaPose,
   createRawAnimation,
   createRawAnimationJointTrack,
@@ -4252,6 +4255,44 @@ const reusedSkin = skinVertices({
 });
 assert.equal(reusedSkin.positions, reusedSkinOutput, "skinning should reuse caller-owned output buffers when they are large enough");
 assert.ok(vectorNearlyEqual(Array.from(reusedSkinOutput.slice(3, 6)), [1, 2, 3], 1e-6), "reused skinning output should write at the requested offset");
+
+const threeSkinningGeometry = new BufferGeometry();
+const threePositionAttribute = new Float32BufferAttribute(new Float32Array([0, 0, 0]), 3);
+const threeNormalAttribute = new Float32BufferAttribute(new Float32Array([1, 0, 0]), 3);
+const threeTangentAttribute = new Float32BufferAttribute(new Float32Array([0, 1, 0, -1]), 4);
+threeSkinningGeometry.setAttribute("position", threePositionAttribute);
+threeSkinningGeometry.setAttribute("normal", threeNormalAttribute);
+threeSkinningGeometry.setAttribute("tangent", threeTangentAttribute);
+const threePositionVersion = threePositionAttribute.version;
+const threeNormalVersion = threeNormalAttribute.version;
+const threeTangentVersion = threeTangentAttribute.version;
+const threeSkin = skinThreeBufferGeometry(threeSkinningGeometry, {
+  jointMatrices: [composeMat4({ translation: [10, 20, 30], rotation: quatFromAxisAngle([0, 0, 1], Math.PI / 2), scale: [1, 1, 1] })],
+  jointIndices: new Uint16Array([0])
+});
+assert.equal(threeSkin.attributes.position, threePositionAttribute, "three skinning should reuse compatible position attributes");
+assert.equal(threeSkin.attributes.normal, threeNormalAttribute, "three skinning should reuse compatible normal attributes");
+assert.equal(threeSkin.attributes.tangent, threeTangentAttribute, "three skinning should reuse compatible tangent attributes");
+assert.ok(vectorNearlyEqual(Array.from(threePositionAttribute.array), [10, 20, 30], 1e-6), "three skinning should upload translated positions into geometry attributes");
+assert.ok(vectorNearlyEqual(Array.from(threeNormalAttribute.array), [0, 1, 0], 1e-6), "three skinning should recompute normal attributes through skinVertices");
+assert.ok(
+  vectorNearlyEqual(Array.from(threeTangentAttribute.array), [-1, 0, 0, -1], 1e-6),
+  "three skinning should recompute tangent xyz and preserve tangent handedness"
+);
+assert.equal(threePositionAttribute.version, threePositionVersion + 1, "three skinning should mark position attributes for upload");
+assert.equal(threeNormalAttribute.version, threeNormalVersion + 1, "three skinning should mark normal attributes for upload");
+assert.equal(threeTangentAttribute.version, threeTangentVersion + 1, "three skinning should mark tangent attributes for upload");
+const threeSkinningDebug = buildThreeSkinningDebugSegments({ geometry: threeSkinningGeometry, scale: 2 });
+assert.equal(threeSkinningDebug.segmentCount, 3, "skinning debug data should include normal, tangent, and binormal segments when attributes exist");
+assert.ok(
+  vectorNearlyEqual(Array.from(threeSkinningDebug.positions), [10, 20, 30, 10, 22, 30, 10, 20, 30, 8, 20, 30, 10, 20, 30, 10, 20, 28], 1e-6),
+  "skinning debug data should build normal, tangent, and handed binormal line segments"
+);
+const threeSkinningDebugGeometry = createThreeSkinningDebugGeometry({ geometry: threeSkinningGeometry, scale: 2 });
+assert.ok(
+  vectorNearlyEqual(Array.from((threeSkinningDebugGeometry.getAttribute("position") as Float32BufferAttribute).array), Array.from(threeSkinningDebug.positions), 1e-6),
+  "skinning debug geometry should expose segment positions as a BufferGeometry position attribute"
+);
 
 const attachmentOffset = composeMat4({ translation: [0.25, 0.5, -0.75], rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4), scale: [1, 2, 1] });
 const expectedAttachment = multiplyMat4(models[2]!, attachmentOffset);
