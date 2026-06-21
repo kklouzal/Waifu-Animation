@@ -156,6 +156,7 @@ import {
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   solveTwoBoneIkModel,
+  buildSkinningMatrixPalette,
   toFloat32Array,
   triggerFloatTrackEdges,
   synchronizeLocomotionPlayback,
@@ -165,6 +166,7 @@ import {
   tryBuildPackedRuntimeAnimation,
   tryBuildUserTrack,
   transformPoint,
+  skinVertices,
   rejectedAnimationReport,
   usableManifestClips,
   validateAnimationManifestAssets,
@@ -178,6 +180,7 @@ import {
   validatePose,
   validateAnimationInputs,
   validatePackedRuntimeAnimation,
+  validateSkinningJob,
   zeroVisemes
 } from "../src/index.js";
 
@@ -4179,6 +4182,76 @@ assert.ok(
 const models = localToModelPose(skeleton, sampled);
 assert.equal(models.length, skeleton.joints.length);
 assert.equal(models[0]![13], 1);
+
+const skinningIdentityMatrix = composeMat4(identityTransform());
+const identitySkin = skinVertices({
+  positions: { data: new Float32Array([1, 2, 3]) },
+  jointMatrices: [skinningIdentityMatrix],
+  jointIndices: new Uint16Array([0])
+});
+assert.deepEqual(identitySkin.issues, [], "single-joint identity skinning should validate cleanly");
+assert.ok(vectorNearlyEqual(Array.from(identitySkin.positions), [1, 2, 3], 1e-6), "single-joint identity skinning should preserve positions");
+
+const translatedSkinPalette = buildSkinningMatrixPalette(
+  [composeMat4({ translation: [5, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] })],
+  [composeMat4({ translation: [-2, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] })]
+);
+const inverseBindSkin = skinVertices({
+  positions: { data: new Float32Array([2, 0, 0]) },
+  jointMatrices: translatedSkinPalette,
+  jointIndices: new Uint16Array([0])
+});
+assert.ok(
+  vectorNearlyEqual(Array.from(inverseBindSkin.positions), [5, 0, 0], 1e-6),
+  "model * inverse-bind palette skinning should move bind-space vertices into the animated joint frame"
+);
+
+const weightedSkin = skinVertices({
+  positions: { data: new Float32Array([1, 0, 0]) },
+  influences: 2,
+  jointMatrices: [skinningIdentityMatrix, composeMat4({ translation: [10, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] })],
+  jointIndices: new Uint16Array([0, 1]),
+  jointWeights: new Float32Array([0.25])
+});
+assert.ok(vectorNearlyEqual(Array.from(weightedSkin.positions), [8.5, 0, 0], 1e-6), "skinning should restore the final Ozz influence weight");
+
+const vectorSkin = skinVertices({
+  positions: { data: new Float32Array([0, 0, 0]) },
+  normals: { data: new Float32Array([1, 0, 0]) },
+  tangents: { data: new Float32Array([0, 1, 0]) },
+  jointMatrices: [composeMat4({ translation: [10, 20, 30], rotation: quatFromAxisAngle([0, 0, 1], Math.PI / 2), scale: [1, 1, 1] })],
+  jointIndices: new Uint16Array([0])
+});
+assert.ok(vectorNearlyEqual(Array.from(vectorSkin.positions), [10, 20, 30], 1e-6), "skinning positions should include joint translation");
+assert.ok(vectorNearlyEqual(Array.from(vectorSkin.normals ?? []), [0, 1, 0], 1e-6), "skinning normals should transform as directions");
+assert.ok(vectorNearlyEqual(Array.from(vectorSkin.tangents ?? []), [-1, 0, 0], 1e-6), "skinning tangents should transform as directions");
+
+const invalidSkinJob = {
+  positions: { data: new Float32Array([Number.NaN, 1, 2]) },
+  influences: 2,
+  jointMatrices: [new Float32Array([Number.NaN])],
+  jointIndices: new Uint16Array([99, 0]),
+  jointWeights: new Float32Array([Number.NaN])
+};
+assert.ok(
+  validateSkinningJob(invalidSkinJob).some((issue) => issue.field === "jointMatrices"),
+  "skinning validation should report malformed matrix palettes"
+);
+const repairedSkin = skinVertices(invalidSkinJob);
+assert.ok(repairedSkin.issues.length > 0, "skinning should return validation issues alongside repaired output");
+assert.ok(vectorNearlyEqual(Array.from(repairedSkin.positions), [0, 1, 2], 1e-6), "skinning should repair invalid scalars to finite fallback output");
+const emptySkin = skinVertices({ positions: { data: new Float32Array() }, jointMatrices: [] });
+assert.equal(emptySkin.vertexCount, 0, "empty skinning input should produce an empty result");
+assert.equal(emptySkin.positions.length, 0, "empty skinning input should not allocate vertex data");
+const reusedSkinOutput = new Float32Array(6);
+const reusedSkin = skinVertices({
+  positions: { data: new Float32Array([1, 2, 3]) },
+  jointMatrices: [skinningIdentityMatrix],
+  jointIndices: new Uint16Array([0]),
+  outPositions: { data: reusedSkinOutput, offset: 3 }
+});
+assert.equal(reusedSkin.positions, reusedSkinOutput, "skinning should reuse caller-owned output buffers when they are large enough");
+assert.ok(vectorNearlyEqual(Array.from(reusedSkinOutput.slice(3, 6)), [1, 2, 3], 1e-6), "reused skinning output should write at the requested offset");
 
 const attachmentOffset = composeMat4({ translation: [0.25, 0.5, -0.75], rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4), scale: [1, 2, 1] });
 const expectedAttachment = multiplyMat4(models[2]!, attachmentOffset);
