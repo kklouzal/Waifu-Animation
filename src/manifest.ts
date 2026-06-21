@@ -1,5 +1,11 @@
-import { type AnimationClip, type AnimationTrack, type ClipValidationIssue, normalizedTrackProperty, sampleTrack, validateClip } from "./clip.js";
+import { type AnimationClip, type ClipValidationIssue, validateClip } from "./clip.js";
 import { WAIFU_ANIMATION_BINARY_FORMAT } from "./binary.js";
+import {
+  duplicatedManifestIds,
+  isRootCarrierTranslationTrack,
+  resolveManifestPlaybackWindow,
+  rootCarrierTranslationTrackHasMotion
+} from "./manifest-clip-helpers.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
 
@@ -58,8 +64,6 @@ export type RootMotionMetadata = {
 
 export type AssetLoader = (url: string) => Promise<unknown>;
 
-const STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE = 1e-4;
-
 export type ManifestLoaderOptions = {
   resolveInclude?: (includeUrl: string, parentUrl: string) => string;
   optionalIncludes?: boolean;
@@ -116,7 +120,7 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   const issues = validateClip(clip);
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
   const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
-  const playbackWindow = resolvePlaybackWindow(entry, clip);
+  const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
   const movingRootCarrierTrack = playbackWindow ? clip.tracks.find((track) => rootCarrierTranslationTrackHasMotion(track, playbackWindow)) : undefined;
   const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip);
   if (rootMotionPolicyIssue) {
@@ -221,42 +225,6 @@ function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): 
   return /\broot[-_ ]?motion\b/i.test(`${entry.id} ${entry.label} ${entry.url} ${clip.id} ${clip.name ?? ""}`);
 }
 
-function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
-  return normalizedTrackProperty(track.property) === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
-}
-
-function rootCarrierTranslationTrackHasMotion(track: AnimationTrack, window: { start: number; end: number }): boolean {
-  if (!isRootCarrierTranslationTrack(track)) return false;
-  if (track.times.length < 2 || track.values.length !== track.times.length * 3) return false;
-  const base = sampleTrack(track, window.start);
-  const sampleTimes = [window.end];
-  for (const time of track.times) {
-    if (time > window.start && time < window.end) sampleTimes.push(time);
-  }
-  for (const time of sampleTimes) {
-    if (translationSamplesDiffer(base, sampleTrack(track, time))) return true;
-  }
-  return false;
-}
-
-function translationSamplesDiffer(base: ArrayLike<number>, sample: ArrayLike<number>): boolean {
-  for (let axis = 0; axis < 3; axis += 1) {
-    if (Math.abs((sample[axis] ?? 0) - (base[axis] ?? 0)) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
-  }
-  return false;
-}
-
-function resolvePlaybackWindow(entry: AnimationManifestEntry, clip: AnimationClip): { start: number; end: number } | null {
-  const start = entry.playback?.start ?? 0;
-  const end = entry.playback?.end ?? clip.duration;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5) return null;
-  return { start, end };
-}
-
-function isRootCarrierJointName(joint: string | undefined): boolean {
-  return joint === "root" || joint === "Root" || joint === "hips" || joint === "Hips" || joint === "pelvis" || joint === "Pelvis";
-}
-
 export function readRootMotionPolicy(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionPolicy | null {
   return readRootMotionMetadata(entry, clip)?.policy ?? null;
 }
@@ -332,17 +300,6 @@ function manifestStructuralRejectionIssue(entry: AnimationManifestEntry, duplica
   if (duplicateIds.has(entry.id)) return `duplicate clip id ${entry.id}`;
   if (entry.validation?.status === "accepted" && entry.validation.reason) return "accepted but still has rejection reason";
   return null;
-}
-
-function duplicatedManifestIds(entries: readonly AnimationManifestEntry[]): Set<string> {
-  const seen = new Set<string>();
-  const duplicates = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.id) continue;
-    if (seen.has(entry.id)) duplicates.add(entry.id);
-    else seen.add(entry.id);
-  }
-  return duplicates;
 }
 
 function readManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] | null {

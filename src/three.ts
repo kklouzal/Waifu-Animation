@@ -494,7 +494,7 @@ export function createThreeSkinningDebugGeometry(options: ThreeSkinningDebugGeom
 }
 
 export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnimationClipOptions): ThreeAnimationClip {
-  const playback = resolvePlaybackWindow(clip, options.playback, options.minimumDuration ?? 0.1);
+  const playback = resolveThreeRuntimePlaybackWindow(clip, options.playback, options.minimumDuration ?? 0.1);
   let runtimeDuration = playback.end - playback.start;
   const trackSourceNames: Record<string, string> = {};
   const tracks = clip.tracks.flatMap((track) => {
@@ -1343,7 +1343,7 @@ function resolveFootPlantIkForAppliedPose(
   });
 }
 
-function resolvePlaybackWindow(clip: AnimationClip, playback: AnimationManifestEntry["playback"] | undefined, minimumDuration: number): { start: number; end: number } {
+function resolveThreeRuntimePlaybackWindow(clip: AnimationClip, playback: AnimationManifestEntry["playback"] | undefined, minimumDuration: number): { start: number; end: number } {
   const duration = sanitizeThreeRuntimeTime(clip.duration);
   const minDuration = finiteNonNegative(minimumDuration, 0.1);
   const start = clamp(playback?.start ?? 0, 0, duration);

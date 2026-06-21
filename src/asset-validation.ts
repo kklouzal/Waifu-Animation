@@ -10,6 +10,12 @@ import {
   readRootMotionPolicy,
   readRootMotionProvenance
 } from "./manifest.js";
+import {
+  duplicatedManifestIds,
+  isRootCarrierTranslationTrack,
+  resolveManifestPlaybackWindow,
+  rootCarrierTranslationTrackHasMotion
+} from "./manifest-clip-helpers.js";
 import { cloneNormalizedQuat, dotQuat } from "./math.js";
 import { type Skeleton } from "./skeleton.js";
 
@@ -166,7 +172,7 @@ const LOOP_ENDPOINT_WARNING_PREFIX = "loop endpoints differ; crossfade or seam b
 
 function inspectLoopEndpointMismatches(entry: AnimationManifestEntry, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
-  const playbackWindow = resolvePlaybackWindow(entry, clip);
+  const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
   if (!playbackWindow) return issues;
   for (let index = 0; index < clip.tracks.length; index += 1) {
     const track = clip.tracks[index]!;
@@ -192,13 +198,6 @@ function inspectLoopEndpointMismatches(entry: AnimationManifestEntry, clip: Anim
     });
   }
   return issues;
-}
-
-function resolvePlaybackWindow(entry: AnimationManifestEntry, clip: AnimationClip): { start: number; end: number } | null {
-  const start = entry.playback?.start ?? 0;
-  const end = entry.playback?.end ?? clip.duration;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5) return null;
-  return { start, end };
 }
 
 function resolveLoopEndpointJoint(track: AnimationClip["tracks"][number], skeleton?: Skeleton): string | undefined {
@@ -299,17 +298,6 @@ function inspectManifestEntryStructure(entry: AnimationManifestEntry): Animation
   return issues;
 }
 
-function duplicatedManifestIds(entries: readonly AnimationManifestEntry[]): Set<string> {
-  const seen = new Set<string>();
-  const duplicates = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.id) continue;
-    if (seen.has(entry.id)) duplicates.add(entry.id);
-    else seen.add(entry.id);
-  }
-  return duplicates;
-}
-
 function countValidationStatuses(entries: AnimationAssetValidationEntry[]): Record<AssetValidationStatus, number> {
   return entries.reduce(
     (counts, entry) => {
@@ -381,7 +369,7 @@ function readRootMotionPolicyLabel(entry: AnimationManifestEntry, clip?: Animati
 }
 
 function rootCarrierTranslationSummary(entry: AnimationManifestEntry, clip: AnimationClip): { total: number; moving: number } {
-  const playbackWindow = resolvePlaybackWindow(entry, clip);
+  const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
   let total = 0;
   let moving = 0;
   for (const track of clip.tracks) {
@@ -390,32 +378,4 @@ function rootCarrierTranslationSummary(entry: AnimationManifestEntry, clip: Anim
     if (playbackWindow && rootCarrierTranslationTrackHasMotion(track, playbackWindow)) moving += 1;
   }
   return { total, moving };
-}
-
-function isRootCarrierTranslationTrack(track: AnimationClip["tracks"][number]): boolean {
-  return normalizedTrackProperty(track.property) === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
-}
-
-function rootCarrierTranslationTrackHasMotion(track: AnimationClip["tracks"][number], window: { start: number; end: number }): boolean {
-  if (track.times.length < 2 || track.values.length !== track.times.length * 3) return false;
-  const base = sampleTrack(track, window.start);
-  const sampleTimes = [window.end];
-  for (const time of track.times) {
-    if (time > window.start && time < window.end) sampleTimes.push(time);
-  }
-  for (const time of sampleTimes) {
-    if (translationSamplesDiffer(base, sampleTrack(track, time))) return true;
-  }
-  return false;
-}
-
-function translationSamplesDiffer(base: ArrayLike<number>, sample: ArrayLike<number>): boolean {
-  for (let axis = 0; axis < 3; axis += 1) {
-    if (Math.abs((sample[axis] ?? 0) - (base[axis] ?? 0)) > 1e-4) return true;
-  }
-  return false;
-}
-
-function isRootCarrierJointName(joint: string | undefined): boolean {
-  return joint === "root" || joint === "Root" || joint === "hips" || joint === "Hips" || joint === "pelvis" || joint === "Pelvis";
 }
