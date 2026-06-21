@@ -7020,6 +7020,17 @@ assert.ok(
   nonUnitRotationMetric.maxRotationDelta > 1.56 && nonUnitRotationMetric.maxRotationDelta < 1.58,
   "pose rotation metrics should normalize finite non-unit quaternions before measuring angular error"
 );
+const invalidRotationMetricPose = clonePose(nonUnitRotationPose);
+invalidRotationMetricPose[1]!.rotation = [Number.NaN, 0, 0, 1];
+invalidRotationMetricPose[3]!.rotation = [0, 0, 0, 0];
+const invalidRotationMetric = poseRotationMetric(skeleton.restPose, invalidRotationMetricPose);
+assert.equal(Number.isFinite(invalidRotationMetric.rmsRotationDelta), true, "pose rotation RMS should stay finite for invalid quaternions");
+assert.equal(Number.isFinite(invalidRotationMetric.maxRotationDelta), true, "pose rotation max should stay finite for invalid quaternions");
+assert.equal(invalidRotationMetric.invalidSamples, 2, "pose rotation metrics should count skipped invalid quaternion samples");
+assert.ok(
+  invalidRotationMetric.maxRotationDelta > 1.56 && invalidRotationMetric.maxRotationDelta < 1.58,
+  "pose rotation metrics should keep valid finite quaternion samples when invalid samples are skipped"
+);
 const poseDeltaA = clonePose(skeleton.restPose);
 const poseDeltaB = clonePose(skeleton.restPose);
 poseDeltaB[1]!.translation = [0, 2, 0];
@@ -7042,6 +7053,33 @@ assert.ok(
   "pose delta metrics should not report zero rotation error for finite non-unit quaternions"
 );
 assert.equal(nonUnitPoseDelta.rotation.maxJoint, "head");
+const invalidPoseDeltaA = clonePose(skeleton.restPose);
+const invalidPoseDeltaB = clonePose(skeleton.restPose);
+invalidPoseDeltaA[0]!.translation = [Number.NaN, 0, 0];
+invalidPoseDeltaB[1]!.translation = [0, Number.POSITIVE_INFINITY, 0];
+invalidPoseDeltaB[2]!.translation = [0, 3, 0];
+invalidPoseDeltaA[0]!.scale = [1, Number.NEGATIVE_INFINITY, 1];
+invalidPoseDeltaB[1]!.scale = [1, Number.NaN, 1];
+invalidPoseDeltaB[3]!.scale = [1, 4, 1];
+invalidPoseDeltaA[1]!.rotation = [Number.NaN, 0, 0, 1];
+invalidPoseDeltaB[2]!.rotation = [0, 0, Number.POSITIVE_INFINITY, 1];
+invalidPoseDeltaB[3]!.rotation = [0, 2, 0, 2];
+const invalidPoseDelta = poseDeltaMetric(invalidPoseDeltaA, invalidPoseDeltaB, skeleton);
+assert.equal(invalidPoseDelta.samples, skeleton.restPose.length);
+assert.equal(invalidPoseDelta.translation.invalidSamples, 2, "pose delta metrics should count skipped invalid translation samples");
+assert.equal(invalidPoseDelta.scale.invalidSamples, 2, "pose delta metrics should count skipped invalid scale samples");
+assert.equal(invalidPoseDelta.rotation.invalidSamples, 2, "pose delta metrics should count skipped invalid rotation samples");
+assert.equal(Number.isFinite(invalidPoseDelta.translation.rms), true, "translation RMS should stay finite for invalid samples");
+assert.equal(Number.isFinite(invalidPoseDelta.scale.rms), true, "scale RMS should stay finite for invalid samples");
+assert.equal(Number.isFinite(invalidPoseDelta.rotation.rms), true, "rotation RMS should stay finite for invalid samples");
+assert.equal(invalidPoseDelta.translation.max, 3);
+assert.equal(invalidPoseDelta.translation.maxJoint, "head");
+assert.equal(invalidPoseDelta.scale.max, 3);
+assert.equal(invalidPoseDelta.scale.maxJoint, "leftUpperArm");
+assert.ok(
+  invalidPoseDelta.rotation.max > 1.56 && invalidPoseDelta.rotation.max < 1.58,
+  "pose delta metrics should keep valid finite rotation samples when invalid samples are skipped"
+);
 
 const headBone = new Object3D();
 headBone.name = "normalizedHead";
