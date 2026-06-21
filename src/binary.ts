@@ -171,8 +171,11 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     const timeOffset = view.getUint32(trackOffset + 16, true);
     const valueOffset = view.getUint32(trackOffset + 20, true);
     const keyCount = view.getUint32(trackOffset + 24, true);
-    const sourceRestOffset = view.getUint32(trackOffset + 28, true);
-    const sourceRestChildDirectionOffset = trackBytes >= TRACK_BYTES ? view.getUint32(trackOffset + 36, true) : NO_OFFSET;
+    const sourceRestPresent = readOptionalPayloadFlag(view, trackOffset + 32, index, "source-rest");
+    const sourceRestOffset = sourceRestPresent ? view.getUint32(trackOffset + 28, true) : NO_OFFSET;
+    const sourceRestChildDirectionPresent =
+      trackBytes >= TRACK_BYTES ? readOptionalPayloadFlag(view, trackOffset + 40, index, "source-rest-child-direction") : false;
+    const sourceRestChildDirectionOffset = sourceRestChildDirectionPresent ? view.getUint32(trackOffset + 36, true) : NO_OFFSET;
     const property = decodeProperty(propertyCode);
     const stride = trackStride(property);
 
@@ -245,6 +248,12 @@ function readSourceRestQuaternion(track: AnimationTrack): Float32Array | null {
 
 function assertFloatBounds(trackIndex: number, label: string, offset: number, count: number, floatCount: number): void {
   if (offset + count > floatCount) throw new Error(`animation track ${trackIndex} ${label} bounds are invalid`);
+}
+
+function readOptionalPayloadFlag(view: DataView, offset: number, trackIndex: number, label: string): boolean {
+  const value = view.getUint32(offset, true);
+  if (value !== 0 && value !== 1) throw new Error(`animation track ${trackIndex} ${label} presence flag is invalid`);
+  return value === 1;
 }
 
 function align4(value: number): number {

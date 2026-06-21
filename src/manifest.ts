@@ -259,16 +259,38 @@ function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {
 }
 
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
-  return manifest.clips.filter((entry) => !manifestRejectionIssue(entry));
+  const duplicateIds = duplicatedManifestIds(manifest.clips);
+  return manifest.clips.filter((entry) => !manifestRejectionIssue(entry, duplicateIds));
 }
 
 export function rejectedAnimationReport(manifest: AnimationManifest): Array<{ id: string; label?: string; reason: string }> {
+  const duplicateIds = duplicatedManifestIds(manifest.clips);
   return manifest.clips
-    .map((entry) => ({ entry, reason: manifestRejectionIssue(entry) }))
+    .map((entry) => ({ entry, reason: manifestRejectionIssue(entry, duplicateIds) }))
     .filter((item): item is { entry: AnimationManifestEntry; reason: string } => item.reason !== null)
     .map(({ entry, reason }) => ({ id: entry.id, label: entry.label, reason }));
 }
 
-function manifestRejectionIssue(entry: AnimationManifestEntry): string | null {
-  return manifestValidationStatusIssue(entry) ?? manifestRootMotionPolicyIssue(entry);
+function manifestRejectionIssue(entry: AnimationManifestEntry, duplicateIds = new Set<string>()): string | null {
+  return manifestStructuralRejectionIssue(entry, duplicateIds) ?? manifestValidationStatusIssue(entry) ?? manifestRootMotionPolicyIssue(entry);
+}
+
+function manifestStructuralRejectionIssue(entry: AnimationManifestEntry, duplicateIds: ReadonlySet<string>): string | null {
+  if (!entry.id) return "missing id";
+  if (!entry.url) return "missing url";
+  if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) return `unsupported format ${String(entry.format)}`;
+  if (duplicateIds.has(entry.id)) return `duplicate clip id ${entry.id}`;
+  if (entry.validation?.status === "accepted" && entry.validation.reason) return "accepted but still has rejection reason";
+  return null;
+}
+
+function duplicatedManifestIds(entries: readonly AnimationManifestEntry[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.id) continue;
+    if (seen.has(entry.id)) duplicates.add(entry.id);
+    else seen.add(entry.id);
+  }
+  return duplicates;
 }

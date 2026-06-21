@@ -701,6 +701,16 @@ assert.ok(
   validateSkeleton(invalidHumanoidMapSkeleton).some((issue) => issue.message === "humanoid map entry pelvis has invalid humanoid bone name"),
   "validateSkeleton should report invalid humanoid map entry names"
 );
+const nonMapLookupSkeleton = {
+  ...skeleton,
+  nameToIndex: {} as Skeleton["nameToIndex"]
+};
+const nonMapLookupReport = validateAnimationInputs(nonMapLookupSkeleton, nodClip);
+assert.equal(nonMapLookupReport.accepted, false, "invalid skeleton lookup maps should make animation inputs unacceptable");
+assert.ok(
+  nonMapLookupReport.skeletonIssues.some((issue) => issue.message === "nameToIndex map is invalid"),
+  "validateAnimationInputs should report malformed skeleton lookup maps instead of throwing during clip validation"
+);
 const validHumanoidHierarchySkeleton = createSkeleton([
   { name: "hips", humanoid: "hips" },
   { name: "spine", parentName: "hips", humanoid: "spine" },
@@ -1632,6 +1642,39 @@ assert.deepEqual(
   ],
   "rejectedAnimationReport should surface malformed validation status through the existing rejected logging path"
 );
+const structurallyInvalidManifest = {
+  version: 1,
+  clips: [
+    { id: "valid", label: "Valid", url: "/valid.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    { id: "missing-url", label: "Missing Url", url: "", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    { id: "bad-format", label: "Bad Format", url: "/bad-format.json", format: "json" },
+    { id: "dup", label: "Duplicate A", url: "/dup-a.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    { id: "dup", label: "Duplicate B", url: "/dup-b.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    {
+      id: "accepted-with-reason",
+      label: "Accepted With Reason",
+      url: "/accepted-with-reason.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      validation: { status: "accepted", reason: "old rejection" }
+    }
+  ]
+} as AnimationManifest;
+assert.deepEqual(
+  usableManifestClips(structurallyInvalidManifest).map((entry) => entry.id),
+  ["valid"],
+  "usableManifestClips should exclude entries rejected by manifest structure validation"
+);
+assert.deepEqual(
+  rejectedAnimationReport(structurallyInvalidManifest).map((entry) => [entry.id, entry.reason]),
+  [
+    ["missing-url", "missing url"],
+    ["bad-format", "unsupported format json"],
+    ["dup", "duplicate clip id dup"],
+    ["dup", "duplicate clip id dup"],
+    ["accepted-with-reason", "accepted but still has rejection reason"]
+  ],
+  "rejectedAnimationReport should include structural manifest rejection reasons"
+);
 const invalidValidationStatusClipInspection = inspectClipAsset(
   invalidValidationStatusManifestEntry,
   nodClip
@@ -1967,6 +2010,43 @@ assert.deepEqual(Array.from(decodedLegacyNodClip.tracks[0]!.times), [0, 0.5, 1])
 assert.ok(
   quaternionNearlyEqual(Array.from(decodedLegacyNodClip.tracks[0]!.values.slice(4, 8)), [0.15, 0, 0, 0.9887], 1e-6),
   "decodeAnimationBinary should read legacy v1 track/string/float offsets using the v1 record size"
+);
+const absentSourceRestFlagBinary = encodeAnimationBinary(nodClip);
+new DataView(absentSourceRestFlagBinary).setUint32(32 + 28, 0, true);
+new DataView(absentSourceRestFlagBinary).setUint32(32 + 32, 0, true);
+assert.equal(
+  decodeAnimationBinary(absentSourceRestFlagBinary, "absent-source-rest-flag").tracks[0]!.sourceRestQuaternion,
+  undefined,
+  "decodeAnimationBinary should honor a false source-rest presence flag even when legacy offset bytes are non-empty"
+);
+const invalidSourceRestFlagBinary = encodeAnimationBinary(nodClip);
+new DataView(invalidSourceRestFlagBinary).setUint32(32 + 32, 2, true);
+assert.throws(
+  () => decodeAnimationBinary(invalidSourceRestFlagBinary, "invalid-source-rest-flag"),
+  /animation track 0 source-rest presence flag is invalid/,
+  "decodeAnimationBinary should reject malformed source-rest presence flags"
+);
+const childDirectionBinaryClip: AnimationClip = {
+  id: "binary-child-direction",
+  duration: 1,
+  tracks: [
+    {
+      humanBone: "head",
+      property: "quaternion",
+      sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+      sourceRestChildDirection: toFloat32Array([0, 1, 0]),
+      times: toFloat32Array([0]),
+      values: toFloat32Array([0, 0, 0, 1])
+    }
+  ]
+};
+const absentChildDirectionFlagBinary = encodeAnimationBinary(childDirectionBinaryClip);
+new DataView(absentChildDirectionFlagBinary).setUint32(32 + 36, 0, true);
+new DataView(absentChildDirectionFlagBinary).setUint32(32 + 40, 0, true);
+assert.equal(
+  decodeAnimationBinary(absentChildDirectionFlagBinary, "absent-child-direction-flag").tracks[0]!.sourceRestChildDirection,
+  undefined,
+  "decodeAnimationBinary should honor a false source-rest child direction presence flag"
 );
 assert.throws(
   () => encodeAnimationBinary({ ...nodClip, id: "binary-non-finite-duration", duration: Number.NaN }),

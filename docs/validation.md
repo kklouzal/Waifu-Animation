@@ -15,8 +15,8 @@ Current coverage includes:
 - finite transform and clip validation, including duplicate resolved target-channel rejection;
 - VRM humanoid identifier and hierarchy validation for skeleton joints, humanoid maps, and clip `humanBone` tracks;
 - quaternion sanitization and shortest-path retargeting, including normalized `sourceRestQuaternion` metadata, binary source-rest roundtrips, malformed source-rest encode rejection, and rotation sample quaternion validation;
-- malformed binary payload rejection, including invalid target kinds and misaligned float tables;
-- manifest metadata hardening, including malformed runtime JSON status/root-motion policy rejection and rejected-report surfacing;
+- malformed binary payload rejection, including invalid target kinds, malformed optional metadata presence flags, and misaligned float tables;
+- manifest metadata hardening, including malformed runtime JSON status/root-motion policy rejection, structural unusable-clip filtering, and rejected-report surfacing;
 - local clip sampling;
 - local-to-model pose conversion;
 - Ozz-style attachment transform composition from joint model matrices plus offsets, including target resolution, pre-resolved attachment bindings, batch bound evaluation, offset sanitization/rejection, and invalid input handling;

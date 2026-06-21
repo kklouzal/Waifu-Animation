@@ -11,12 +11,16 @@ export type AnimationValidationReport = {
 
 export function validateAnimationInputs(skeleton: Skeleton, clip: AnimationClip): AnimationValidationReport {
   const skeletonIssues = validateSkeleton(skeleton);
-  const clipIssues = validateClip(clip, skeleton);
+  const clipIssues = validateClip(clip, canUseSkeletonForClipValidation(skeleton) ? skeleton : undefined);
+  const poseIssues = validatePose(skeleton, skeleton.restPose);
   return {
-    accepted: skeletonIssues.length === 0 && clipIssues.length === 0,
+    accepted: skeletonIssues.length === 0 && clipIssues.length === 0 && poseIssues.length === 0,
     skeletonIssues,
     clipIssues,
-    poseIssues: validatePose(skeleton, skeleton.restPose)
+    poseIssues
   };
 }
 
+function canUseSkeletonForClipValidation(skeleton: Skeleton): boolean {
+  return Array.isArray(skeleton.joints) && skeleton.nameToIndex instanceof Map && skeleton.humanoid instanceof Map;
+}
