@@ -568,6 +568,7 @@ export function blendMotionDeltas(layers: readonly MotionBlendLayer[]): Transfor
   if (totalWeight <= EPSILON) return identityTransform();
 
   const translation: Vec3 = [0, 0, 0];
+  let translationLength = 0;
   const scale: Vec3 = [0, 0, 0];
   const rotationSum: Quat = [0, 0, 0, 0];
   let firstRotation: Quat | undefined;
@@ -577,9 +578,18 @@ export function blendMotionDeltas(layers: readonly MotionBlendLayer[]): Transfor
     if (weight <= 0) continue;
     const normalizedWeight = weight / totalWeight;
     const delta = sanitizeMotionTransform(layer.delta);
-    translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
-    translation[1] += finiteSigned(delta.translation[1], 0) * normalizedWeight;
-    translation[2] += finiteSigned(delta.translation[2], 0) * normalizedWeight;
+    const deltaTranslation: Vec3 = [
+      finiteSigned(delta.translation[0], 0),
+      finiteSigned(delta.translation[1], 0),
+      finiteSigned(delta.translation[2], 0)
+    ];
+    const deltaTranslationLength = Math.hypot(deltaTranslation[0], deltaTranslation[1], deltaTranslation[2]);
+    if (Number.isFinite(deltaTranslationLength) && deltaTranslationLength > EPSILON) {
+      translation[0] += (deltaTranslation[0] / deltaTranslationLength) * normalizedWeight;
+      translation[1] += (deltaTranslation[1] / deltaTranslationLength) * normalizedWeight;
+      translation[2] += (deltaTranslation[2] / deltaTranslationLength) * normalizedWeight;
+      translationLength += deltaTranslationLength * normalizedWeight;
+    }
     scale[0] += finiteSigned(delta.scale[0], 1) * normalizedWeight;
     scale[1] += finiteSigned(delta.scale[1], 1) * normalizedWeight;
     scale[2] += finiteSigned(delta.scale[2], 1) * normalizedWeight;
@@ -598,8 +608,18 @@ export function blendMotionDeltas(layers: readonly MotionBlendLayer[]): Transfor
     rotationSum[3] += rotation[3] * normalizedWeight;
   }
 
+  const blendedTranslationLength = Math.hypot(translation[0], translation[1], translation[2]);
+  const translationScale =
+    Number.isFinite(blendedTranslationLength) && blendedTranslationLength > EPSILON
+      ? translationLength / blendedTranslationLength
+      : 0;
+
   return sanitizeMotionTransform({
-    translation,
+    translation: [
+      translation[0] * translationScale,
+      translation[1] * translationScale,
+      translation[2] * translationScale
+    ],
     rotation: normalizeQuat(rotationSum),
     scale
   });

@@ -362,6 +362,22 @@ export async function runMotionRootMotionTests(): Promise<void> {
     vectorNearlyEqual(blendedMotion.translation, [8, 0, 0], 1e-6),
     "motion delta blending should normalize positive weights and ignore negative weights"
   );
+  const blendedOpposingMotion = blendMotionDeltas([
+    { weight: 3, delta: { translation: [10, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { weight: 1, delta: { translation: [-5, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } }
+  ]);
+  assert.ok(
+    vectorNearlyEqual(blendedOpposingMotion.translation, [8.75, 0, 0], 1e-6),
+    "motion delta blending should preserve Ozz blended translation length for opposing directions with unequal weights"
+  );
+  const blendedOrthogonalMotion = blendMotionDeltas([
+    { weight: 1, delta: { translation: [10, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { weight: 1, delta: { translation: [0, 0, 10], rotation: [0, 0, 0, 1], scale: [1, 1, 1] } }
+  ]);
+  assert.ok(
+    vectorNearlyEqual(blendedOrthogonalMotion.translation, [Math.SQRT1_2 * 10, 0, Math.SQRT1_2 * 10], 1e-6),
+    "motion delta blending should restore Ozz blended translation length for orthogonal directions"
+  );
   const blendedScaledMotion = blendMotionDeltas([
     { weight: 1, delta: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [2, 3, -4] } },
     { weight: 3, delta: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [4, 7, 8] } }
@@ -1157,10 +1173,22 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
   runtimeOrthogonalRootMotion.setLayer("orthogonal-a", orthogonalMotionA, { weight: 1, targetWeight: 1, priority: 4 });
   runtimeOrthogonalRootMotion.setLayer("orthogonal-b", orthogonalMotionB, { weight: 1, targetWeight: 1, priority: 4 });
   const orthogonalRootMotionUpdate = runtimeOrthogonalRootMotion.update(1, { collectRootMotion: true });
-  assert.deepEqual(
+  assert.ok(
+    vectorNearlyEqual(
+      orthogonalRootMotionUpdate.rootMotionDelta.translation,
+      [Math.SQRT1_2 * 10, 0, Math.SQRT1_2 * 10],
+      1e-6
+    ),
+    "orthogonal equal root-motion deltas should preserve Ozz blended translation length"
+  );
+  assert.ok(
+    Math.abs(Math.hypot(...orthogonalRootMotionUpdate.rootMotionDelta.translation) - 10) < 1e-6,
+    "orthogonal root-motion blend should keep the weighted average length"
+  );
+  assert.notDeepEqual(
     orthogonalRootMotionUpdate.rootMotionDelta.translation,
     [5, 0, 5],
-    "orthogonal equal root-motion deltas should blend to the weighted vector average"
+    "orthogonal root-motion blend should not collapse to the naive component average"
   );
 
   const rotationOrderMotionA: AnimationClip = {
