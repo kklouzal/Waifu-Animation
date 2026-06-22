@@ -519,6 +519,7 @@ export function applyAimIkChainToPose(input: ApplyAimIkChainInput): ApplyAimIkCh
 }
 
 export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput): ApplyAimIkChildToParentChainResult {
+  validateChildToParentAimChain(input.skeleton, input.joints);
   const corrections: AimIkChainCorrection[] = [];
   let previousJoint = -1;
   let previousForward = input.forward ?? ([1, 0, 0] as Vec3);
@@ -576,6 +577,23 @@ export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput):
     updatedFrom = updatedTo;
   }
   return { localPose: input.localPose, modelPose: input.modelPose, corrections, updatedFrom, updatedTo };
+}
+
+function validateChildToParentAimChain(
+  skeleton: Skeleton,
+  joints: readonly (number | AimIkChainJointInput)[]
+): void {
+  let previousJoint = -1;
+  for (const jointInput of joints) {
+    const jointConfig = typeof jointInput === "number" ? { joint: jointInput } : jointInput;
+    const joint = requireJointIndex(skeleton, jointConfig.joint, "joint");
+    if (previousJoint >= 0 && !isJointDescendantOrSelf(skeleton, previousJoint, joint)) {
+      throw new Error(
+        `child-to-parent aim chain joint ${joint} must be an ancestor of previous joint ${previousJoint}`
+      );
+    }
+    previousJoint = joint;
+  }
 }
 
 export function createHumanoidLookAtAimChain(

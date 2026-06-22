@@ -614,6 +614,38 @@ export function runIkFootPlantTests(): void {
     dotVec3(matrixDirection(propagatedAimModels[2]!, [1, 0, 0]), propagatedTargetDirection) > 0.95,
     "child-to-parent aim propagation should keep the child joint directed toward the target"
   );
+  const invalidAimChainSkeleton = createSkeleton([
+    { name: "root" },
+    { name: "spine", parentName: "root" },
+    { name: "head", parentName: "spine" },
+    { name: "leftArm", parentName: "root" }
+  ]);
+  const invalidAimChainPose = clonePose(invalidAimChainSkeleton.restPose);
+  const invalidAimChainPoseBefore = clonePose(invalidAimChainPose);
+  const invalidAimChainModels = localToModelPose(invalidAimChainSkeleton, invalidAimChainPose);
+  assert.throws(
+    () =>
+      applyAimIkChildToParentChainToPose({
+        skeleton: invalidAimChainSkeleton,
+        localPose: invalidAimChainPose,
+        modelPose: invalidAimChainModels,
+        joints: [
+          { joint: 2, weight: 0.5 },
+          { joint: 3, weight: 1 }
+        ],
+        target: headTarget,
+        forward: [1, 0, 0],
+        up: [0, 1, 0],
+        pole: [0, 1, 0]
+      }),
+    /must be an ancestor/,
+    "child-to-parent aim propagation should reject non-ancestor chains like the Ozz look-at sample"
+  );
+  assert.deepEqual(
+    invalidAimChainPose,
+    invalidAimChainPoseBefore,
+    "invalid child-to-parent aim chains should be rejected before mutating local pose"
+  );
 
   const footPlant = solveFootPlant(
     [
