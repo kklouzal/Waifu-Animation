@@ -579,10 +579,7 @@ export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput):
   return { localPose: input.localPose, modelPose: input.modelPose, corrections, updatedFrom, updatedTo };
 }
 
-function validateChildToParentAimChain(
-  skeleton: Skeleton,
-  joints: readonly (number | AimIkChainJointInput)[]
-): void {
+function validateChildToParentAimChain(skeleton: Skeleton, joints: readonly (number | AimIkChainJointInput)[]): void {
   let previousJoint = -1;
   for (const jointInput of joints) {
     const jointConfig = typeof jointInput === "number" ? { joint: jointInput } : jointInput;
