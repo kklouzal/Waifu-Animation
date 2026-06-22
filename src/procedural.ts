@@ -1,4 +1,16 @@
-import { type RandomSource, type Vec3, clamp, clamp01, createSeededRandom, dampValue, finiteNonNegative, finiteSigned, normalizeVec3, randomRange, smoothPulse } from "./math.js";
+import {
+  type RandomSource,
+  type Vec3,
+  clamp,
+  clamp01,
+  createSeededRandom,
+  dampValue,
+  finiteNonNegative,
+  finiteSigned,
+  normalizeVec3,
+  randomRange,
+  smoothPulse
+} from "./math.js";
 
 export type LookAtDistribution = {
   eyes: { yaw: number; pitch: number; weight: number };
@@ -65,7 +77,12 @@ export class AttentionScheduler {
     this.random = createSeededRandom(seed);
   }
 
-  choose(nowMs: number, targets: readonly AttentionTarget[], minDwellMs = 900, maxDwellMs = 3200): AttentionTarget | null {
+  choose(
+    nowMs: number,
+    targets: readonly AttentionTarget[],
+    minDwellMs = 900,
+    maxDwellMs = 3200
+  ): AttentionTarget | null {
     if (targets.length === 0) {
       this.currentId = null;
       this.nextSwitchAt = 0;
@@ -223,7 +240,17 @@ export type PresenceFrame = {
   };
 };
 
-const CUE_KINDS: PresenceCueKind[] = ["beat", "blink", "glance", "lookCamera", "nod", "settle", "smile", "shrug", "thinkingPulse"];
+const CUE_KINDS: PresenceCueKind[] = [
+  "beat",
+  "blink",
+  "glance",
+  "lookCamera",
+  "nod",
+  "settle",
+  "smile",
+  "shrug",
+  "thinkingPulse"
+];
 
 const DEFAULT_BEHAVIOR: Required<PresenceBehavior> = {
   state: "idle",
@@ -281,24 +308,96 @@ function gestureAmount(behavior: Required<PresenceBehavior>, name: PresenceGestu
   return behavior.gesture === name ? 1 : 0;
 }
 
-function pushTarget(targets: PresenceBoneTarget[], bone: PresenceBoneName, x: number, y: number, z: number, influence: number, speed: number): void {
+function pushTarget(
+  targets: PresenceBoneTarget[],
+  bone: PresenceBoneName,
+  x: number,
+  y: number,
+  z: number,
+  influence: number,
+  speed: number
+): void {
   targets.push({ bone, rotation: [x, y, z], influence: clamp01(influence), speed });
 }
 
 function pushArmTargets(targets: PresenceBoneTarget[], side: "left" | "right", input: PresenceArmSideInput): void {
   const { lead, gesture, beat, shrug, shoulderLift, armTarget } = input;
   if (side === "left") {
-    pushTarget(targets, "leftShoulder", 0.02 + shoulderLift, -shrug * 0.04, mixTarget(-0.05, -0.18, lead) + shrug * 0.08, armTarget, 5.5);
-    pushTarget(targets, "leftUpperArm", mixTarget(0.04, 0.34 + beat + shrug * 0.16, gesture), 0.04 + shrug * 0.08, mixTarget(1.15, 0.58, gesture), armTarget, 5.8);
-    pushTarget(targets, "leftLowerArm", mixTarget(0.18, 0.72 + beat + shrug * 0.12, gesture), 0.04 + shrug * 0.12, mixTarget(-0.18, -0.52, gesture), armTarget, 5.8);
-    pushTarget(targets, "leftHand", mixTarget(0.06, -0.02 - shrug * 0.1, gesture), shrug * 0.12, mixTarget(-0.08, -0.24, gesture), armTarget, 6.2);
+    pushTarget(
+      targets,
+      "leftShoulder",
+      0.02 + shoulderLift,
+      -shrug * 0.04,
+      mixTarget(-0.05, -0.18, lead) + shrug * 0.08,
+      armTarget,
+      5.5
+    );
+    pushTarget(
+      targets,
+      "leftUpperArm",
+      mixTarget(0.04, 0.34 + beat + shrug * 0.16, gesture),
+      0.04 + shrug * 0.08,
+      mixTarget(1.15, 0.58, gesture),
+      armTarget,
+      5.8
+    );
+    pushTarget(
+      targets,
+      "leftLowerArm",
+      mixTarget(0.18, 0.72 + beat + shrug * 0.12, gesture),
+      0.04 + shrug * 0.12,
+      mixTarget(-0.18, -0.52, gesture),
+      armTarget,
+      5.8
+    );
+    pushTarget(
+      targets,
+      "leftHand",
+      mixTarget(0.06, -0.02 - shrug * 0.1, gesture),
+      shrug * 0.12,
+      mixTarget(-0.08, -0.24, gesture),
+      armTarget,
+      6.2
+    );
     return;
   }
 
-  pushTarget(targets, "rightShoulder", 0.02 + shoulderLift, shrug * 0.04, mixTarget(0.05, 0.2, lead) - shrug * 0.08, armTarget, 5.5);
-  pushTarget(targets, "rightUpperArm", mixTarget(0.08, 0.48 + beat + shrug * 0.18, gesture), mixTarget(-0.06, -0.18 - shrug * 0.08, gesture), mixTarget(-1.15, -0.5, gesture), armTarget, 5.8);
-  pushTarget(targets, "rightLowerArm", mixTarget(0.18, 0.92 + beat + shrug * 0.14, gesture), -0.04 - shrug * 0.12, mixTarget(0.18, 0.46, gesture), armTarget, 5.8);
-  pushTarget(targets, "rightHand", mixTarget(0.06, -0.04 - shrug * 0.1, gesture), -shrug * 0.12, mixTarget(0.08, 0.28, gesture), armTarget, 6.2);
+  pushTarget(
+    targets,
+    "rightShoulder",
+    0.02 + shoulderLift,
+    shrug * 0.04,
+    mixTarget(0.05, 0.2, lead) - shrug * 0.08,
+    armTarget,
+    5.5
+  );
+  pushTarget(
+    targets,
+    "rightUpperArm",
+    mixTarget(0.08, 0.48 + beat + shrug * 0.18, gesture),
+    mixTarget(-0.06, -0.18 - shrug * 0.08, gesture),
+    mixTarget(-1.15, -0.5, gesture),
+    armTarget,
+    5.8
+  );
+  pushTarget(
+    targets,
+    "rightLowerArm",
+    mixTarget(0.18, 0.92 + beat + shrug * 0.14, gesture),
+    -0.04 - shrug * 0.12,
+    mixTarget(0.18, 0.46, gesture),
+    armTarget,
+    5.8
+  );
+  pushTarget(
+    targets,
+    "rightHand",
+    mixTarget(0.06, -0.04 - shrug * 0.1, gesture),
+    -shrug * 0.12,
+    mixTarget(0.08, 0.28, gesture),
+    armTarget,
+    6.2
+  );
 }
 
 export class PresencePlanner {
@@ -325,7 +424,14 @@ export class PresencePlanner {
     this.nextSaccadeAt = now + 700;
   }
 
-  scheduleCue(kind: PresenceCueKind, nowMs: number, delayMs: number, durationMs: number, intensity = 1, gaze?: PresenceGaze): void {
+  scheduleCue(
+    kind: PresenceCueKind,
+    nowMs: number,
+    delayMs: number,
+    durationMs: number,
+    intensity = 1,
+    gaze?: PresenceGaze
+  ): void {
     const now = finiteNonNegative(nowMs, 0);
     const delay = finiteNonNegative(delayMs, 0);
     const duration = Math.max(1, finiteNonNegative(durationMs, 1));
@@ -347,7 +453,13 @@ export class PresencePlanner {
     const beatCount = Math.min(12, Math.max(3, Math.ceil(words.length / 4)));
     this.scheduleCue("lookCamera", now, 80, Math.min(900, duration * 0.22), 0.8, "camera");
     this.scheduleCue("blink", now, Math.min(420, duration * 0.18), 140, 0.8);
-    this.scheduleCue("smile", now, Math.max(180, duration * 0.08), Math.min(1800, duration * 0.46), 0.2 + affect.rapport * 0.32);
+    this.scheduleCue(
+      "smile",
+      now,
+      Math.max(180, duration * 0.08),
+      Math.min(1800, duration * 0.46),
+      0.2 + affect.rapport * 0.32
+    );
     this.scheduleCue("nod", now, 140, 420, 0.35 + affect.attentiveness * 0.24);
 
     for (let i = 0; i < beatCount; i += 1) {
@@ -403,7 +515,11 @@ export class PresencePlanner {
     }
 
     const gazeCue = this.cues.find(
-      (cue) => (cue.kind === "glance" || cue.kind === "lookCamera") && cue.gaze && nowMs >= cue.startMs && nowMs <= cue.startMs + cue.durationMs
+      (cue) =>
+        (cue.kind === "glance" || cue.kind === "lookCamera") &&
+        cue.gaze &&
+        nowMs >= cue.startMs &&
+        nowMs <= cue.startMs + cue.durationMs
     );
     if (gazeCue?.gaze) {
       this.attentionGaze = gazeCue.gaze;
@@ -481,7 +597,12 @@ export class PresencePlanner {
     };
   }
 
-  private gazeTarget(elapsedSeconds: number, energy: number, affect: Required<PresenceAffect>, behavior: Required<PresenceBehavior>): Vec3 {
+  private gazeTarget(
+    elapsedSeconds: number,
+    energy: number,
+    affect: Required<PresenceAffect>,
+    behavior: Required<PresenceBehavior>
+  ): Vec3 {
     const live = 0.45 + affect.attentiveness * 0.35 + affect.curiosity * 0.2;
     const driftX =
       Math.sin(elapsedSeconds * 0.37 + this.aliveSeed) * (0.1 + energy * 0.08) +
@@ -517,9 +638,15 @@ export class PresencePlanner {
     const targets: PresenceBoneTarget[] = [];
     const listen = behavior.state === "listening" || behavior.state === "idle" ? 1 : 0;
     const tinyAsymmetry = Math.sin(elapsedSeconds * 1.17 + this.aliveSeed) * (0.006 + affect.arousal * 0.006);
-    const nod = Math.max(gestureAmount(behavior, "nod") * 0.65, cueAmounts.nod, motion.speechPulse > 0 ? 0.1 + motion.speechPulse * 0.12 : 0);
+    const nod = Math.max(
+      gestureAmount(behavior, "nod") * 0.65,
+      cueAmounts.nod,
+      motion.speechPulse > 0 ? 0.1 + motion.speechPulse * 0.12 : 0
+    );
     const nodMotion = Math.sin(elapsedSeconds * 7.2) * (0.055 + cueAmounts.nod * 0.075) * nod;
-    const attentionLean = listen * (0.014 + affect.attentiveness * 0.018) + (motion.speechPulse > 0 ? 0.01 + motion.speechPulse * 0.018 : 0);
+    const attentionLean =
+      listen * (0.014 + affect.attentiveness * 0.018) +
+      (motion.speechPulse > 0 ? 0.01 + motion.speechPulse * 0.018 : 0);
     const baseInfluence = clamp01(input.clipBaseInfluence ?? 0);
     const overlayInfluence = clamp01(input.clipOverlayInfluence ?? 0);
     const baseDucking = (1 - baseInfluence) * (1 - baseInfluence);
@@ -528,7 +655,9 @@ export class PresencePlanner {
     const bodyTarget = (0.08 + listen * 0.05 + motion.speechPulse * 0.04) * bodyDucking;
     const headTarget = (0.18 + affect.attentiveness * 0.08 + motion.speechPulse * 0.08) * headDucking;
     const affectLift = (affect.arousal - 0.35) * 0.16;
-    const explain = clamp01(Math.max(gestureAmount(behavior, "explain"), behavior.state === "speaking" ? 0.35 + motion.speechPulse * 0.65 : 0));
+    const explain = clamp01(
+      Math.max(gestureAmount(behavior, "explain"), behavior.state === "speaking" ? 0.35 + motion.speechPulse * 0.65 : 0)
+    );
     const emphasize = clamp01(Math.max(gestureAmount(behavior, "emphasize"), cueAmounts.beat * 0.74));
     const conversationalGesture = clamp01(Math.max(explain, emphasize * 0.82));
     const shrug = clamp01(Math.max(cueAmounts.shrug, gestureAmount(behavior, "shrug") * 0.24));
@@ -536,14 +665,24 @@ export class PresencePlanner {
     const armOverlayDucking = 1 - overlayInfluence * 0.98;
     const armTarget = 0.55 * baseDucking * armOverlayDucking;
     const rightLead = clamp01(conversationalGesture * (0.72 + Math.sin(elapsedSeconds * 3.8 + this.aliveSeed) * 0.08));
-    const leftLead = clamp01(conversationalGesture * (0.44 + Math.sin(elapsedSeconds * 3.2 + this.aliveSeed + 1.2) * 0.06));
+    const leftLead = clamp01(
+      conversationalGesture * (0.44 + Math.sin(elapsedSeconds * 3.2 + this.aliveSeed + 1.2) * 0.06)
+    );
     const rightGesture = clamp01(Math.max(rightLead, shrug * 0.52));
     const leftGesture = clamp01(Math.max(leftLead, shrug * 0.52));
     const rightBeat = cueAmounts.beat * conversationalGesture * 0.18;
     const leftBeat = cueAmounts.beat * conversationalGesture * 0.12;
 
     pushTarget(targets, "hips", 0, motion.idleShiftX * 0.08, motion.weightShift * 0.3, bodyTarget * 0.45, 2.8);
-    pushTarget(targets, "spine", motion.breath * 0.34 + attentionLean * 0.18, motion.idleShiftX * 0.13, -motion.weightShift * 0.16 + tinyAsymmetry, bodyTarget, 3.1);
+    pushTarget(
+      targets,
+      "spine",
+      motion.breath * 0.34 + attentionLean * 0.18,
+      motion.idleShiftX * 0.13,
+      -motion.weightShift * 0.16 + tinyAsymmetry,
+      bodyTarget,
+      3.1
+    );
     pushTarget(
       targets,
       "chest",
@@ -553,11 +692,49 @@ export class PresencePlanner {
       bodyTarget,
       3.2
     );
-    pushTarget(targets, "upperChest", motion.breath * 0.28 + affectLift * 0.24 + shoulderLift * 0.28, motion.idleShiftX * 0.04, motion.weightShift * 0.12, bodyTarget * 0.75, 3.3);
-    pushTarget(targets, "neck", motion.headPitch * 0.16 + nodMotion * 0.24, motion.headYaw * 0.16, -motion.weightShift * 0.12, headTarget * 0.72, 3.8);
-    pushTarget(targets, "head", motion.headPitch * 0.46 + nodMotion * 0.58, motion.headYaw * 0.42 + motion.idleShiftX * 0.08, motion.weightShift * 0.1, headTarget, 4.2);
-    pushArmTargets(targets, "left", { lead: leftLead, gesture: leftGesture, beat: leftBeat, shrug, shoulderLift, armTarget });
-    pushArmTargets(targets, "right", { lead: rightLead, gesture: rightGesture, beat: rightBeat, shrug, shoulderLift, armTarget });
+    pushTarget(
+      targets,
+      "upperChest",
+      motion.breath * 0.28 + affectLift * 0.24 + shoulderLift * 0.28,
+      motion.idleShiftX * 0.04,
+      motion.weightShift * 0.12,
+      bodyTarget * 0.75,
+      3.3
+    );
+    pushTarget(
+      targets,
+      "neck",
+      motion.headPitch * 0.16 + nodMotion * 0.24,
+      motion.headYaw * 0.16,
+      -motion.weightShift * 0.12,
+      headTarget * 0.72,
+      3.8
+    );
+    pushTarget(
+      targets,
+      "head",
+      motion.headPitch * 0.46 + nodMotion * 0.58,
+      motion.headYaw * 0.42 + motion.idleShiftX * 0.08,
+      motion.weightShift * 0.1,
+      headTarget,
+      4.2
+    );
+    pushArmTargets(targets, "left", {
+      lead: leftLead,
+      gesture: leftGesture,
+      beat: leftBeat,
+      shrug,
+      shoulderLift,
+      armTarget
+    });
+    pushArmTargets(targets, "right", {
+      lead: rightLead,
+      gesture: rightGesture,
+      beat: rightBeat,
+      shrug,
+      shoulderLift,
+      armTarget
+    });
 
     return targets;
   }

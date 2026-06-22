@@ -48,7 +48,11 @@ export function poseRotationMetric(a: readonly Transform[], b: readonly Transfor
   };
 }
 
-export function poseDeltaMetric(a: readonly Transform[], b: readonly Transform[], skeleton?: Skeleton): PoseDeltaMetric {
+export function poseDeltaMetric(
+  a: readonly Transform[],
+  b: readonly Transform[],
+  skeleton?: Skeleton
+): PoseDeltaMetric {
   const length = Math.min(a.length, b.length);
   const rotation = createMetricAccumulator();
   const translation = createMetricAccumulator();

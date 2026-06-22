@@ -1,7 +1,25 @@
 import { type AimIkResult, type TwoBoneIkCorrectionResult, solveAimIk, solveTwoBoneIkCorrections } from "./ik-core.js";
-import { type Mat4, type Vec3, addVec3, clamp01, dotVec3, finiteNonNegative, lengthVec3, lerpVec3, normalizeVec3, scaleVec3, subVec3 } from "./math.js";
+import {
+  type Mat4,
+  type Vec3,
+  addVec3,
+  clamp01,
+  dotVec3,
+  finiteNonNegative,
+  lengthVec3,
+  lerpVec3,
+  normalizeVec3,
+  scaleVec3,
+  subVec3
+} from "./math.js";
 import { finiteMat4Value, mat4Translation as matrixTranslation } from "./numeric-helpers.js";
-import { type HumanoidBoneName, type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
+import {
+  type HumanoidBoneName,
+  type Skeleton,
+  isHumanoidBoneName,
+  resolveHumanoidIndex,
+  resolveJointIndex
+} from "./skeleton.js";
 
 const MIN_IK_REACH = 1e-5;
 
@@ -116,7 +134,8 @@ export function computeAnkleTargetFromGround(contact: GroundContact, footHeight:
   const rayStart = finiteVec3(contact.rayStart, addVec3(point, [0, Math.max(0.001, safeFootHeight + 0.5), 0]));
   const ai = subVec3(rayStart, point);
   const abLength = dotVec3(ai, normal);
-  if (!Number.isFinite(abLength) || Math.abs(abLength) <= 1e-5) return addVec3(point, scaleVec3(normal, safeFootHeight));
+  if (!Number.isFinite(abLength) || Math.abs(abLength) <= 1e-5)
+    return addVec3(point, scaleVec3(normal, safeFootHeight));
 
   const projected = subVec3(rayStart, scaleVec3(normal, abLength));
   const ib = subVec3(projected, point);
@@ -162,9 +181,14 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     const rawTarget = computeAnkleTargetFromGround(leg.ground, finiteNonNegative(leg.footHeight, defaultFootHeight));
     const rawOffset = subVec3(rawTarget, leg.ankle);
     const rawDistance = finiteLength(rawOffset, 0);
-    const allowedCorrection = Math.min(finiteNonNegative(leg.maxAnkleCorrection, maxAnkleCorrection), maxAnkleCorrection);
+    const allowedCorrection = Math.min(
+      finiteNonNegative(leg.maxAnkleCorrection, maxAnkleCorrection),
+      maxAnkleCorrection
+    );
     const clamped = rawDistance > allowedCorrection + 1e-6;
-    const targetAnkle = clamped ? addVec3(leg.ankle, scaleVec3(normalizeVec3(rawOffset, [0, 0, 0]), allowedCorrection)) : rawTarget;
+    const targetAnkle = clamped
+      ? addVec3(leg.ankle, scaleVec3(normalizeVec3(rawOffset, [0, 0, 0]), allowedCorrection))
+      : rawTarget;
     const ankleOffset = subVec3(targetAnkle, leg.ankle);
     const correctionDistance = finiteLength(ankleOffset, 0);
     const downwardCorrection = Math.max(0, dotVec3(ankleOffset, down));
@@ -209,7 +233,8 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   }
 
   const pelvisCorrection = Math.max(lowestCorrection * pelvisCompensation, reachPelvisCorrection);
-  const pelvisOffset = pelvisCorrection <= 1e-12 ? ([0, 0, 0] as Vec3) : scaleVec3(down, Math.min(maxPelvisOffset, pelvisCorrection));
+  const pelvisOffset =
+    pelvisCorrection <= 1e-12 ? ([0, 0, 0] as Vec3) : scaleVec3(down, Math.min(maxPelvisOffset, pelvisCorrection));
   let plantedCount = 0;
   for (let i = 0; i < legs.length; i += 1) {
     const result = legs[i]!;
@@ -308,7 +333,10 @@ export function solveOzzFootIk(input: OzzFootIkOptions): OzzFootIkResult {
 }
 
 type ResolvedOzzFootIkLeg = Required<Pick<OzzFootIkLegResult, "id" | "hipJoint" | "kneeJoint" | "ankleJoint">> &
-  Pick<OzzFootIkLegPreset, "side" | "pole" | "ankleUp" | "footForward" | "footHeight" | "influence" | "maxStretch" | "maxAnkleCorrection"> & {
+  Pick<
+    OzzFootIkLegPreset,
+    "side" | "pole" | "ankleUp" | "footForward" | "footHeight" | "influence" | "maxStretch" | "maxAnkleCorrection"
+  > & {
     ray?: OzzFootIkRay;
   };
 
@@ -348,7 +376,11 @@ function resolveOzzFootIkLegs(input: OzzFootIkOptions, issues: string[]): Resolv
   return legs;
 }
 
-function resolveOzzFootIkContact(input: OzzFootIkOptions, leg: ResolvedOzzFootIkLeg, ankle: Vec3): { ground?: GroundContact } {
+function resolveOzzFootIkContact(
+  input: OzzFootIkOptions,
+  leg: ResolvedOzzFootIkLeg,
+  ankle: Vec3
+): { ground?: GroundContact } {
   if (input.contacts && Object.prototype.hasOwnProperty.call(input.contacts, leg.id)) {
     const configured = input.contacts[leg.id];
     return configured ? { ground: configured } : {};
@@ -360,7 +392,10 @@ function resolveOzzFootIkContact(input: OzzFootIkOptions, leg: ResolvedOzzFootIk
     ankle,
     start: addVec3(ankle, scaleVec3(direction, -rayHeight)),
     direction,
-    length: finiteNonNegative(input.rayLength, rayHeight + finiteNonNegative(input.maxAnkleCorrection, 0.5) + finiteNonNegative(input.footHeight, 0.08) + 0.25)
+    length: finiteNonNegative(
+      input.rayLength,
+      rayHeight + finiteNonNegative(input.maxAnkleCorrection, 0.5) + finiteNonNegative(input.footHeight, 0.08) + 0.25
+    )
   };
   if (leg.side !== undefined) ray.side = leg.side;
   leg.ray = ray;
@@ -371,7 +406,8 @@ function resolveOzzFootIkContact(input: OzzFootIkOptions, leg: ResolvedOzzFootIk
 
 function resolveOzzFootIkJoint(skeleton: Skeleton, reference: number | string | undefined): number {
   if (reference === undefined) return -1;
-  if (typeof reference === "number") return Number.isInteger(reference) && reference >= 0 && reference < skeleton.joints.length ? reference : -1;
+  if (typeof reference === "number")
+    return Number.isInteger(reference) && reference >= 0 && reference < skeleton.joints.length ? reference : -1;
   if (isHumanoidBoneName(reference)) {
     const humanoid = resolveHumanoidIndex(skeleton, reference);
     if (humanoid >= 0) return humanoid;
@@ -379,7 +415,10 @@ function resolveOzzFootIkJoint(skeleton: Skeleton, reference: number | string | 
   return resolveJointIndex(skeleton, reference);
 }
 
-function sideHumanoid(side: OzzFootIkSide | undefined, suffix: "UpperLeg" | "LowerLeg" | "Foot"): HumanoidBoneName | undefined {
+function sideHumanoid(
+  side: OzzFootIkSide | undefined,
+  suffix: "UpperLeg" | "LowerLeg" | "Foot"
+): HumanoidBoneName | undefined {
   if (!side) return undefined;
   return `${side}${suffix}` as HumanoidBoneName;
 }
@@ -407,7 +446,9 @@ function sanitizeGroundContact(input: GroundContact, pointFallback: Vec3): Groun
 }
 
 function transformLinearVector(matrix: Mat4, vector: Vec3): Vec3 {
-  const x = vector[0], y = vector[1], z = vector[2];
+  const x = vector[0],
+    y = vector[1],
+    z = vector[2];
   return [
     finiteMat4Value(matrix, 0, 1) * x + finiteMat4Value(matrix, 4, 0) * y + finiteMat4Value(matrix, 8, 0) * z,
     finiteMat4Value(matrix, 1, 0) * x + finiteMat4Value(matrix, 5, 1) * y + finiteMat4Value(matrix, 9, 0) * z,

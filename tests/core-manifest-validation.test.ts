@@ -1,5 +1,5 @@
+import type { AnimationManifest } from "./test-api.js";
 import {
-  AnimationManifest,
   WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
   encodeAnimationBinary,
@@ -20,14 +20,56 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     clips: [
       { id: "valid", label: "Valid", url: "/valid.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
       invalidValidationStatusManifestEntry,
-      { id: "numeric-status", label: "Numeric Status", url: "/numeric-status.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: 1 } },
+      {
+        id: "numeric-status",
+        label: "Numeric Status",
+        url: "/numeric-status.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        validation: { status: 1 }
+      },
       quarantinedManifestEntry,
-      { id: "rejected", label: "Rejected", url: "/rejected.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "rejected" } },
-      { id: "accepted", label: "Accepted", url: "/accepted.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, validation: { status: "accepted" } },
-      { id: "invalid-root-motion-policy", label: "Invalid Root Motion Policy", url: "/invalid-root-motion-policy.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: { policy: "keep-everything" } } },
-      { id: "invalid-root-motion-shape", label: "Invalid Root Motion Shape", url: "/invalid-root-motion-shape.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: true } },
-      { id: "invalid-root-motion-policy-alias", label: "Invalid Root Motion Policy Alias", url: "/invalid-root-motion-policy-alias.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotionPolicy: "keep-everything" } },
-      { id: "invalid-root-motion-provenance", label: "Invalid Root Motion Provenance", url: "/invalid-root-motion-provenance.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, source: { rootMotion: { policy: "stripped-to-in-place", provenance: "converted" } } }
+      {
+        id: "rejected",
+        label: "Rejected",
+        url: "/rejected.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        validation: { status: "rejected" }
+      },
+      {
+        id: "accepted",
+        label: "Accepted",
+        url: "/accepted.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        validation: { status: "accepted" }
+      },
+      {
+        id: "invalid-root-motion-policy",
+        label: "Invalid Root Motion Policy",
+        url: "/invalid-root-motion-policy.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotion: { policy: "keep-everything" } }
+      },
+      {
+        id: "invalid-root-motion-shape",
+        label: "Invalid Root Motion Shape",
+        url: "/invalid-root-motion-shape.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotion: true }
+      },
+      {
+        id: "invalid-root-motion-policy-alias",
+        label: "Invalid Root Motion Policy Alias",
+        url: "/invalid-root-motion-policy-alias.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotionPolicy: "keep-everything" }
+      },
+      {
+        id: "invalid-root-motion-provenance",
+        label: "Invalid Root Motion Provenance",
+        url: "/invalid-root-motion-provenance.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotion: { policy: "stripped-to-in-place", provenance: "converted" } }
+      }
     ]
   } as unknown as AnimationManifest;
   const malformedValidationStatusIssues = validateManifest(malformedValidationStatusManifest);
@@ -40,7 +82,9 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     "validateManifest should report non-string validation.status values from runtime JSON"
   );
   assert.ok(
-    malformedValidationStatusIssues.includes("invalid-root-motion-policy has invalid source.rootMotion.policy keep-everything"),
+    malformedValidationStatusIssues.includes(
+      "invalid-root-motion-policy has invalid source.rootMotion.policy keep-everything"
+    ),
     "validateManifest should report invalid source.rootMotion.policy values from runtime JSON"
   );
   assert.ok(
@@ -48,11 +92,15 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     "validateManifest should report malformed source.rootMotion shapes from runtime JSON"
   );
   assert.ok(
-    malformedValidationStatusIssues.includes("invalid-root-motion-policy-alias has invalid source.rootMotionPolicy keep-everything"),
+    malformedValidationStatusIssues.includes(
+      "invalid-root-motion-policy-alias has invalid source.rootMotionPolicy keep-everything"
+    ),
     "validateManifest should report invalid source.rootMotionPolicy aliases from runtime JSON"
   );
   assert.ok(
-    malformedValidationStatusIssues.includes("invalid-root-motion-provenance has invalid source.rootMotion.provenance converted"),
+    malformedValidationStatusIssues.includes(
+      "invalid-root-motion-provenance has invalid source.rootMotion.provenance converted"
+    ),
     "validateManifest should report invalid source.rootMotion.provenance values from runtime JSON"
   );
   assert.deepEqual(
@@ -186,13 +234,12 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     ],
     "rejectedAnimationReport should include structural manifest rejection reasons"
   );
-  const invalidValidationStatusClipInspection = inspectClipAsset(
-    invalidValidationStatusManifestEntry,
-    nodClip
-  );
+  const invalidValidationStatusClipInspection = inspectClipAsset(invalidValidationStatusManifestEntry, nodClip);
   assert.equal(invalidValidationStatusClipInspection.accepted, false);
   assert.ok(
-    invalidValidationStatusClipInspection.issues.some((issue) => issue.message === "invalid validation status acceptted"),
+    invalidValidationStatusClipInspection.issues.some(
+      (issue) => issue.message === "invalid validation status acceptted"
+    ),
     "inspectClipAsset should reject malformed validation.status metadata"
   );
   const invalidValidationStatusAssetInspection = inspectAnimationAsset(
@@ -203,14 +250,12 @@ export async function runCoreManifestValidationTests(): Promise<void> {
   assert.equal(invalidValidationStatusAssetInspection.status, "rejected");
   assert.equal(invalidValidationStatusAssetInspection.accepted, false);
   assert.ok(
-    invalidValidationStatusAssetInspection.issues.some((issue) => issue.message === "invalid validation status acceptted"),
+    invalidValidationStatusAssetInspection.issues.some(
+      (issue) => issue.message === "invalid validation status acceptted"
+    ),
     "inspectAnimationAsset should reject malformed validation.status metadata"
   );
-  const quarantinedAssetInspection = inspectAnimationAsset(
-    quarantinedManifestEntry,
-    nodClip,
-    skeleton
-  );
+  const quarantinedAssetInspection = inspectAnimationAsset(quarantinedManifestEntry, nodClip, skeleton);
   assert.equal(quarantinedAssetInspection.status, "quarantined");
   assert.equal(quarantinedAssetInspection.accepted, false);
   assert.ok(
@@ -237,14 +282,12 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     url: "/unsupported-format-asset.json",
     format: "json"
   };
-  const unsupportedFormatAssetInspection = inspectAnimationAsset(
-    unsupportedFormatAssetEntry,
-    nodClip,
-    skeleton
-  );
+  const unsupportedFormatAssetInspection = inspectAnimationAsset(unsupportedFormatAssetEntry, nodClip, skeleton);
   assert.equal(unsupportedFormatAssetInspection.status, "rejected");
   assert.ok(
-    unsupportedFormatAssetInspection.issues.some((issue) => issue.message === "unsupported-format-asset has unsupported format json"),
+    unsupportedFormatAssetInspection.issues.some(
+      (issue) => issue.message === "unsupported-format-asset has unsupported format json"
+    ),
     "inspectAnimationAsset should reject manifest entries whose declared format cannot be decoded as waifuanim binaries"
   );
   const structurallyRejectedAssetFetches: string[] = [];
@@ -253,8 +296,18 @@ export async function runCoreManifestValidationTests(): Promise<void> {
       version: 1,
       clips: [
         unsupportedFormatAssetEntry,
-        { id: "duplicate-asset", label: "Duplicate Asset A", url: "/duplicate-a.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
-        { id: "duplicate-asset", label: "Duplicate Asset B", url: "/duplicate-b.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+        {
+          id: "duplicate-asset",
+          label: "Duplicate Asset A",
+          url: "/duplicate-a.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        },
+        {
+          id: "duplicate-asset",
+          label: "Duplicate Asset B",
+          url: "/duplicate-b.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        },
         {
           id: "accepted-reason-asset",
           label: "Accepted Reason Asset",
@@ -262,7 +315,12 @@ export async function runCoreManifestValidationTests(): Promise<void> {
           format: WAIFU_ANIMATION_BINARY_FORMAT,
           validation: { status: "accepted", reason: "stale rejection reason" }
         },
-        { id: "valid-asset", label: "Valid Asset", url: "/valid-asset.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }
+        {
+          id: "valid-asset",
+          label: "Valid Asset",
+          url: "/valid-asset.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        }
       ]
     },
     async (url) => {
@@ -287,7 +345,9 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     "asset report validation should reject all duplicate manifest ids before classifying binaries"
   );
   assert.ok(
-    structuralAssetValidationReport.entries[3]!.issues.some((issue) => issue.message === "accepted-reason-asset is accepted but still has rejection reason"),
+    structuralAssetValidationReport.entries[3]!.issues.some(
+      (issue) => issue.message === "accepted-reason-asset is accepted but still has rejection reason"
+    ),
     "asset report validation should not accept entries whose manifest still carries a rejection reason"
   );
   const invalidRootMotionMetadataAssetEntry = {
@@ -304,7 +364,12 @@ export async function runCoreManifestValidationTests(): Promise<void> {
       clips: [
         invalidValidationStatusManifestEntry,
         invalidRootMotionMetadataAssetEntry,
-        { id: "valid-metadata-asset", label: "Valid Metadata Asset", url: "/valid-metadata-asset.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }
+        {
+          id: "valid-metadata-asset",
+          label: "Valid Metadata Asset",
+          url: "/valid-metadata-asset.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        }
       ]
     },
     async (url) => {
@@ -320,7 +385,14 @@ export async function runCoreManifestValidationTests(): Promise<void> {
   );
   assert.equal(metadataRejectedAssetReport.accepted, 1);
   assert.equal(metadataRejectedAssetReport.rejected, 2);
-  assert.ok(metadataRejectedAssetReport.entries[0]!.issues.some((issue) => issue.message === "invalid validation status acceptted"));
-  assert.ok(metadataRejectedAssetReport.entries[1]!.issues.some((issue) => issue.message === "has invalid source.rootMotion.policy keep-everything"));
-
+  assert.ok(
+    metadataRejectedAssetReport.entries[0]!.issues.some(
+      (issue) => issue.message === "invalid validation status acceptted"
+    )
+  );
+  assert.ok(
+    metadataRejectedAssetReport.entries[1]!.issues.some(
+      (issue) => issue.message === "has invalid source.rootMotion.policy keep-everything"
+    )
+  );
 }

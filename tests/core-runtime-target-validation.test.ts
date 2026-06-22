@@ -1,5 +1,5 @@
+import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationClip,
   AnimationRuntime,
   WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
@@ -14,7 +14,12 @@ import {
   validateAnimationInputs,
   validateClip
 } from "./test-api.js";
-import { makeSourceRestQuaternionClip, makeSourceRestQuaternionTrack, quaternionNearlyEqual, skeleton } from "./test-helpers.js";
+import {
+  makeSourceRestQuaternionClip,
+  makeSourceRestQuaternionTrack,
+  quaternionNearlyEqual,
+  skeleton
+} from "./test-helpers.js";
 
 export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const duplicateResolvedChannelClip: AnimationClip = {
@@ -28,21 +33,32 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const duplicateResolvedChannelReport = validateAnimationInputs(skeleton, duplicateResolvedChannelClip);
   assert.equal(duplicateResolvedChannelReport.accepted, false);
   assert.ok(
-    duplicateResolvedChannelReport.clipIssues.some((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")),
+    duplicateResolvedChannelReport.clipIssues.some(
+      (issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")
+    ),
     "validateAnimationInputs should reject joint/humanBone aliases that resolve to one rotation channel"
   );
   const duplicateResolvedAsset = inspectAnimationAsset(
-    { id: "duplicate-resolved-channel", label: "Duplicate Resolved Channel", url: "/duplicate-resolved-channel.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    {
+      id: "duplicate-resolved-channel",
+      label: "Duplicate Resolved Channel",
+      url: "/duplicate-resolved-channel.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
     duplicateResolvedChannelClip,
     skeleton
   );
   assert.equal(duplicateResolvedAsset.status, "rejected");
   assert.ok(
-    duplicateResolvedAsset.issues.some((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")),
+    duplicateResolvedAsset.issues.some(
+      (issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")
+    ),
     "inspectAnimationAsset should surface duplicate resolved target channels"
   );
   assert.equal(
-    duplicateResolvedAsset.issues.find((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation"))?.property,
+    duplicateResolvedAsset.issues.find(
+      (issue) => issue.track === 1 && issue.message.includes("duplicate target channel head[2].rotation")
+    )?.property,
     "rotation",
     "inspectAnimationAsset should preserve clip issue property metadata in asset reports"
   );
@@ -56,12 +72,19 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
     ]
   };
   const duplicateDeclaredInspection = inspectClipAsset(
-    { id: "duplicate-declared-channel", label: "Duplicate Declared Channel", url: "/duplicate-declared-channel.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+    {
+      id: "duplicate-declared-channel",
+      label: "Duplicate Declared Channel",
+      url: "/duplicate-declared-channel.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
     duplicateDeclaredChannelClip
   );
   assert.equal(duplicateDeclaredInspection.accepted, false);
   assert.ok(
-    duplicateDeclaredInspection.issues.some((issue) => issue.track === 1 && issue.message.includes("duplicate target channel head.translation")),
+    duplicateDeclaredInspection.issues.some(
+      (issue) => issue.track === 1 && issue.message.includes("duplicate target channel head.translation")
+    ),
     "inspectClipAsset should reject obvious duplicate declared channels without a skeleton"
   );
 
@@ -74,10 +97,21 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
       { joint: "head", property: "scale", times: toFloat32Array([0]), values: toFloat32Array([1, 1, 1]) }
     ]
   };
-  assert.equal(validateAnimationInputs(skeleton, distinctPropertyClip).accepted, true, "distinct transform properties on one joint should remain valid");
   assert.equal(
-    inspectClipAsset({ id: "distinct-properties", label: "Distinct Properties", url: "/distinct-properties.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, distinctPropertyClip)
-      .accepted,
+    validateAnimationInputs(skeleton, distinctPropertyClip).accepted,
+    true,
+    "distinct transform properties on one joint should remain valid"
+  );
+  assert.equal(
+    inspectClipAsset(
+      {
+        id: "distinct-properties",
+        label: "Distinct Properties",
+        url: "/distinct-properties.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT
+      },
+      distinctPropertyClip
+    ).accepted,
     true,
     "declared channels with distinct normalized properties should remain valid"
   );
@@ -99,12 +133,20 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const ambiguousRuntimeTargetIssues = validateClip(ambiguousRuntimeTargetClip, skeleton);
   assert.ok(
     ambiguousRuntimeTargetIssues.some(
-      (issue) => issue.track === 0 && issue.joint === "spine" && issue.property === "rotation" && issue.message === "track needs exactly one joint or humanBone target"
+      (issue) =>
+        issue.track === 0 &&
+        issue.joint === "spine" &&
+        issue.property === "rotation" &&
+        issue.message === "track needs exactly one joint or humanBone target"
     ),
     "validateClip should reject runtime tracks whose joint and humanBone targets disagree"
   );
   const ambiguousRuntimePackedBuild = tryBuildPackedRuntimeAnimation(ambiguousRuntimeTargetClip, skeleton);
-  assert.equal(ambiguousRuntimePackedBuild.ok, false, "packed runtime builds should inherit runtime target ambiguity validation");
+  assert.equal(
+    ambiguousRuntimePackedBuild.ok,
+    false,
+    "packed runtime builds should inherit runtime target ambiguity validation"
+  );
   const ambiguousRuntimeSampleClip: AnimationClip = {
     id: "ambiguous-runtime-sample",
     duration: 1,
@@ -131,7 +173,9 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   ambiguousRuntime.setLayer("ambiguous", ambiguousRuntimeSampleClip, { weight: 1, targetWeight: 1 });
   const ambiguousEvaluation = ambiguousRuntime.evaluate({ diagnostics: true });
   assert.ok(
-    ambiguousEvaluation.diagnostics?.some((issue) => issue.track === 0 && issue.message === "track needs exactly one joint or humanBone target"),
+    ambiguousEvaluation.diagnostics?.some(
+      (issue) => issue.track === 0 && issue.message === "track needs exactly one joint or humanBone target"
+    ),
     "runtime diagnostics should keep reporting ambiguous track targets"
   );
   assert.ok(
@@ -140,20 +184,34 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   );
 
   const validSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("valid-source-rest-quaternion");
-  assert.equal(validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted, true, "valid source rest metadata on quaternion tracks should remain accepted");
-  const decodedSourceRestQuaternionClip = decodeAnimationBinary(encodeAnimationBinary(validSourceRestQuaternionClip), "valid-source-rest-quaternion");
+  assert.equal(
+    validateAnimationInputs(skeleton, validSourceRestQuaternionClip).accepted,
+    true,
+    "valid source rest metadata on quaternion tracks should remain accepted"
+  );
+  const decodedSourceRestQuaternionClip = decodeAnimationBinary(
+    encodeAnimationBinary(validSourceRestQuaternionClip),
+    "valid-source-rest-quaternion"
+  );
   assert.deepEqual(
     Array.from(decodedSourceRestQuaternionClip.tracks[0]!.sourceRestQuaternion ?? []),
     [0, 0, 0, 1],
     "binary roundtrips should preserve source rest quaternion metadata"
   );
   assert.throws(
-    () => encodeAnimationBinary({ ...validSourceRestQuaternionClip, tracks: [{ ...validSourceRestQuaternionClip.tracks[0]!, sourceRestQuaternion: toFloat32Array([0, 0, 1]) }] }),
+    () =>
+      encodeAnimationBinary({
+        ...validSourceRestQuaternionClip,
+        tracks: [{ ...validSourceRestQuaternionClip.tracks[0]!, sourceRestQuaternion: toFloat32Array([0, 0, 1]) }]
+      }),
     /animation clip valid-source-rest-quaternion is invalid: track 0 head\.quaternion sourceRestQuaternion must contain exactly 4 values/,
     "binary encoding should reject malformed source rest quaternion metadata before writing a corrupt payload"
   );
 
-  const invalidZeroSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("invalid-zero-source-rest-quaternion", { sourceRestQuaternion: [0, 0, 0, 0] });
+  const invalidZeroSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip(
+    "invalid-zero-source-rest-quaternion",
+    { sourceRestQuaternion: [0, 0, 0, 0] }
+  );
   const invalidZeroSourceRestQuaternionReport = validateAnimationInputs(skeleton, invalidZeroSourceRestQuaternionClip);
   assert.equal(invalidZeroSourceRestQuaternionReport.accepted, false);
   assert.ok(
@@ -167,7 +225,10 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
     "validateAnimationInputs should reject zero-length source rest quaternion metadata"
   );
 
-  const invalidNonUnitSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip("invalid-non-unit-source-rest-quaternion", { sourceRestQuaternion: [0, 0, 0, 2] });
+  const invalidNonUnitSourceRestQuaternionClip: AnimationClip = makeSourceRestQuaternionClip(
+    "invalid-non-unit-source-rest-quaternion",
+    { sourceRestQuaternion: [0, 0, 0, 2] }
+  );
   const invalidNonUnitSourceRestQuaternionInspection = inspectClipAsset(
     {
       id: "invalid-non-unit-source-rest-quaternion",
@@ -194,10 +255,17 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
     duration: 1,
     tracks: [
       makeSourceRestQuaternionTrack({ sourceRestQuaternion: [0, 0, 1] }),
-      makeSourceRestQuaternionTrack({ humanBone: "spine", property: "rotation", sourceRestQuaternion: [0, Number.NaN, 0, 1] })
+      makeSourceRestQuaternionTrack({
+        humanBone: "spine",
+        property: "rotation",
+        sourceRestQuaternion: [0, Number.NaN, 0, 1]
+      })
     ]
   };
-  const invalidSourceRestQuaternionShapeReport = validateAnimationInputs(skeleton, invalidSourceRestQuaternionShapeClip);
+  const invalidSourceRestQuaternionShapeReport = validateAnimationInputs(
+    skeleton,
+    invalidSourceRestQuaternionShapeClip
+  );
   assert.equal(invalidSourceRestQuaternionShapeReport.accepted, false);
   assert.ok(
     invalidSourceRestQuaternionShapeReport.clipIssues.some(
@@ -220,11 +288,14 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
     "validateAnimationInputs should reject non-finite source rest quaternion components"
   );
 
-  const invalidSourceRestQuaternionPropertyClip: AnimationClip = makeSourceRestQuaternionClip("invalid-source-rest-quaternion-property", {
-    joint: "head",
-    property: "translation",
-    values: [0, 0, 0]
-  });
+  const invalidSourceRestQuaternionPropertyClip: AnimationClip = makeSourceRestQuaternionClip(
+    "invalid-source-rest-quaternion-property",
+    {
+      joint: "head",
+      property: "translation",
+      values: [0, 0, 0]
+    }
+  );
   const invalidSourceRestQuaternionPropertyInspection = inspectClipAsset(
     {
       id: "invalid-source-rest-quaternion-property",
@@ -254,7 +325,9 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const invalidZeroRotationSampleClip: AnimationClip = {
     id: "invalid-zero-rotation-sample",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 0]) }]
+    tracks: [
+      { humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 0]) }
+    ]
   };
   const invalidZeroRotationSampleReport = validateAnimationInputs(skeleton, invalidZeroRotationSampleClip);
   assert.equal(invalidZeroRotationSampleReport.accepted, false);
@@ -284,7 +357,9 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
     {
       id: "invalid-non-unit-rotation-sample",
       duration: 1,
-      tracks: [{ joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 2]) }]
+      tracks: [
+        { joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 2]) }
+      ]
     }
   );
   assert.equal(invalidNonUnitRotationSampleInspection.accepted, false);
@@ -302,11 +377,20 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const duplicateTrackTimeClip: AnimationClip = {
     id: "duplicate-track-time",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 0]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([0, 0]),
+        values: toFloat32Array([0, 0, 0, 1, 0, 0])
+      }
+    ]
   };
   assert.equal(validateAnimationInputs(skeleton, duplicateTrackTimeClip).accepted, false);
   assert.ok(
-    validateAnimationInputs(skeleton, duplicateTrackTimeClip).clipIssues.some((issue) => issue.message === "track times must be sorted"),
+    validateAnimationInputs(skeleton, duplicateTrackTimeClip).clipIssues.some(
+      (issue) => issue.message === "track times must be sorted"
+    ),
     "equal track times should be rejected"
   );
   assert.throws(
@@ -318,11 +402,20 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const negativeTrackTimeClip: AnimationClip = {
     id: "negative-track-time",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([-0.1, 0.5]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([-0.1, 0.5]),
+        values: toFloat32Array([0, 0, 0, 1, 0, 0])
+      }
+    ]
   };
   assert.equal(validateAnimationInputs(skeleton, negativeTrackTimeClip).accepted, false);
   assert.ok(
-    validateAnimationInputs(skeleton, negativeTrackTimeClip).clipIssues.some((issue) => issue.message === "track time must be within clip duration"),
+    validateAnimationInputs(skeleton, negativeTrackTimeClip).clipIssues.some(
+      (issue) => issue.message === "track time must be within clip duration"
+    ),
     "negative track times should be rejected"
   );
   assert.throws(
@@ -334,11 +427,20 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const overDurationTrackTimeClip: AnimationClip = {
     id: "over-duration-track-time",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1.1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([0, 1.1]),
+        values: toFloat32Array([0, 0, 0, 1, 0, 0])
+      }
+    ]
   };
   assert.equal(validateAnimationInputs(skeleton, overDurationTrackTimeClip).accepted, false);
   assert.ok(
-    validateAnimationInputs(skeleton, overDurationTrackTimeClip).clipIssues.some((issue) => issue.message === "track time must be within clip duration"),
+    validateAnimationInputs(skeleton, overDurationTrackTimeClip).clipIssues.some(
+      (issue) => issue.message === "track time must be within clip duration"
+    ),
     "track times beyond clip duration should be rejected"
   );
   assert.throws(
@@ -350,7 +452,18 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
   const endpointTrackTimeClip: AnimationClip = {
     id: "endpoint-track-time",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 1, 0, 0])
+      }
+    ]
   };
-  assert.equal(validateAnimationInputs(skeleton, endpointTrackTimeClip).accepted, true, "endpoint track times should remain accepted");
+  assert.equal(
+    validateAnimationInputs(skeleton, endpointTrackTimeClip).accepted,
+    true,
+    "endpoint track times should remain accepted"
+  );
 }

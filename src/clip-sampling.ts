@@ -1,5 +1,32 @@
-import { type Quat, cloneTransform, clamp, ensureShortestQuat, euclideanModulo, lerpVec3, normalizeQuat, slerpQuat } from "./math.js";
-import { defaultTrackSample, normalizedTrackProperty, pushRotationSampleRepairDiagnostic, readClipTimeRatio, readTrackTargetKey, repairVec3Sample, resolveTrackJointIndex, retargetSampledRotation, rotationSampleFallback, trackStride, type AnimationClip, type AnimationTrack, type NormalizedTrackProperty, type SampleOptions, type SampleRatioOptions, type SampleRepairDiagnostic, type TrackProperty } from "./clip-internal.js";
+import {
+  type Quat,
+  cloneTransform,
+  clamp,
+  ensureShortestQuat,
+  euclideanModulo,
+  lerpVec3,
+  normalizeQuat,
+  slerpQuat
+} from "./math.js";
+import {
+  defaultTrackSample,
+  normalizedTrackProperty,
+  pushRotationSampleRepairDiagnostic,
+  readClipTimeRatio,
+  readTrackTargetKey,
+  repairVec3Sample,
+  resolveTrackJointIndex,
+  retargetSampledRotation,
+  rotationSampleFallback,
+  trackStride,
+  type AnimationClip,
+  type AnimationTrack,
+  type NormalizedTrackProperty,
+  type SampleOptions,
+  type SampleRatioOptions,
+  type SampleRepairDiagnostic,
+  type TrackProperty
+} from "./clip-internal.js";
 import { type Pose, readPoseTransformOrRest } from "./pose.js";
 import { type Skeleton, createRestPose, isHumanoidBoneName } from "./skeleton.js";
 
@@ -69,19 +96,45 @@ export function sanitizeQuaternionTrackValues(values: ArrayLike<number>): Float3
   return output;
 }
 
-export function sampleClipToPose(skeleton: Skeleton, clip: AnimationClip, timeSeconds: number, options: SampleOptions = {}): Pose {
-  return sampleClipToPoseAtResolvedTime(skeleton, clip, sampleTime(clip, timeSeconds, options.loop ?? clip.loop ?? false), options);
+export function sampleClipToPose(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  timeSeconds: number,
+  options: SampleOptions = {}
+): Pose {
+  return sampleClipToPoseAtResolvedTime(
+    skeleton,
+    clip,
+    sampleTime(clip, timeSeconds, options.loop ?? clip.loop ?? false),
+    options
+  );
 }
 
-export function sampleClipToPoseAtRatio(skeleton: Skeleton, clip: AnimationClip, ratio: number, options: SampleRatioOptions = {}): Pose {
+export function sampleClipToPoseAtRatio(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  ratio: number,
+  options: SampleRatioOptions = {}
+): Pose {
   return sampleClipToPoseAtResolvedTime(skeleton, clip, sampleRatioToTime(clip, ratio), options);
 }
 
-export function sampleClipToPoseWithContext(skeleton: Skeleton, clip: AnimationClip, timeSeconds: number, context: AnimationSamplingContext, options: SampleOptions = {}): Pose {
+export function sampleClipToPoseWithContext(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  timeSeconds: number,
+  context: AnimationSamplingContext,
+  options: SampleOptions = {}
+): Pose {
   const time = sampleTime(clip, timeSeconds, options.loop ?? clip.loop ?? false);
   context.beginSample(clip, time, readClipTimeRatio(clip, time));
-  return sampleClipToPoseAtResolvedTime(skeleton, clip, time, options, (track, trackIndex, sampledTime, sampleOptions) =>
-    context.sampleTrack(trackIndex, track, sampledTime, sampleOptions)
+  return sampleClipToPoseAtResolvedTime(
+    skeleton,
+    clip,
+    time,
+    options,
+    (track, trackIndex, sampledTime, sampleOptions) =>
+      context.sampleTrack(trackIndex, track, sampledTime, sampleOptions)
   );
 }
 
@@ -221,8 +274,12 @@ export class AnimationSamplingContext {
   sampleRatio(skeleton: Skeleton, clip: AnimationClip, ratio: number, options: SampleRatioOptions = {}): Pose {
     const time = sampleRatioToTime(clip, ratio);
     this.beginSample(clip, time, readClipTimeRatio(clip, time));
-    return sampleClipToPoseAtResolvedTime(skeleton, clip, time, options, (track, trackIndex, sampledTime, sampleOptions) =>
-      this.sampleTrack(trackIndex, track, sampledTime, sampleOptions)
+    return sampleClipToPoseAtResolvedTime(
+      skeleton,
+      clip,
+      time,
+      options,
+      (track, trackIndex, sampledTime, sampleOptions) => this.sampleTrack(trackIndex, track, sampledTime, sampleOptions)
     );
   }
 
@@ -252,7 +309,10 @@ export class AnimationSamplingContext {
     trackIndex: number,
     track: AnimationTrack,
     timeSeconds: number,
-    options: { diagnostics?: SampleRepairDiagnostic[]; diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index"> } = {}
+    options: {
+      diagnostics?: SampleRepairDiagnostic[];
+      diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">;
+    } = {}
   ): number[] {
     const property = normalizedTrackProperty(track.property);
     if (!property) throw new Error(`unsupported animation track property ${String(track.property)}`);
@@ -306,17 +366,25 @@ type TrackSampleOptions = {
   diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">;
 };
 
-type TrackSampler = (track: AnimationTrack, trackIndex: number, timeSeconds: number, options: TrackSampleOptions) => number[];
+type TrackSampler = (
+  track: AnimationTrack,
+  trackIndex: number,
+  timeSeconds: number,
+  options: TrackSampleOptions
+) => number[];
 
 function sampleClipToPoseAtResolvedTime(
   skeleton: Skeleton,
   clip: AnimationClip,
   time: number,
   options: SampleOptions | SampleRatioOptions = {},
-  trackSampler: TrackSampler = (track, _trackIndex, sampledTime, sampleOptions) => sampleTrack(track, sampledTime, sampleOptions)
+  trackSampler: TrackSampler = (track, _trackIndex, sampledTime, sampleOptions) =>
+    sampleTrack(track, sampledTime, sampleOptions)
 ): Pose {
   const restPose = options.restPose ?? createRestPose(skeleton);
-  const output = Array.from({ length: skeleton.joints.length }, (_, joint) => cloneTransform(readPoseTransformOrRest(skeleton, restPose, joint)));
+  const output = Array.from({ length: skeleton.joints.length }, (_, joint) =>
+    cloneTransform(readPoseTransformOrRest(skeleton, restPose, joint))
+  );
   for (let trackIndex = 0; trackIndex < clip.tracks.length; trackIndex += 1) {
     const track = clip.tracks[trackIndex]!;
     if (!isSampleableTrackTarget(track)) continue;
@@ -327,7 +395,11 @@ function sampleClipToPoseAtResolvedTime(
       if (options.skipUnsupportedTracks) continue;
       throw new Error(`unsupported animation track property ${String(track.property)}`);
     }
-    const diagnosticContext = { track: trackIndex, joint: skeleton.joints[jointIndex]?.name ?? String(track.joint ?? track.humanBone ?? ""), index: jointIndex };
+    const diagnosticContext = {
+      track: trackIndex,
+      joint: skeleton.joints[jointIndex]?.name ?? String(track.joint ?? track.humanBone ?? ""),
+      index: jointIndex
+    };
     const sampled = options.diagnostics
       ? trackSampler(track, trackIndex, time, { diagnostics: options.diagnostics, diagnosticContext })
       : trackSampler(track, trackIndex, time, { diagnosticContext });
@@ -336,7 +408,14 @@ function sampleClipToPoseAtResolvedTime(
     if (property === "translation") transform.translation = sampled as [number, number, number];
     if (property === "scale") transform.scale = sampled as [number, number, number];
     if (property === "rotation") {
-      transform.rotation = retargetSampledRotation(track, restTransform.rotation, sampled as Quat, jointIndex, options, diagnosticContext);
+      transform.rotation = retargetSampledRotation(
+        track,
+        restTransform.rotation,
+        sampled as Quat,
+        jointIndex,
+        options,
+        diagnosticContext
+      );
     }
     output[jointIndex] = transform;
   }
@@ -359,14 +438,23 @@ export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boole
   return clamp(timeSeconds, 0, Math.max(0, clip.duration));
 }
 
-export function sampleTrack(track: AnimationTrack, timeSeconds: number, options: { diagnostics?: SampleRepairDiagnostic[]; diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index"> } = {}): number[] {
+export function sampleTrack(
+  track: AnimationTrack,
+  timeSeconds: number,
+  options: {
+    diagnostics?: SampleRepairDiagnostic[];
+    diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">;
+  } = {}
+): number[] {
   const property = normalizedTrackProperty(track.property);
   if (!property) throw new Error(`unsupported animation track property ${String(track.property)}`);
   const stride = trackStride(property);
   if (track.times.length === 0) return defaultTrackSample(property);
-  if (timeSeconds <= track.times[0]!) return readTrackValue(track, 0, stride, property, options.diagnostics, options.diagnosticContext);
+  if (timeSeconds <= track.times[0]!)
+    return readTrackValue(track, 0, stride, property, options.diagnostics, options.diagnosticContext);
   const last = track.times.length - 1;
-  if (timeSeconds >= track.times[last]!) return readTrackValue(track, last, stride, property, options.diagnostics, options.diagnosticContext);
+  if (timeSeconds >= track.times[last]!)
+    return readTrackValue(track, last, stride, property, options.diagnostics, options.diagnosticContext);
   const lower = findLowerKey(track.times, timeSeconds);
   const upper = lower + 1;
   const start = track.times[lower]!;
@@ -402,7 +490,14 @@ function readTrackValue(
   const values = fallback.map((value, index) => track.values[offset + index] ?? value);
   if (stride === 4) pushRotationSampleRepairDiagnostic(diagnostics, diagnosticContext, track, values as Quat, keyIndex);
   if (stride === 4) return normalizeQuat(values as Quat, rotationSampleFallback(track));
-  return repairVec3Sample(track, values as [number, number, number], fallback as [number, number, number], keyIndex, diagnostics, diagnosticContext);
+  return repairVec3Sample(
+    track,
+    values as [number, number, number],
+    fallback as [number, number, number],
+    keyIndex,
+    diagnostics,
+    diagnosticContext
+  );
 }
 
 function finiteTrackCount(value: number): number {
@@ -415,6 +510,9 @@ function animationSamplingSignature(clip: AnimationClip): string {
     clip.duration,
     clip.loop === true ? 1 : 0,
     clip.tracks.length,
-    ...clip.tracks.map((track) => `${track.joint ?? ""}/${track.humanBone ?? ""}/${track.property}/${track.times.length}/${track.values.length}`)
+    ...clip.tracks.map(
+      (track) =>
+        `${track.joint ?? ""}/${track.humanBone ?? ""}/${track.property}/${track.times.length}/${track.values.length}`
+    )
   ].join("|");
 }

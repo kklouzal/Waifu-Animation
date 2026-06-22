@@ -1,13 +1,29 @@
-import { type Quat, type Transform, type Vec3, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneVec3, clamp } from "./math.js";
+import {
+  type Quat,
+  type Transform,
+  type Vec3,
+  EPSILON,
+  ONE_VEC3,
+  cloneNormalizedQuat,
+  cloneQuat,
+  cloneVec3,
+  clamp
+} from "./math.js";
 import { retargetQuaternionSample } from "./retargeting.js";
-import { type HumanoidBoneName, type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
+import {
+  type HumanoidBoneNameLike,
+  type Skeleton,
+  isHumanoidBoneName,
+  resolveHumanoidIndex,
+  resolveJointIndex
+} from "./skeleton.js";
 
 export type TrackProperty = "translation" | "rotation" | "scale" | "position" | "quaternion";
 export type NormalizedTrackProperty = "translation" | "rotation" | "scale";
 
 export type AnimationTrack = {
   joint?: string;
-  humanBone?: HumanoidBoneName | string;
+  humanBone?: HumanoidBoneNameLike;
   property: TrackProperty;
   times: Float32Array;
   values: Float32Array;
@@ -76,7 +92,8 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
   const issues: ClipValidationIssue[] = [];
   const resolvedChannels = new Map<string, { track: number; joint: string; property: NormalizedTrackProperty }>();
   if (!clip.id) issues.push({ message: "clip id is required" });
-  if (!Number.isFinite(clip.duration) || clip.duration <= 0) issues.push({ message: "clip duration must be positive and finite" });
+  if (!Number.isFinite(clip.duration) || clip.duration <= 0)
+    issues.push({ message: "clip duration must be positive and finite" });
   for (let index = 0; index < clip.tracks.length; index += 1) {
     const track = clip.tracks[index]!;
     const property = normalizedTrackProperty(track.property);
@@ -85,7 +102,12 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     const targetName = String(track.joint ?? track.humanBone ?? "");
     let targetValid = true;
     if (!property) {
-      issues.push({ track: index, joint: targetName, property: String(track.property), message: "track property is unsupported" });
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: String(track.property),
+        message: "track property is unsupported"
+      });
       continue;
     }
     const stride = trackStride(property);
@@ -93,21 +115,46 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
       issues.push({ track: index, property: track.property, message: "track needs joint or humanBone" });
       targetValid = false;
     } else if (hasJoint && hasHumanBone) {
-      issues.push({ track: index, joint: targetName, property: track.property, message: "track needs exactly one joint or humanBone target" });
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track needs exactly one joint or humanBone target"
+      });
       targetValid = false;
     } else if (hasJoint && (typeof track.joint !== "string" || track.joint.length === 0)) {
-      issues.push({ track: index, joint: targetName, property: track.property, message: "track joint target must be a non-empty string" });
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track joint target must be a non-empty string"
+      });
       targetValid = false;
     } else if (hasHumanBone && (typeof track.humanBone !== "string" || track.humanBone.length === 0)) {
-      issues.push({ track: index, joint: targetName, property: track.property, message: "track humanBone target must be a non-empty string" });
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track humanBone target must be a non-empty string"
+      });
       targetValid = false;
     } else if (track.humanBone !== undefined && !isHumanoidBoneName(track.humanBone)) {
-      issues.push({ track: index, joint: String(track.humanBone), property: track.property, message: "track has unknown humanoid bone" });
+      issues.push({
+        track: index,
+        joint: String(track.humanBone),
+        property: track.property,
+        message: "track has unknown humanoid bone"
+      });
       targetValid = false;
     }
     const jointIndex = skeleton && targetValid ? resolveTrackJointIndex(skeleton, track) : -1;
     if (skeleton && targetValid && jointIndex < 0) {
-      issues.push({ track: index, joint: targetName, property: track.property, message: "track does not map to skeleton" });
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track does not map to skeleton"
+      });
     }
     validateSourceRestQuaternion(issues, track, index, targetName, property);
     validateSourceRestChildDirection(issues, track, index, targetName, property);
@@ -125,23 +172,44 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
         resolvedChannels.set(channel.key, { track: index, joint: channel.joint, property });
       }
     }
-    if (track.times.length < 1) issues.push({ track: index, joint: targetName, property: track.property, message: "track has no times" });
+    if (track.times.length < 1)
+      issues.push({ track: index, joint: targetName, property: track.property, message: "track has no times" });
     if (track.values.length !== track.times.length * stride) {
-      issues.push({ track: index, joint: targetName, property: track.property, message: "track value count does not match times and stride" });
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track value count does not match times and stride"
+      });
     }
     for (let i = 0; i < track.times.length; i += 1) {
       const time = track.times[i]!;
       if (!Number.isFinite(time)) {
         issues.push({ track: index, joint: targetName, property: track.property, message: "track time is not finite" });
       } else if (time < 0 || time > clip.duration) {
-        issues.push({ track: index, joint: targetName, property: track.property, message: "track time must be within clip duration" });
+        issues.push({
+          track: index,
+          joint: targetName,
+          property: track.property,
+          message: "track time must be within clip duration"
+        });
       }
       if (i > 0 && time <= track.times[i - 1]!) {
-        issues.push({ track: index, joint: targetName, property: track.property, message: "track times must be sorted" });
+        issues.push({
+          track: index,
+          joint: targetName,
+          property: track.property,
+          message: "track times must be sorted"
+        });
       }
     }
     if (track.values.some((value) => !Number.isFinite(value))) {
-      issues.push({ track: index, joint: targetName, property: track.property, message: "track values must be finite" });
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track values must be finite"
+      });
     }
     validateRotationTrackQuaternions(issues, track, index, targetName, property);
   }
@@ -158,19 +226,39 @@ function validateSourceRestChildDirection(
   const direction = track.sourceRestChildDirection;
   if (!direction) return;
   if (property !== "rotation") {
-    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection is only valid on rotation tracks" });
+    issues.push({
+      track: index,
+      joint: jointName,
+      property: track.property,
+      message: "sourceRestChildDirection is only valid on rotation tracks"
+    });
     return;
   }
   if (direction.length !== 3) {
-    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection must contain exactly 3 values" });
+    issues.push({
+      track: index,
+      joint: jointName,
+      property: track.property,
+      message: "sourceRestChildDirection must contain exactly 3 values"
+    });
     return;
   }
   if (!Array.from(direction).every(Number.isFinite)) {
-    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection values must be finite" });
+    issues.push({
+      track: index,
+      joint: jointName,
+      property: track.property,
+      message: "sourceRestChildDirection values must be finite"
+    });
     return;
   }
   if (Math.hypot(direction[0]!, direction[1]!, direction[2]!) <= EPSILON) {
-    issues.push({ track: index, joint: jointName, property: track.property, message: "sourceRestChildDirection must be normalizable" });
+    issues.push({
+      track: index,
+      joint: jointName,
+      property: track.property,
+      message: "sourceRestChildDirection must be normalizable"
+    });
   }
 }
 
@@ -222,10 +310,20 @@ function validateSourceRestQuaternion(
   const sourceRest = track.sourceRestQuaternion;
   if (!sourceRest) return;
   if (property !== "rotation") {
-    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion is only valid on rotation tracks" });
+    issues.push({
+      track: index,
+      joint,
+      property: track.property,
+      message: "sourceRestQuaternion is only valid on rotation tracks"
+    });
   }
   if (sourceRest.length !== 4) {
-    issues.push({ track: index, joint, property: track.property, message: "sourceRestQuaternion must contain exactly 4 values" });
+    issues.push({
+      track: index,
+      joint,
+      property: track.property,
+      message: "sourceRestQuaternion must contain exactly 4 values"
+    });
     return;
   }
   const issue = quaternionNormalizationIssue(sourceRest, SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE, {
@@ -269,7 +367,7 @@ export function normalizedTrackProperty(property: string): NormalizedTrackProper
 
 export function resolveTrackJointIndex(skeleton: Skeleton, track: AnimationTrack): number {
   if (track.joint) return resolveJointIndex(skeleton, track.joint);
-  if (track.humanBone) return resolveHumanoidIndex(skeleton, track.humanBone as HumanoidBoneName);
+  if (track.humanBone && isHumanoidBoneName(track.humanBone)) return resolveHumanoidIndex(skeleton, track.humanBone);
   return -1;
 }
 
@@ -292,7 +390,11 @@ export function retargetSampledRotation(
   const sourceRest = track.sourceRestQuaternion;
   if (!sourceRest || !targetRest) return sampled;
   if (sourceRest.length !== 4) {
-    options.diagnostics?.push({ ...diagnosticContext, property: track.property, message: "sourceRestQuaternion was ignored because it does not contain exactly 4 values" });
+    options.diagnostics?.push({
+      ...diagnosticContext,
+      property: track.property,
+      message: "sourceRestQuaternion was ignored because it does not contain exactly 4 values"
+    });
     return sampled;
   }
   pushSourceRestRepairDiagnostic(options.diagnostics, diagnosticContext, track, sourceRest);
@@ -321,7 +423,9 @@ export function defaultTrackSample(property: NormalizedTrackProperty): number[] 
 }
 
 export function rotationSampleFallback(track: TrackMetadataForSampling): Quat {
-  return track.sourceRestQuaternion?.length === 4 ? cloneNormalizedQuat(track.sourceRestQuaternion) : cloneQuat(undefined);
+  return track.sourceRestQuaternion?.length === 4
+    ? cloneNormalizedQuat(track.sourceRestQuaternion)
+    : cloneQuat(undefined);
 }
 
 export function pushRotationSampleRepairDiagnostic(
@@ -352,7 +456,12 @@ export function repairVec3Sample(
     return fallback[index]!;
   }) as [number, number, number];
   if (repaired) {
-    diagnostics?.push({ ...diagnosticContext, property: track.property, sample, message: `${track.property} track sample values were repaired to finite defaults` });
+    diagnostics?.push({
+      ...diagnosticContext,
+      property: track.property,
+      sample,
+      message: `${track.property} track sample values were repaired to finite defaults`
+    });
   }
   return output;
 }
@@ -370,14 +479,20 @@ function pushSourceRestRepairDiagnostic(
 }
 
 function quaternionRepairMessage(value: Quat, label: string): string | null {
-  return quaternionNormalizationIssue(value, ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE, {
-    finite: `${label} values were repaired to finite defaults`,
-    normalizable: `${label} was repaired to a normalizable fallback`,
-    normalized: `${label} was normalized during sampling`
-  })?.message ?? null;
+  return (
+    quaternionNormalizationIssue(value, ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE, {
+      finite: `${label} values were repaired to finite defaults`,
+      normalizable: `${label} was repaired to a normalizable fallback`,
+      normalized: `${label} was normalized during sampling`
+    })?.message ?? null
+  );
 }
 
-export function quaternionNormalizationIssue(value: ArrayLike<number>, lengthSquaredTolerance: number, messages: QuaternionNormalizationMessages): QuaternionNormalizationIssue | null {
+export function quaternionNormalizationIssue(
+  value: ArrayLike<number>,
+  lengthSquaredTolerance: number,
+  messages: QuaternionNormalizationMessages
+): QuaternionNormalizationIssue | null {
   for (let component = 0; component < 4; component += 1) {
     if (!Number.isFinite(value[component])) return { kind: "finite", message: messages.finite };
   }
@@ -393,7 +508,11 @@ export function readClipTimeRatio(clip: AnimationClip, time: number): number {
   return clamp(Number.isFinite(time) ? time / clip.duration : 0, 0, 1);
 }
 
-export function readTrackTargetKey(track: AnimationTrack, skeleton: Skeleton | undefined, jointIndex: number): string | null {
+export function readTrackTargetKey(
+  track: AnimationTrack,
+  skeleton: Skeleton | undefined,
+  jointIndex: number
+): string | null {
   if (skeleton) return jointIndex >= 0 ? String(jointIndex) : null;
   const joint = track.joint ?? track.humanBone;
   return joint === undefined ? null : String(joint);

@@ -4,7 +4,10 @@ import { crossVec3, normalizeVec3, scaleVec3, type Vec3 } from "./math.js";
 import { finiteOr, finitePositive, sanitizeNonNegativeInteger, sanitizePositiveInteger } from "./numeric-helpers.js";
 import { type SkinningJob, type SkinningNumericArray, type SkinningResult, skinVertices } from "./skinning.js";
 
-type ThreeSkinningJobFields = Omit<SkinningJob, "positions" | "normals" | "tangents" | "outPositions" | "outNormals" | "outTangents">;
+type ThreeSkinningJobFields = Omit<
+  SkinningJob,
+  "positions" | "normals" | "tangents" | "outPositions" | "outNormals" | "outTangents"
+>;
 
 export type ThreeSkinningAttributeNames = {
   position?: string;
@@ -96,14 +99,20 @@ export function updateThreeRigidInstanceMatrices(
   const requestedCount = resolveThreeRigidInstanceCount(modelMatrices, options);
   if (isThreeInstancedMeshTarget(target)) {
     const count = Math.min(requestedCount, target.instanceMatrix.count);
-    updateRigidInstanceMatrixBuffer(modelMatrices, target.instanceMatrix.array as Float32Array | number[], { ...options, count });
+    updateRigidInstanceMatrixBuffer(modelMatrices, target.instanceMatrix.array as Float32Array | number[], {
+      ...options,
+      count
+    });
     if (options.updateMeshCount ?? true) target.count = count;
     markThreeAttributeUpdated(target.instanceMatrix, options.markNeedsUpdate);
     return count;
   }
 
   if (target instanceof BufferAttribute) {
-    const count = Math.min(requestedCount, resolveThreeRigidInstanceBufferCapacity(target.array, options, target.count));
+    const count = Math.min(
+      requestedCount,
+      resolveThreeRigidInstanceBufferCapacity(target.array, options, target.count)
+    );
     updateRigidInstanceMatrixBuffer(modelMatrices, target.array as Float32Array | number[], { ...options, count });
     markThreeAttributeUpdated(target, options.markNeedsUpdate);
     return count;
@@ -114,7 +123,10 @@ export function updateThreeRigidInstanceMatrices(
   return count;
 }
 
-export function skinThreeBufferGeometry(geometry: BufferGeometry, options: ThreeSkinningBufferGeometryOptions = {}): ThreeSkinningBufferGeometryResult {
+export function skinThreeBufferGeometry(
+  geometry: BufferGeometry,
+  options: ThreeSkinningBufferGeometryOptions = {}
+): ThreeSkinningBufferGeometryResult {
   const sourceGeometry = options.sourceGeometry ?? geometry;
   const targetGeometry = options.targetGeometry ?? geometry;
   const names = resolveThreeSkinningAttributeNames(options.attributeNames);
@@ -125,9 +137,19 @@ export function skinThreeBufferGeometry(geometry: BufferGeometry, options: Three
   const includeTangents = (options.includeTangents ?? sourceTangent !== undefined) && includeNormals;
   const resolvedVertexCount = resolveThreeSkinningVertexCount(options.vertexCount, sourcePosition.count);
   const targetPosition = ensureThreeFloatVecAttribute(targetGeometry, names.position, resolvedVertexCount, 3);
-  const targetNormal = includeNormals && sourceNormal ? ensureThreeFloatVecAttribute(targetGeometry, names.normal, resolvedVertexCount, 3) : undefined;
-  const tangentItemSize = Math.max(3, sourceTangent?.itemSize ?? 4, getThreeVec3Attribute(targetGeometry, names.tangent)?.itemSize ?? 0);
-  const targetTangent = includeTangents && sourceTangent ? ensureThreeFloatVecAttribute(targetGeometry, names.tangent, resolvedVertexCount, tangentItemSize) : undefined;
+  const targetNormal =
+    includeNormals && sourceNormal
+      ? ensureThreeFloatVecAttribute(targetGeometry, names.normal, resolvedVertexCount, 3)
+      : undefined;
+  const tangentItemSize = Math.max(
+    3,
+    sourceTangent?.itemSize ?? 4,
+    getThreeVec3Attribute(targetGeometry, names.tangent)?.itemSize ?? 0
+  );
+  const targetTangent =
+    includeTangents && sourceTangent
+      ? ensureThreeFloatVecAttribute(targetGeometry, names.tangent, resolvedVertexCount, tangentItemSize)
+      : undefined;
   const {
     sourceGeometry: _sourceGeometry,
     targetGeometry: _targetGeometry,
@@ -170,11 +192,25 @@ export function skinThreeBufferGeometry(geometry: BufferGeometry, options: Three
   return { ...result, geometry: targetGeometry, attributes };
 }
 
-export function buildThreeSkinningDebugSegments(options: ThreeSkinningDebugSegmentsOptions): ThreeSkinningDebugSegments {
+export function buildThreeSkinningDebugSegments(
+  options: ThreeSkinningDebugSegmentsOptions
+): ThreeSkinningDebugSegments {
   const names = resolveThreeSkinningAttributeNames(options.attributeNames);
-  const positionSource = resolveThreeDebugSource(options.positions ?? getThreeVec3Attribute(options.geometry, names.position), options.positionOffset, options.positionStride);
-  const normalSource = resolveThreeDebugSource(options.normals ?? getThreeVec3Attribute(options.geometry, names.normal), options.normalOffset, options.normalStride);
-  const tangentSource = resolveThreeDebugSource(options.tangents ?? getThreeVec3Attribute(options.geometry, names.tangent), options.tangentOffset, options.tangentStride);
+  const positionSource = resolveThreeDebugSource(
+    options.positions ?? getThreeVec3Attribute(options.geometry, names.position),
+    options.positionOffset,
+    options.positionStride
+  );
+  const normalSource = resolveThreeDebugSource(
+    options.normals ?? getThreeVec3Attribute(options.geometry, names.normal),
+    options.normalOffset,
+    options.normalStride
+  );
+  const tangentSource = resolveThreeDebugSource(
+    options.tangents ?? getThreeVec3Attribute(options.geometry, names.tangent),
+    options.tangentOffset,
+    options.tangentStride
+  );
   const vertexCount = resolveThreeSkinningVertexCount(options.vertexCount, positionSource.count);
   const included = {
     normals: options.includeNormals ?? normalSource.count > 0,
@@ -193,10 +229,15 @@ export function buildThreeSkinningDebugSegments(options: ThreeSkinningDebugSegme
     const origin = readThreeDebugVec3(positionSource, vertex, [0, 0, 0]);
     const normal = readThreeDebugVec3(normalSource, vertex, [0, 0, 1]);
     const tangent = readThreeDebugVec3(tangentSource, vertex, [1, 0, 0]);
-    if (included.normals) cursor = writeThreeDebugSegment(positions, cursor, origin, normal, scale, normalizeVectors, [0, 0, 1]);
-    if (included.tangents) cursor = writeThreeDebugSegment(positions, cursor, origin, tangent, scale, normalizeVectors, [1, 0, 0]);
+    if (included.normals)
+      cursor = writeThreeDebugSegment(positions, cursor, origin, normal, scale, normalizeVectors, [0, 0, 1]);
+    if (included.tangents)
+      cursor = writeThreeDebugSegment(positions, cursor, origin, tangent, scale, normalizeVectors, [1, 0, 0]);
     if (included.binormals) {
-      const handedness = finiteOr(readThreeDebugComponent(tangentSource, vertex, 3), finiteOr(options.tangentHandedness, 1));
+      const handedness = finiteOr(
+        readThreeDebugComponent(tangentSource, vertex, 3),
+        finiteOr(options.tangentHandedness, 1)
+      );
       const binormal = scaleVec3(crossVec3(normalizeVec3(normal), normalizeVec3(tangent, [1, 0, 0])), handedness);
       cursor = writeThreeDebugSegment(positions, cursor, origin, binormal, scale, normalizeVectors, [0, 1, 0]);
     }
@@ -232,7 +273,9 @@ type ThreeDebugSource = {
   count: number;
 };
 
-function resolveThreeSkinningAttributeNames(names: ThreeSkinningAttributeNames | undefined): Required<ThreeSkinningAttributeNames> {
+function resolveThreeSkinningAttributeNames(
+  names: ThreeSkinningAttributeNames | undefined
+): Required<ThreeSkinningAttributeNames> {
   return {
     position: names?.position ?? DEFAULT_THREE_SKINNING_ATTRIBUTE_NAMES.position,
     normal: names?.normal ?? DEFAULT_THREE_SKINNING_ATTRIBUTE_NAMES.normal,
@@ -252,29 +295,55 @@ function getThreeVec3Attribute(geometry: BufferGeometry | undefined, name: strin
 
 function requireThreeVec3Attribute(geometry: BufferGeometry, name: string, label: string): BufferAttribute {
   const attribute = getThreeVec3Attribute(geometry, name);
-  if (!attribute) throw new Error(`three skinning ${label} attribute '${name}' must be a BufferAttribute with itemSize >= 3`);
+  if (!attribute)
+    throw new Error(`three skinning ${label} attribute '${name}' must be a BufferAttribute with itemSize >= 3`);
   return attribute;
 }
 
-function ensureThreeFloatVecAttribute(geometry: BufferGeometry, name: string, vertexCount: number, preferredItemSize: number): BufferAttribute {
+function ensureThreeFloatVecAttribute(
+  geometry: BufferGeometry,
+  name: string,
+  vertexCount: number,
+  preferredItemSize: number
+): BufferAttribute {
   const existing = getThreeBufferAttribute(geometry, name);
   const itemSize = Math.max(3, preferredItemSize, existing?.itemSize ?? 0);
-  if (existing && existing.array instanceof Float32Array && existing.itemSize >= itemSize && existing.count >= vertexCount) return existing;
+  if (
+    existing &&
+    existing.array instanceof Float32Array &&
+    existing.itemSize >= itemSize &&
+    existing.count >= vertexCount
+  )
+    return existing;
   const attribute = new Float32BufferAttribute(new Float32Array(vertexCount * itemSize), itemSize);
   geometry.setAttribute(name, attribute);
   return attribute;
 }
 
-function threeAttributeSkinningInput(attribute: BufferAttribute): { data: SkinningNumericArray; offset: number; stride: number } {
+function threeAttributeSkinningInput(attribute: BufferAttribute): {
+  data: SkinningNumericArray;
+  offset: number;
+  stride: number;
+} {
   return { data: attribute.array, offset: 0, stride: attribute.itemSize };
 }
 
-function threeAttributeSkinningOutput(attribute: BufferAttribute): { data: Float32Array; offset: number; stride: number } {
-  if (!(attribute.array instanceof Float32Array)) throw new Error("three skinning output attributes must use Float32Array buffers");
+function threeAttributeSkinningOutput(attribute: BufferAttribute): {
+  data: Float32Array;
+  offset: number;
+  stride: number;
+} {
+  if (!(attribute.array instanceof Float32Array))
+    throw new Error("three skinning output attributes must use Float32Array buffers");
   return { data: attribute.array, offset: 0, stride: attribute.itemSize };
 }
 
-function copyThreeAttributeRemainder(source: BufferAttribute, target: BufferAttribute, vertexCount: number, startComponent: number): void {
+function copyThreeAttributeRemainder(
+  source: BufferAttribute,
+  target: BufferAttribute,
+  vertexCount: number,
+  startComponent: number
+): void {
   if (!(target.array instanceof Float32Array)) return;
   const componentCount = Math.min(source.itemSize, target.itemSize);
   for (let vertex = 0; vertex < vertexCount; vertex += 1) {
@@ -291,10 +360,18 @@ function markThreeAttributeUpdated(attribute: BufferAttribute, markNeedsUpdate: 
 }
 
 function isThreeInstancedMeshTarget(target: ThreeRigidInstanceMatrixTarget): target is InstancedMesh {
-  return typeof target === "object" && target !== null && "instanceMatrix" in target && (target as { instanceMatrix?: unknown }).instanceMatrix instanceof BufferAttribute;
+  return (
+    typeof target === "object" &&
+    target !== null &&
+    "instanceMatrix" in target &&
+    (target as { instanceMatrix?: unknown }).instanceMatrix instanceof BufferAttribute
+  );
 }
 
-function resolveThreeRigidInstanceCount(modelMatrices: readonly MatrixLike[], options: Pick<ThreeRigidInstanceMatricesOptions, "count" | "jointIndices">): number {
+function resolveThreeRigidInstanceCount(
+  modelMatrices: readonly MatrixLike[],
+  options: Pick<ThreeRigidInstanceMatricesOptions, "count" | "jointIndices">
+): number {
   const fallback = options.jointIndices ? options.jointIndices.length : modelMatrices.length;
   if (options.count === undefined) return Math.max(0, Math.floor(fallback));
   return Number.isInteger(options.count) && options.count >= 0 ? options.count : 0;
@@ -308,10 +385,16 @@ function resolveThreeRigidInstanceBufferCapacity(
   const offset = sanitizeNonNegativeInteger(options.offset, 0);
   const stride = sanitizePositiveInteger(options.stride, 16);
   const componentCapacity = buffer.length >= offset + 16 ? Math.floor((buffer.length - offset - 16) / stride) + 1 : 0;
-  return attributeCount === undefined ? componentCapacity : Math.min(componentCapacity, Math.max(0, Math.floor(attributeCount)));
+  return attributeCount === undefined
+    ? componentCapacity
+    : Math.min(componentCapacity, Math.max(0, Math.floor(attributeCount)));
 }
 
-function resolveThreeDebugSource(source: SkinningNumericArray | BufferAttribute | undefined, offset: number | undefined, stride: number | undefined): ThreeDebugSource {
+function resolveThreeDebugSource(
+  source: SkinningNumericArray | BufferAttribute | undefined,
+  offset: number | undefined,
+  stride: number | undefined
+): ThreeDebugSource {
   if (source instanceof BufferAttribute) {
     return {
       data: source.array,

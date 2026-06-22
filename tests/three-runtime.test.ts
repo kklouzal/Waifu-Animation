@@ -1,5 +1,5 @@
+import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationClip,
   AnimationMixer,
   LoopOnce,
   Object3D,
@@ -41,7 +41,11 @@ export async function runThreeRuntimeTests(): Promise<void> {
       resolveBone: (humanBone) => (humanBone === "head" ? headBone : null)
     }
   );
-  assert.equal(Number.isFinite(nonFiniteDurationClip.duration), true, "Three clip creation should not emit non-finite durations");
+  assert.equal(
+    Number.isFinite(nonFiniteDurationClip.duration),
+    true,
+    "Three clip creation should not emit non-finite durations"
+  );
   const staticThreeRoot = new Object3D();
   const staticThreeBone = new Object3D();
   staticThreeBone.name = "staticHead";
@@ -51,14 +55,25 @@ export async function runThreeRuntimeTests(): Promise<void> {
     {
       id: "static-one-key-three",
       duration: 1,
-      tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array(staticThreeRotation) }]
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          times: toFloat32Array([0]),
+          values: toFloat32Array(staticThreeRotation)
+        }
+      ]
     },
     {
       resolveBone: (humanBone) => (humanBone === "head" ? staticThreeBone : null)
     }
   );
   assert.equal(staticThreeClip.tracks.length, 1, "Three binding should preserve valid single-key static pose tracks");
-  assert.deepEqual(Array.from(staticThreeClip.tracks[0]!.times), [0, 1], "single-key Three tracks should be held across the runtime clip window");
+  assert.deepEqual(
+    Array.from(staticThreeClip.tracks[0]!.times),
+    [0, 1],
+    "single-key Three tracks should be held across the runtime clip window"
+  );
   sampleThreeClipOnce(staticThreeRoot, staticThreeClip, 0.5);
   assert.ok(
     quaternionNearlyEqual(staticThreeBone.quaternion.toArray(), staticThreeRotation, 1e-5),
@@ -69,14 +84,29 @@ export async function runThreeRuntimeTests(): Promise<void> {
     {
       id: "invalid-three-time",
       duration: 1,
-      tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0, Number.NaN]), values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1]) }]
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          times: toFloat32Array([0, Number.NaN]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1])
+        }
+      ]
     },
     {
       resolveBone: (humanBone) => (humanBone === "head" ? headBone : null),
-      logger: { warn: (...parts: unknown[]) => { invalidThreeTrackWarnings.push(parts.map(String).join(" ")); } }
+      logger: {
+        warn: (...parts: unknown[]) => {
+          invalidThreeTrackWarnings.push(parts.map(String).join(" "));
+        }
+      }
     }
   );
-  assert.equal(invalidThreeTimeClip.tracks.length, 0, "Three binding should skip tracks with non-finite keyframe times");
+  assert.equal(
+    invalidThreeTimeClip.tracks.length,
+    0,
+    "Three binding should skip tracks with non-finite keyframe times"
+  );
   assert.ok(
     invalidThreeTrackWarnings.some((message) => message.includes("invalid animation track skipped")),
     "Three binding should report skipped malformed keyframe tracks"
@@ -97,7 +127,10 @@ export async function runThreeRuntimeTests(): Promise<void> {
   duplicateAction.setLoop(LoopOnce, 1);
   duplicateAction.play();
   duplicateMixer.setTime(0.5);
-  assert.ok(Math.abs(duplicateWrongBone.quaternion.x) < 1e-6, "uuid binding should not animate the first same-named node");
+  assert.ok(
+    Math.abs(duplicateWrongBone.quaternion.x) < 1e-6,
+    "uuid binding should not animate the first same-named node"
+  );
   assert.ok(Math.abs(duplicateTargetBone.quaternion.x) > 0.1, "uuid binding should animate the resolved target bone");
 
   const root = new Object3D();
@@ -119,7 +152,14 @@ export async function runThreeRuntimeTests(): Promise<void> {
     id: "hips-translation-source",
     duration: 1,
     loop: true,
-    tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0.25, 0]) }]
+    tracks: [
+      {
+        humanBone: "hips",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0, 0.25, 0])
+      }
+    ]
   };
   const preservedHipsTranslationClip = createThreeAnimationClip(hipsTranslationSourceClip, {
     resolveBone: (humanBone) => (humanBone === "hips" ? hipsTranslationBone : null)
@@ -142,7 +182,11 @@ export async function runThreeRuntimeTests(): Promise<void> {
     "preserved root-motion runtime clips should keep hips position tracks for the Three mixer"
   );
   const metadataPreservedHipsTranslationClip = createThreeAnimationClip(
-    { ...hipsTranslationSourceClip, id: "metadata-preserved-hips-translation", metadata: { rootMotionPolicy: "preserved" } },
+    {
+      ...hipsTranslationSourceClip,
+      id: "metadata-preserved-hips-translation",
+      metadata: { rootMotionPolicy: "preserved" }
+    },
     {
       resolveBone: (humanBone) => (humanBone === "hips" ? hipsTranslationBone : null)
     }
@@ -178,7 +222,11 @@ export async function runThreeRuntimeTests(): Promise<void> {
     new AnimationMixer(hipsTranslationRuntimeRoot),
     strippedHipsTranslationClip
   );
-  assert.equal(strippedHipsTranslationClip.duration, 1, "runtime root-translation stripping should preserve the playback duration even when no tracks remain");
+  assert.equal(
+    strippedHipsTranslationClip.duration,
+    1,
+    "runtime root-translation stripping should preserve the playback duration even when no tracks remain"
+  );
   assert.deepEqual(
     strippedHipsRuntimeClips.map((clip) => clip.duration),
     [1, 1],
@@ -201,8 +249,18 @@ export async function runThreeRuntimeTests(): Promise<void> {
     duration: 1,
     loop: true,
     tracks: [
-      { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0.25, 0, 0]) },
-      { joint: "pelvis", property: "position", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 0.25]) }
+      {
+        joint: "root",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0.25, 0, 0])
+      },
+      {
+        joint: "pelvis",
+        property: "position",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0, 0, 0.25])
+      }
     ]
   };
   const strippedNamedRootCarrierClip = createThreeAnimationClip(namedRootCarrierSourceClip, {
@@ -213,7 +271,10 @@ export async function runThreeRuntimeTests(): Promise<void> {
     }
   });
   assert.equal(
-    strippedNamedRootCarrierClip.tracks.some((track) => track.name === `${rootTranslationBone.uuid}.position` || track.name === `${pelvisTranslationBone.uuid}.position`),
+    strippedNamedRootCarrierClip.tracks.some(
+      (track) =>
+        track.name === `${rootTranslationBone.uuid}.position` || track.name === `${pelvisTranslationBone.uuid}.position`
+    ),
     true,
     "root carrier fixture should bind root and pelvis position tracks before runtime policy stripping"
   );
@@ -230,7 +291,10 @@ export async function runThreeRuntimeTests(): Promise<void> {
     strippedNamedRootCarrierClip
   );
   assert.equal(
-    strippedNamedRootCarrierClip.tracks.some((track) => track.name === `${rootTranslationBone.uuid}.position` || track.name === `${pelvisTranslationBone.uuid}.position`),
+    strippedNamedRootCarrierClip.tracks.some(
+      (track) =>
+        track.name === `${rootTranslationBone.uuid}.position` || track.name === `${pelvisTranslationBone.uuid}.position`
+    ),
     false,
     "stripped-to-in-place runtime clips should remove root and pelvis position tracks after UUID binding"
   );
@@ -296,13 +360,28 @@ export async function runThreeRuntimeTests(): Promise<void> {
   assert.equal(calculateThreeBaseLoopSeamWindow(Number.NaN), 0.32);
   assert.equal(calculateThreeBaseLoopSeamWindow(2), 0.36);
   assert.equal(calculateThreeBaseLoopSeamWindow(10), 0.72);
-  assert.equal(calculateThreeBaseLoopSeamWindow(2, { min: Number.NaN, max: Number.NaN }), 0.36, "base loop seam helper should sanitize non-finite bounds");
-  const transitionWeights = calculateThreeBaseLoopTransitionWeights({ elapsed: 0.5, duration: 1, fromWeight: 0.8, toWeight: 0.5 });
+  assert.equal(
+    calculateThreeBaseLoopSeamWindow(2, { min: Number.NaN, max: Number.NaN }),
+    0.36,
+    "base loop seam helper should sanitize non-finite bounds"
+  );
+  const transitionWeights = calculateThreeBaseLoopTransitionWeights({
+    elapsed: 0.5,
+    duration: 1,
+    fromWeight: 0.8,
+    toWeight: 0.5
+  });
   assert.ok(Math.abs(transitionWeights.progress - 0.5) < 1e-6);
   assert.ok(Math.abs(transitionWeights.fromWeight - 0.4) < 1e-6);
   assert.ok(Math.abs(transitionWeights.toWeight - 0.25) < 1e-6);
-  assert.equal(calculateThreeBaseLoopTransitionWeights({ elapsed: Number.NaN, duration: -1, fromWeight: 1, toWeight: 1 }).progress, 0);
-  assert.equal(calculateThreeBaseLoopTransitionWeights({ elapsed: 2, duration: 1, fromWeight: 1, toWeight: 1 }).complete, true);
+  assert.equal(
+    calculateThreeBaseLoopTransitionWeights({ elapsed: Number.NaN, duration: -1, fromWeight: 1, toWeight: 1 }).progress,
+    0
+  );
+  assert.equal(
+    calculateThreeBaseLoopTransitionWeights({ elapsed: 2, duration: 1, fromWeight: 1, toWeight: 1 }).complete,
+    true
+  );
 
   const overlayFadeIn = calculateThreeOverlayFade({
     time: 0.25,
@@ -334,10 +413,15 @@ export async function runThreeRuntimeTests(): Promise<void> {
     minWindow: Number.NaN,
     maxWindow: Number.NaN
   });
-  assert.equal(overlayFadeSanitizedBounds.fadeOutWindow, 0.42, "overlay fade helper should sanitize non-finite window bounds");
+  assert.equal(
+    overlayFadeSanitizedBounds.fadeOutWindow,
+    0.42,
+    "overlay fade helper should sanitize non-finite window bounds"
+  );
   assert.equal(overlayFadeSanitizedBounds.fadingOut, true);
   assert.equal(
-    calculateThreeOverlayFade({ time: 2, duration: 2, currentWeight: 0.005, targetWeight: 1, deltaSeconds: 0 }).shouldStop,
+    calculateThreeOverlayFade({ time: 2, duration: 2, currentWeight: 0.005, targetWeight: 1, deltaSeconds: 0 })
+      .shouldStop,
     true
   );
 
@@ -387,18 +471,34 @@ export async function runThreeRuntimeTests(): Promise<void> {
   assert.equal(diagnosticSnapshot.loop, "seamed-once");
   assert.deepEqual(diagnosticSnapshot.states, ["idle"]);
   diagnosticSnapshot.states.push("mutated");
-  assert.deepEqual(diagnosticBase.states, ["idle"], "snapshot metadata arrays should be detached from manifest metadata");
+  assert.deepEqual(
+    diagnosticBase.states,
+    ["idle"],
+    "snapshot metadata arrays should be detached from manifest metadata"
+  );
 
-  const activeSnapshots = readActiveThreeRuntimeClipSnapshots([diagnosticBase, diagnosticOverlay, diagnosticDebug], { debugLoop: "loop" });
-  assert.deepEqual(activeSnapshots.map((clip) => [clip.sourceId, clip.lane, clip.loop]), [
-    ["bad-base", "base", "seamed-once"],
-    ["overlay", "overlay", "once"],
-    ["debug", "debug", "loop"]
-  ]);
+  const activeSnapshots = readActiveThreeRuntimeClipSnapshots([diagnosticBase, diagnosticOverlay, diagnosticDebug], {
+    debugLoop: "loop"
+  });
+  assert.deepEqual(
+    activeSnapshots.map((clip) => [clip.sourceId, clip.lane, clip.loop]),
+    [
+      ["bad-base", "base", "seamed-once"],
+      ["overlay", "overlay", "once"],
+      ["debug", "debug", "loop"]
+    ]
+  );
   assert.equal(activeSnapshots[1]!.targetWeight, 1);
   assert.equal(activeSnapshots[1]!.source?.library, "test");
   assert.equal(activeSnapshots[2]!.time, 0);
 
-  assert.deepEqual(calculateThreeRuntimeInfluence([diagnosticBase, diagnosticOverlay], { debugWeight: 0.8 }), { base: 0, overlay: 0.8, debug: 0.8 });
-  assert.deepEqual(calculateThreeRuntimeInfluence([diagnosticOverlay, diagnosticDebug], { includeDebugAsOverlay: false }), { base: 0, overlay: 0.4, debug: 0.65 });
+  assert.deepEqual(calculateThreeRuntimeInfluence([diagnosticBase, diagnosticOverlay], { debugWeight: 0.8 }), {
+    base: 0,
+    overlay: 0.8,
+    debug: 0.8
+  });
+  assert.deepEqual(
+    calculateThreeRuntimeInfluence([diagnosticOverlay, diagnosticDebug], { includeDebugAsOverlay: false }),
+    { base: 0, overlay: 0.4, debug: 0.65 }
+  );
 }

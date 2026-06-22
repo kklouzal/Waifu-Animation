@@ -1,5 +1,13 @@
 import { WAIFU_ANIMATION_BINARY_FORMAT, decodeAnimationBinary } from "./binary.js";
-import { type AnimationClip, type ClipValidationIssue, normalizedTrackProperty, resolveTrackJointIndex, sampleTrack, trackStride, validateClip } from "./clip.js";
+import {
+  type AnimationClip,
+  type ClipValidationIssue,
+  normalizedTrackProperty,
+  resolveTrackJointIndex,
+  sampleTrack,
+  trackStride,
+  validateClip
+} from "./clip.js";
 import {
   type AnimationManifest,
   type AnimationManifestEntry,
@@ -106,11 +114,17 @@ async function validateAnimationManifestEntryWithStructure(
     const clip = decodeAnimationBinary(await fetchAsset(entry.url), entry.id);
     return inspectAnimationAsset(entry, clip, options.skeleton);
   } catch (error) {
-    return buildRejectedEntry(entry, [{ id: entry.id, severity: "error", message: error instanceof Error ? error.message : String(error) }]);
+    return buildRejectedEntry(entry, [
+      { id: entry.id, severity: "error", message: error instanceof Error ? error.message : String(error) }
+    ]);
   }
 }
 
-export function inspectAnimationAsset(entry: AnimationManifestEntry, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationEntry {
+export function inspectAnimationAsset(
+  entry: AnimationManifestEntry,
+  clip: AnimationClip,
+  skeleton?: Skeleton
+): AnimationAssetValidationEntry {
   const clipIssues = validateClip(clip, skeleton).map((issue) => toAssetIssue(entry.id, issue));
   const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(entry.id, issue));
   const issues = dedupeIssues([
@@ -123,7 +137,11 @@ export function inspectAnimationAsset(entry: AnimationManifestEntry, clip: Anima
   let status: AssetValidationStatus;
   if (requestedStatus === "quarantined") {
     status = "quarantined";
-  } else if (requestedStatus === "rejected" || isInvalidAssetValidationStatus(requestedStatus) || issues.some((issue) => issue.severity === "error")) {
+  } else if (
+    requestedStatus === "rejected" ||
+    isInvalidAssetValidationStatus(requestedStatus) ||
+    issues.some((issue) => issue.severity === "error")
+  ) {
     status = "rejected";
   } else {
     status = "accepted";
@@ -144,33 +162,53 @@ export function inspectAnimationAsset(entry: AnimationManifestEntry, clip: Anima
   };
 }
 
-export function usableValidatedAnimationAssets(report: AnimationAssetValidationReport): AnimationAssetValidationEntry[] {
+export function usableValidatedAnimationAssets(
+  report: AnimationAssetValidationReport
+): AnimationAssetValidationEntry[] {
   return report.entries.filter((entry) => entry.status === "accepted");
 }
 
-export function rejectedValidatedAnimationAssets(report: AnimationAssetValidationReport): AnimationAssetValidationEntry[] {
+export function rejectedValidatedAnimationAssets(
+  report: AnimationAssetValidationReport
+): AnimationAssetValidationEntry[] {
   return report.entries.filter((entry) => entry.status !== "accepted");
 }
 
-function inspectSemanticAsset(entry: AnimationManifestEntry, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationIssue[] {
+function inspectSemanticAsset(
+  entry: AnimationManifestEntry,
+  clip: AnimationClip,
+  skeleton?: Skeleton
+): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
   const effectiveLoop = entry.loop ?? clip.loop;
-  if (clip.tracks.length === 0) issues.push({ id: entry.id, severity: "error", message: "clip has no animation tracks" });
+  if (clip.tracks.length === 0)
+    issues.push({ id: entry.id, severity: "error", message: "clip has no animation tracks" });
   if (effectiveLoop && clip.duration < 0.25) {
-    const severity = /aim[-_ ]?offset/i.test(`${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""}`) ? "warning" : "error";
-    issues.push({ id: entry.id, severity, message: "looping clip is too short to blend safely unless used as a static pose/aim offset" });
+    const severity = /aim[-_ ]?offset/i.test(`${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""}`)
+      ? "warning"
+      : "error";
+    issues.push({
+      id: entry.id,
+      severity,
+      message: "looping clip is too short to blend safely unless used as a static pose/aim offset"
+    });
   }
   if (effectiveLoop) issues.push(...inspectLoopEndpointMismatches(entry, clip, skeleton));
   if (skeleton) {
     const mapped = jointCoverage(clip, skeleton).length;
-    if (mapped === 0) issues.push({ id: entry.id, severity: "error", message: "clip has no tracks that map to target skeleton" });
+    if (mapped === 0)
+      issues.push({ id: entry.id, severity: "error", message: "clip has no tracks that map to target skeleton" });
   }
   return issues;
 }
 
 const LOOP_ENDPOINT_WARNING_PREFIX = "loop endpoints differ; crossfade or seam blending is required";
 
-function inspectLoopEndpointMismatches(entry: AnimationManifestEntry, clip: AnimationClip, skeleton?: Skeleton): AnimationAssetValidationIssue[] {
+function inspectLoopEndpointMismatches(
+  entry: AnimationManifestEntry,
+  clip: AnimationClip,
+  skeleton?: Skeleton
+): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
   const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
   if (!playbackWindow) return issues;
@@ -184,7 +222,10 @@ function inspectLoopEndpointMismatches(entry: AnimationManifestEntry, clip: Anim
     const startSample = sampleTrack(track, playbackWindow.start);
     const endSample = sampleTrack(track, playbackWindow.end);
     const tolerance = property === "rotation" ? 0.24 : 0.18;
-    const delta = property === "rotation" ? rotationEndpointDelta(startSample, endSample) : vectorEndpointDelta(startSample, endSample, stride);
+    const delta =
+      property === "rotation"
+        ? rotationEndpointDelta(startSample, endSample)
+        : vectorEndpointDelta(startSample, endSample, stride);
     if (!Number.isFinite(delta) || delta <= tolerance) continue;
     const joint = resolveLoopEndpointJoint(track, skeleton);
     issues.push({
@@ -308,7 +349,10 @@ function countValidationStatuses(entries: AnimationAssetValidationEntry[]): Reco
   );
 }
 
-function buildRejectedEntry(entry: AnimationManifestEntry, issues: AnimationAssetValidationIssue[]): AnimationAssetValidationEntry {
+function buildRejectedEntry(
+  entry: AnimationManifestEntry,
+  issues: AnimationAssetValidationIssue[]
+): AnimationAssetValidationEntry {
   return {
     id: entry.id,
     label: entry.label,
@@ -351,7 +395,12 @@ function assetReportMetadata(
   clip?: AnimationClip
 ): Pick<
   AnimationAssetValidationEntry,
-  "category" | "posture" | "rootMotionPolicy" | "rootMotionProvenance" | "rootCarrierTranslationTrackCount" | "movingRootCarrierTranslationTrackCount"
+  | "category"
+  | "posture"
+  | "rootMotionPolicy"
+  | "rootMotionProvenance"
+  | "rootCarrierTranslationTrackCount"
+  | "movingRootCarrierTranslationTrackCount"
 > {
   const carrierSummary = clip ? rootCarrierTranslationSummary(entry, clip) : { total: 0, moving: 0 };
   return {
@@ -368,7 +417,10 @@ function readRootMotionPolicyLabel(entry: AnimationManifestEntry, clip?: Animati
   return readRootMotionPolicy(entry, clip) ?? "none";
 }
 
-function rootCarrierTranslationSummary(entry: AnimationManifestEntry, clip: AnimationClip): { total: number; moving: number } {
+function rootCarrierTranslationSummary(
+  entry: AnimationManifestEntry,
+  clip: AnimationClip
+): { total: number; moving: number } {
   const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
   let total = 0;
   let moving = 0;

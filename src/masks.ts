@@ -20,6 +20,8 @@ export type SourceTrackMaskPolicy = {
 const FINGER_TRACK_RULE = /(thumb|index|middle|ring|little)/i;
 const FINGER_SOURCE_TRACK_RULE = /^(left|right)(Thumb|Index|Middle|Ring|Little)/;
 const ROOT_CARRIER_POSITION_RULE = /^(?:hips|root|pelvis)\.position$/i;
+const AUTHORED_BASE_TRACK_EXCLUDE_RULES: TrackNameRule[] = [FINGER_TRACK_RULE];
+const AUTHORED_BASE_SOURCE_TRACK_EXCLUDE_RULES: SourceTrackRule[] = [FINGER_SOURCE_TRACK_RULE];
 
 export function trackNameMatchesRule(name: string, rule: TrackNameRule): boolean {
   if (typeof rule === "string") return name.includes(rule);
@@ -52,7 +54,10 @@ function matchesSourceRule(track: AnimationTrack, rule: SourceTrackRule): boolea
   return sourceTrackNames(track).some((name) => trackNameMatchesRule(name, rule));
 }
 
-function policyAllows<TRule>(policy: { include?: TRule[]; exclude?: TRule[] }, matches: (rule: TRule) => boolean): boolean {
+function policyAllows<TRule>(
+  policy: { include?: TRule[]; exclude?: TRule[] },
+  matches: (rule: TRule) => boolean
+): boolean {
   if (policy.include && policy.include.length > 0 && !policy.include.some(matches)) {
     return false;
   }
@@ -74,7 +79,10 @@ export function sourceTrackAllowed(track: AnimationTrack, policy: SourceTrackMas
   return policyAllows(policy, (rule) => matchesSourceRule(track, rule));
 }
 
-export function filterSourceTracksByPolicy(tracks: readonly AnimationTrack[], policy: SourceTrackMaskPolicy): AnimationTrack[] {
+export function filterSourceTracksByPolicy(
+  tracks: readonly AnimationTrack[],
+  policy: SourceTrackMaskPolicy
+): AnimationTrack[] {
   return tracks.filter((track) => sourceTrackAllowed(track, policy));
 }
 
@@ -94,16 +102,20 @@ export const ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY: SourceTrackMaskPolicy = {
 };
 
 export const AUTHORED_BASE_TRACK_POLICY: TrackMaskPolicy = {
-  exclude: [FINGER_TRACK_RULE]
+  exclude: AUTHORED_BASE_TRACK_EXCLUDE_RULES
 };
 
 export const AUTHORED_BASE_SOURCE_TRACK_POLICY: SourceTrackMaskPolicy = {
-  exclude: [FINGER_SOURCE_TRACK_RULE]
+  exclude: AUTHORED_BASE_SOURCE_TRACK_EXCLUDE_RULES
 };
 
-export const BASE_PROCEDURAL_TRACK_POLICY = AUTHORED_BASE_TRACK_POLICY;
+export const BASE_PROCEDURAL_TRACK_POLICY: TrackMaskPolicy = {
+  exclude: AUTHORED_BASE_TRACK_EXCLUDE_RULES
+};
 
-export const BASE_PROCEDURAL_SOURCE_TRACK_POLICY = AUTHORED_BASE_SOURCE_TRACK_POLICY;
+export const BASE_PROCEDURAL_SOURCE_TRACK_POLICY: SourceTrackMaskPolicy = {
+  exclude: AUTHORED_BASE_SOURCE_TRACK_EXCLUDE_RULES
+};
 
 export const OVERLAY_UPPER_BODY_TRACK_POLICY: TrackMaskPolicy = {
   exclude: [/(upperLeg|lowerLeg|foot|toes)/i, FINGER_TRACK_RULE]

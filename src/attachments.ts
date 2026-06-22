@@ -82,14 +82,19 @@ export function createAttachmentBinding(input: AttachmentBindingInput): Attachme
   return binding;
 }
 
-export function createAttachmentBindings(skeleton: Skeleton, attachments: readonly AttachmentBindingDefinition[]): AttachmentBinding[];
+export function createAttachmentBindings(
+  skeleton: Skeleton,
+  attachments: readonly AttachmentBindingDefinition[]
+): AttachmentBinding[];
 export function createAttachmentBindings(inputs: readonly AttachmentBindingInput[]): AttachmentBinding[];
 export function createAttachmentBindings(
   skeletonOrInputs: Skeleton | readonly AttachmentBindingInput[],
   attachments?: readonly AttachmentBindingDefinition[]
 ): AttachmentBinding[] {
   if (attachments !== undefined) {
-    return attachments.map((attachment) => createAttachmentBinding({ skeleton: skeletonOrInputs as Skeleton, ...attachment }));
+    return attachments.map((attachment) =>
+      createAttachmentBinding({ skeleton: skeletonOrInputs as Skeleton, ...attachment })
+    );
   }
   return (skeletonOrInputs as readonly AttachmentBindingInput[]).map((input) => createAttachmentBinding(input));
 }
@@ -100,7 +105,10 @@ export function computeAttachmentTransform(input: AttachmentTransformInput): Mat
   }
   const jointModel = input.modelPose[input.jointIndex];
   if (!jointModel) throw new Error(`attachment joint index ${input.jointIndex} has no model matrix`);
-  return multiplyMat4(cloneFiniteMat4(jointModel, `attachment joint ${input.jointIndex} model matrix`), attachmentOffsetMatrix(input.offset));
+  return multiplyMat4(
+    cloneFiniteMat4(jointModel, `attachment joint ${input.jointIndex} model matrix`),
+    attachmentOffsetMatrix(input.offset)
+  );
 }
 
 export function computeSkeletonAttachmentTransform(input: SkeletonAttachmentTransformInput): Mat4 {

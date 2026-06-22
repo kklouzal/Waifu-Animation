@@ -19,7 +19,10 @@ export type ManifestPlaybackWindow = {
 const STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE = 1e-4;
 
 export function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
-  return normalizedTrackProperty(track.property) === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
+  return (
+    normalizedTrackProperty(track.property) === "translation" &&
+    (track.humanBone === "hips" || isRootCarrierJointName(track.joint))
+  );
 }
 
 export function rootCarrierTranslationTrackHasMotion(track: AnimationTrack, window: ManifestPlaybackWindow): boolean {
@@ -43,15 +46,26 @@ function translationSamplesDiffer(base: ArrayLike<number>, sample: ArrayLike<num
   return false;
 }
 
-export function resolveManifestPlaybackWindow(entry: ManifestPlaybackSource, clip: Pick<AnimationClip, "duration">): ManifestPlaybackWindow | null {
+export function resolveManifestPlaybackWindow(
+  entry: ManifestPlaybackSource,
+  clip: Pick<AnimationClip, "duration">
+): ManifestPlaybackWindow | null {
   const start = entry.playback?.start ?? 0;
   const end = entry.playback?.end ?? clip.duration;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5) return null;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5)
+    return null;
   return { start, end };
 }
 
 function isRootCarrierJointName(joint: string | undefined): boolean {
-  return joint === "root" || joint === "Root" || joint === "hips" || joint === "Hips" || joint === "pelvis" || joint === "Pelvis";
+  return (
+    joint === "root" ||
+    joint === "Root" ||
+    joint === "hips" ||
+    joint === "Hips" ||
+    joint === "pelvis" ||
+    joint === "Pelvis"
+  );
 }
 
 export function duplicatedManifestIds(entries: readonly ManifestIdSource[]): Set<string> {

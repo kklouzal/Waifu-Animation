@@ -1,4 +1,12 @@
-import { type AnimationClip, type AnimationTrack, type ClipValidationIssue, normalizedTrackProperty, toFloat32Array, trackStride, validateClip } from "./clip.js";
+import {
+  type AnimationClip,
+  type AnimationTrack,
+  type ClipValidationIssue,
+  normalizedTrackProperty,
+  toFloat32Array,
+  trackStride,
+  validateClip
+} from "./clip.js";
 
 export const WAIFU_ANIMATION_BINARY_FORMAT = "waifu-animation-bin";
 
@@ -53,7 +61,13 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
   const stringPaddedBytes = align4(stringBytes);
 
   const floatCount = trackRecords.reduce((sum, record) => {
-    return sum + record.times.length + record.values.length + (record.sourceRestQuaternion?.length ?? 0) + (record.sourceRestChildDirection?.length ?? 0);
+    return (
+      sum +
+      record.times.length +
+      record.values.length +
+      (record.sourceRestQuaternion?.length ?? 0) +
+      (record.sourceRestChildDirection?.length ?? 0)
+    );
   }, 0);
 
   const floatByteOffset = HEADER_BYTES + trackRecords.length * TRACK_BYTES + stringPaddedBytes;
@@ -145,13 +159,15 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
   if (version !== VERSION && version !== 1) throw new Error(`unsupported animation binary version ${version}`);
   const headerBytes = view.getUint32(8, true);
   const trackBytes = view.getUint32(12, true);
-  if (headerBytes !== HEADER_BYTES || (trackBytes !== TRACK_BYTES && trackBytes !== LEGACY_TRACK_BYTES)) throw new Error("animation binary layout is unsupported");
+  if (headerBytes !== HEADER_BYTES || (trackBytes !== TRACK_BYTES && trackBytes !== LEGACY_TRACK_BYTES))
+    throw new Error("animation binary layout is unsupported");
 
   const duration = view.getFloat32(16, true);
   const flags = view.getUint32(20, true);
   const trackCount = view.getUint32(24, true);
   const stringBytes = view.getUint32(28, true);
-  if (!Number.isFinite(duration) || duration <= 0) throw new Error("animation binary duration must be positive and finite");
+  if (!Number.isFinite(duration) || duration <= 0)
+    throw new Error("animation binary duration must be positive and finite");
   if ((flags & ~1) !== 0) throw new Error("animation binary flags are invalid");
   const stringByteOffset = HEADER_BYTES + trackCount * trackBytes;
   const floatByteOffset = stringByteOffset + align4(stringBytes);
@@ -176,8 +192,12 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     const sourceRestPresent = readOptionalPayloadFlag(view, trackOffset + 32, index, "source-rest");
     const sourceRestOffset = sourceRestPresent ? view.getUint32(trackOffset + 28, true) : NO_OFFSET;
     const sourceRestChildDirectionPresent =
-      trackBytes >= TRACK_BYTES ? readOptionalPayloadFlag(view, trackOffset + 40, index, "source-rest-child-direction") : false;
-    const sourceRestChildDirectionOffset = sourceRestChildDirectionPresent ? view.getUint32(trackOffset + 36, true) : NO_OFFSET;
+      trackBytes >= TRACK_BYTES
+        ? readOptionalPayloadFlag(view, trackOffset + 40, index, "source-rest-child-direction")
+        : false;
+    const sourceRestChildDirectionOffset = sourceRestChildDirectionPresent
+      ? view.getUint32(trackOffset + 36, true)
+      : NO_OFFSET;
     const property = decodeProperty(propertyCode);
     const stride = trackStride(property);
 
@@ -185,17 +205,22 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
       throw new Error(`animation track ${index} target kind is invalid`);
     }
     if (keyCount < 1) throw new Error(`animation track ${index} has no keys`);
-    if (nameByteOffset + nameByteLength > stringBytes) throw new Error(`animation track ${index} name bounds are invalid`);
+    if (nameByteOffset + nameByteLength > stringBytes)
+      throw new Error(`animation track ${index} name bounds are invalid`);
     assertFloatBounds(index, "time", timeOffset, keyCount, floatData.length);
     assertFloatBounds(index, "value", valueOffset, keyCount * stride, floatData.length);
     if (sourceRestOffset !== NO_OFFSET) assertFloatBounds(index, "source-rest", sourceRestOffset, 4, floatData.length);
-    if (sourceRestChildDirectionOffset !== NO_OFFSET) assertFloatBounds(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData.length);
+    if (sourceRestChildDirectionOffset !== NO_OFFSET)
+      assertFloatBounds(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData.length);
     validateBinaryTrackTimes(index, timeOffset, keyCount, floatData, duration);
     assertFiniteFloatRange(index, "value", valueOffset, keyCount * stride, floatData);
     if (sourceRestOffset !== NO_OFFSET) assertFiniteFloatRange(index, "source-rest", sourceRestOffset, 4, floatData);
-    if (sourceRestChildDirectionOffset !== NO_OFFSET) assertFiniteFloatRange(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData);
+    if (sourceRestChildDirectionOffset !== NO_OFFSET)
+      assertFiniteFloatRange(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData);
 
-    const name = textDecoder.decode(bytes.subarray(stringByteOffset + nameByteOffset, stringByteOffset + nameByteOffset + nameByteLength));
+    const name = textDecoder.decode(
+      bytes.subarray(stringByteOffset + nameByteOffset, stringByteOffset + nameByteOffset + nameByteLength)
+    );
     if (name.length === 0) throw new Error(`animation track ${index} target name is empty`);
     const trackBase = {
       property,
@@ -205,11 +230,23 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     const sourceRestQuaternion =
       sourceRestOffset !== NO_OFFSET ? floatData.subarray(sourceRestOffset, sourceRestOffset + 4) : undefined;
     const sourceRestChildDirection =
-      sourceRestChildDirectionOffset !== NO_OFFSET ? floatData.subarray(sourceRestChildDirectionOffset, sourceRestChildDirectionOffset + 3) : undefined;
+      sourceRestChildDirectionOffset !== NO_OFFSET
+        ? floatData.subarray(sourceRestChildDirectionOffset, sourceRestChildDirectionOffset + 3)
+        : undefined;
     const track =
       targetKind === TARGET_HUMAN_BONE
-        ? { ...trackBase, humanBone: name, ...(sourceRestQuaternion ? { sourceRestQuaternion } : {}), ...(sourceRestChildDirection ? { sourceRestChildDirection } : {}) }
-        : { ...trackBase, joint: name, ...(sourceRestQuaternion ? { sourceRestQuaternion } : {}), ...(sourceRestChildDirection ? { sourceRestChildDirection } : {}) };
+        ? {
+            ...trackBase,
+            humanBone: name,
+            ...(sourceRestQuaternion ? { sourceRestQuaternion } : {}),
+            ...(sourceRestChildDirection ? { sourceRestChildDirection } : {})
+          }
+        : {
+            ...trackBase,
+            joint: name,
+            ...(sourceRestQuaternion ? { sourceRestQuaternion } : {}),
+            ...(sourceRestChildDirection ? { sourceRestChildDirection } : {})
+          };
     tracks.push(track);
   }
 
@@ -226,7 +263,9 @@ function readSourceRestChildDirection(track: AnimationTrack): Float32Array | nul
   const sourceRestChildDirection = toFloat32Array(track.sourceRestChildDirection);
   if (sourceRestChildDirection.length !== 3) {
     const targetName = track.humanBone ?? track.joint ?? "<unknown>";
-    throw new Error(`animation track ${targetName}.${track.property} sourceRestChildDirection must contain exactly 3 values`);
+    throw new Error(
+      `animation track ${targetName}.${track.property} sourceRestChildDirection must contain exactly 3 values`
+    );
   }
   return sourceRestChildDirection;
 }
@@ -249,7 +288,9 @@ function readSourceRestQuaternion(track: AnimationTrack): Float32Array | null {
   const sourceRestQuaternion = toFloat32Array(track.sourceRestQuaternion);
   if (sourceRestQuaternion.length !== 4) {
     const targetName = track.humanBone ?? track.joint ?? "<unknown>";
-    throw new Error(`animation track ${targetName}.${track.property} sourceRestQuaternion must contain exactly 4 values`);
+    throw new Error(
+      `animation track ${targetName}.${track.property} sourceRestQuaternion must contain exactly 4 values`
+    );
   }
   return sourceRestQuaternion;
 }
@@ -258,21 +299,35 @@ function assertFloatBounds(trackIndex: number, label: string, offset: number, co
   if (offset + count > floatCount) throw new Error(`animation track ${trackIndex} ${label} bounds are invalid`);
 }
 
-function validateBinaryTrackTimes(trackIndex: number, offset: number, count: number, floatData: Float32Array, duration: number): void {
+function validateBinaryTrackTimes(
+  trackIndex: number,
+  offset: number,
+  count: number,
+  floatData: Float32Array,
+  duration: number
+): void {
   let previous = -Infinity;
   for (let i = 0; i < count; i += 1) {
     const time = floatData[offset + i]!;
     if (!Number.isFinite(time)) throw new Error(`animation track ${trackIndex} time values must be finite`);
-    if (time < 0 || time > duration) throw new Error(`animation track ${trackIndex} time values must be within animation duration`);
+    if (time < 0 || time > duration)
+      throw new Error(`animation track ${trackIndex} time values must be within animation duration`);
     if (i > 0 && time <= previous) throw new Error(`animation track ${trackIndex} time values must be sorted`);
     previous = time;
   }
 }
 
-function assertFiniteFloatRange(trackIndex: number, label: string, offset: number, count: number, floatData: Float32Array): void {
+function assertFiniteFloatRange(
+  trackIndex: number,
+  label: string,
+  offset: number,
+  count: number,
+  floatData: Float32Array
+): void {
   const labelText = label === "value" ? "values" : `${label} values`;
   for (let i = 0; i < count; i += 1) {
-    if (!Number.isFinite(floatData[offset + i]!)) throw new Error(`animation track ${trackIndex} ${labelText} must be finite`);
+    if (!Number.isFinite(floatData[offset + i]!))
+      throw new Error(`animation track ${trackIndex} ${labelText} must be finite`);
   }
 }
 

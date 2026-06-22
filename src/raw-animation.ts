@@ -1,9 +1,49 @@
-import { type Quat, type Transform, type Vec3, EPSILON, ONE_VEC3, addVec3, cloneQuat, cloneTransform, cloneVec3, clamp, dotQuat, ensureShortestQuat, euclideanModulo, lerpVec3, multiplyQuat, normalizeQuat, slerpQuat, transformDelta } from "./math.js";
+import {
+  type Quat,
+  type Transform,
+  type Vec3,
+  EPSILON,
+  ONE_VEC3,
+  addVec3,
+  cloneQuat,
+  cloneTransform,
+  cloneVec3,
+  clamp,
+  dotQuat,
+  ensureShortestQuat,
+  euclideanModulo,
+  lerpVec3,
+  multiplyQuat,
+  normalizeQuat,
+  slerpQuat,
+  transformDelta
+} from "./math.js";
 import { mat4Translation } from "./numeric-helpers.js";
-import { defaultTrackSample, formatClipIssue, normalizedTrackProperty, resolveTrackJointIndex, trackStride, validateClip, type AnimationClip, type AnimationTrack, type ClipValidationIssue, type NormalizedTrackProperty, type SampleOptions, type TrackProperty } from "./clip-internal.js";
+import {
+  defaultTrackSample,
+  formatClipIssue,
+  normalizedTrackProperty,
+  resolveTrackJointIndex,
+  trackStride,
+  validateClip,
+  type AnimationClip,
+  type AnimationTrack,
+  type ClipValidationIssue,
+  type NormalizedTrackProperty,
+  type SampleOptions,
+  type TrackProperty
+} from "./clip-internal.js";
 import { sampleClipToPose } from "./clip-sampling.js";
 import { type Pose, readPoseTransformOrRest } from "./pose.js";
-import { type HumanoidBoneName, type Skeleton, createRestPose, isHumanoidBoneName, localToModelPose, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
+import {
+  type HumanoidBoneNameLike,
+  type Skeleton,
+  createRestPose,
+  isHumanoidBoneName,
+  localToModelPose,
+  resolveHumanoidIndex,
+  resolveJointIndex
+} from "./skeleton.js";
 
 export type RawAnimationVec3KeyDefinition = {
   time: number;
@@ -27,7 +67,7 @@ export type RawAnimationQuaternionKey = {
 
 export type RawAnimationJointTrackDefinition = {
   joint?: string;
-  humanBone?: HumanoidBoneName | string;
+  humanBone?: HumanoidBoneNameLike;
   translations?: readonly RawAnimationVec3KeyDefinition[];
   rotations?: readonly RawAnimationQuaternionKeyDefinition[];
   scales?: readonly RawAnimationVec3KeyDefinition[];
@@ -35,7 +75,7 @@ export type RawAnimationJointTrackDefinition = {
 
 export type RawAnimationJointTrack = {
   joint?: string;
-  humanBone?: HumanoidBoneName | string;
+  humanBone?: HumanoidBoneNameLike;
   translations: RawAnimationVec3Key[];
   rotations: RawAnimationQuaternionKey[];
   scales: RawAnimationVec3Key[];
@@ -232,7 +272,7 @@ export type FixedRateSamplingTimes = {
 type RawAnimationChannel = {
   sourceTrack: number;
   joint?: string;
-  humanBone?: HumanoidBoneName | string;
+  humanBone?: HumanoidBoneNameLike;
   targetKey: string;
   jointIndex: number;
   property: NormalizedTrackProperty;
@@ -333,7 +373,12 @@ export function validateRawAnimation(rawAnimation: RawAnimation, skeleton?: Skel
     for (const property of RAW_ANIMATION_PROPERTY_ORDER) {
       const keys = readRawAnimationKeysForValidation(track, property);
       if (!keys) {
-        issues.push({ track: trackIndex, joint: target.name, property, message: `raw animation ${property} keys must be an array` });
+        issues.push({
+          track: trackIndex,
+          joint: target.name,
+          property,
+          message: `raw animation ${property} keys must be an array`
+        });
         continue;
       }
       if (keys.length > 0 && target.key) {
@@ -354,7 +399,11 @@ export function validateRawAnimation(rawAnimation: RawAnimation, skeleton?: Skel
       trackKeyCount += keys.length;
     }
     if (trackKeyCount === 0) {
-      issues.push({ track: trackIndex, joint: target.name, message: "raw animation joint track has no transform keys" });
+      issues.push({
+        track: trackIndex,
+        joint: target.name,
+        message: "raw animation joint track has no transform keys"
+      });
     } else {
       channelCount += 1;
     }
@@ -366,7 +415,10 @@ export function validateRawAnimation(rawAnimation: RawAnimation, skeleton?: Skel
   return issues;
 }
 
-export function tryBuildAnimationFromRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): AnimationBuildResult {
+export function tryBuildAnimationFromRawAnimation(
+  rawAnimation: RawAnimation,
+  skeleton?: Skeleton
+): AnimationBuildResult {
   const issues = validateRawAnimation(rawAnimation, skeleton);
   if (issues.length > 0) return { ok: false, clip: null, issues };
 
@@ -404,7 +456,10 @@ export class AnimationBuilder {
   }
 }
 
-export function tryOptimizeRawAnimation(rawAnimation: RawAnimation, options: AnimationOptimizerOptions = {}): RawAnimationOptimizationResult {
+export function tryOptimizeRawAnimation(
+  rawAnimation: RawAnimation,
+  options: AnimationOptimizerOptions = {}
+): RawAnimationOptimizationResult {
   const issues = validateRawAnimation(rawAnimation, options.skeleton);
   validateAnimationOptimizerOptions(issues, options);
   if (issues.length > 0) return { ok: false, rawAnimation: null, issues, stats: null };
@@ -415,7 +470,10 @@ export function tryOptimizeRawAnimation(rawAnimation: RawAnimation, options: Ani
   return { ok: true, rawAnimation: optimized.rawAnimation, issues: [], stats: optimized.stats };
 }
 
-export function optimizeRawAnimation(rawAnimation: RawAnimation, options: AnimationOptimizerOptions = {}): RawAnimation {
+export function optimizeRawAnimation(
+  rawAnimation: RawAnimation,
+  options: AnimationOptimizerOptions = {}
+): RawAnimation {
   const result = tryOptimizeRawAnimation(rawAnimation, options);
   if (!result.ok) {
     throw new Error(`raw animation optimization failed: ${result.issues.map(formatRawAnimationIssue).join("; ")}`);
@@ -451,7 +509,11 @@ export function tryBuildAdditiveAnimationClip(
   return { ok: true, clip: additiveClip, issues: [] };
 }
 
-export function buildAdditiveAnimationClip(clip: AnimationClip, skeleton: Skeleton, options: AdditiveAnimationClipBuildOptions = {}): AnimationClip {
+export function buildAdditiveAnimationClip(
+  clip: AnimationClip,
+  skeleton: Skeleton,
+  options: AdditiveAnimationClipBuildOptions = {}
+): AnimationClip {
   const result = tryBuildAdditiveAnimationClip(clip, skeleton, options);
   if (!result.ok) {
     throw new Error(`additive animation clip cannot be built: ${result.issues.map(formatClipIssue).join("; ")}`);
@@ -465,7 +527,10 @@ export class AdditiveAnimationBuilder {
   }
 }
 
-export function extractRawAnimationTimePoints(rawAnimation: RawAnimation, options: RawAnimationTimePointOptions = {}): number[] {
+export function extractRawAnimationTimePoints(
+  rawAnimation: RawAnimation,
+  options: RawAnimationTimePointOptions = {}
+): number[] {
   assertValidRawAnimation(rawAnimation, options.skeleton);
   const propertyFilter = readRawAnimationPropertyFilter(options.properties);
   const jointFilter = readRawAnimationJointFilter(options.joints, options.skeleton);
@@ -507,13 +572,21 @@ export function createFixedRateSamplingTimes(duration: number, frequency: number
   return { duration: safeDuration, frequency, period, sampleCount, samples, times, ratios };
 }
 
-export function sampleRawAnimation(rawAnimation: RawAnimation, timeSeconds: number, options: RawAnimationSampleOptions = {}): Pose {
+export function sampleRawAnimation(
+  rawAnimation: RawAnimation,
+  timeSeconds: number,
+  options: RawAnimationSampleOptions = {}
+): Pose {
   assertValidRawAnimation(rawAnimation, options.skeleton);
   const time = sampleRawAnimationTime(rawAnimation, timeSeconds, options.loop ?? rawAnimation.loop ?? false);
   return sampleValidatedRawAnimation(rawAnimation, time, options);
 }
 
-export function sampleRawAnimationAtRatio(rawAnimation: RawAnimation, ratio: number, options: RawAnimationRatioSampleOptions = {}): Pose {
+export function sampleRawAnimationAtRatio(
+  rawAnimation: RawAnimation,
+  ratio: number,
+  options: RawAnimationRatioSampleOptions = {}
+): Pose {
   assertValidRawAnimation(rawAnimation, options.skeleton);
   return sampleValidatedRawAnimation(rawAnimation, sampleRawAnimationRatioToTime(rawAnimation, ratio), options);
 }
@@ -529,7 +602,8 @@ export function compareAnimationSampleError(
   const translation = createSampleErrorAccumulator();
   const rotation = createSampleErrorAccumulator();
   const scale = createSampleErrorAccumulator();
-  const modelSpace = options.includeModelSpace === true ? createModelSpaceSampleErrorAccumulator(options.skeleton) : undefined;
+  const modelSpace =
+    options.includeModelSpace === true ? createModelSpaceSampleErrorAccumulator(options.skeleton) : undefined;
   const restPose = options.restPose;
 
   for (let sampleIndex = 0; sampleIndex < times.length; sampleIndex += 1) {
@@ -558,7 +632,13 @@ export function compareAnimationSampleError(
     scale: finishSampleErrorAccumulator(scale, jointSampleCount, options.skeleton)
   };
   if (modelSpace) {
-    report.modelSpace = finishModelSpaceSampleErrorAccumulator(modelSpace, times.length, jointSampleCount, times, options.skeleton);
+    report.modelSpace = finishModelSpaceSampleErrorAccumulator(
+      modelSpace,
+      times.length,
+      jointSampleCount,
+      times,
+      options.skeleton
+    );
   }
   return report;
 }
@@ -578,7 +658,10 @@ const DEFAULT_ANIMATION_OPTIMIZER_TOLERANCES: Required<AnimationOptimizerToleran
   scale: 1e-3
 };
 
-function validateAnimationOptimizerOptions(issues: RawAnimationValidationIssue[], options: AnimationOptimizerOptions): void {
+function validateAnimationOptimizerOptions(
+  issues: RawAnimationValidationIssue[],
+  options: AnimationOptimizerOptions
+): void {
   const tolerances = options.tolerances;
   if (tolerances !== undefined && (typeof tolerances !== "object" || tolerances === null)) {
     issues.push({ message: "animation optimizer tolerances must be an object" });
@@ -601,7 +684,13 @@ function validateAnimationOptimizerOptions(issues: RawAnimationValidationIssue[]
       continue;
     }
     for (const property of RAW_ANIMATION_PROPERTY_ORDER) {
-      validateAnimationOptimizerTolerance(issues, tolerance[property], `animation optimizer ${joint}.${property} tolerance`, joint, property);
+      validateAnimationOptimizerTolerance(
+        issues,
+        tolerance[property],
+        `animation optimizer ${joint}.${property} tolerance`,
+        joint,
+        property
+      );
     }
     validateAnimationOptimizerTolerance(issues, tolerance.weight, `animation optimizer ${joint}.weight`, joint);
     if (tolerance.weight !== undefined && tolerance.weight <= 0) {
@@ -610,7 +699,10 @@ function validateAnimationOptimizerOptions(issues: RawAnimationValidationIssue[]
   }
 }
 
-function validateAnimationOptimizerSampleErrorOptions(issues: RawAnimationValidationIssue[], options: AnimationOptimizerOptions): void {
+function validateAnimationOptimizerSampleErrorOptions(
+  issues: RawAnimationValidationIssue[],
+  options: AnimationOptimizerOptions
+): void {
   const sampleError = options.sampleError;
   if (sampleError === undefined || sampleError === false) return;
   if (!options.skeleton) {
@@ -621,7 +713,10 @@ function validateAnimationOptimizerSampleErrorOptions(issues: RawAnimationValida
     issues.push({ message: "animation optimizer sampleError must be a boolean or object" });
     return;
   }
-  if (sampleError.sampleFrequency !== undefined && (!Number.isFinite(sampleError.sampleFrequency) || sampleError.sampleFrequency <= 0)) {
+  if (
+    sampleError.sampleFrequency !== undefined &&
+    (!Number.isFinite(sampleError.sampleFrequency) || sampleError.sampleFrequency <= 0)
+  ) {
     issues.push({ message: "animation optimizer sampleError sampleFrequency must be positive and finite" });
   }
   if (sampleError.sampleTimes !== undefined) {
@@ -655,7 +750,10 @@ function validateAnimationOptimizerTolerance(
   }
 }
 
-function optimizeValidatedRawAnimation(rawAnimation: RawAnimation, options: AnimationOptimizerOptions): { rawAnimation: RawAnimation; stats: AnimationOptimizationStats } {
+function optimizeValidatedRawAnimation(
+  rawAnimation: RawAnimation,
+  options: AnimationOptimizerOptions
+): { rawAnimation: RawAnimation; stats: AnimationOptimizationStats } {
   const descendantCounts = options.skeleton ? countSkeletonDescendants(options.skeleton) : [];
   const channels: AnimationOptimizationChannelStats[] = [];
   let inputKeyCount = 0;
@@ -663,9 +761,35 @@ function optimizeValidatedRawAnimation(rawAnimation: RawAnimation, options: Anim
 
   const tracks = readRawAnimationTracks(rawAnimation).map((track, trackIndex): RawAnimationJointTrack => {
     const target = readRawAnimationTarget(track, options.skeleton);
-    const translations = optimizeRawAnimationVec3Keys(track.translations, "translation", track, trackIndex, target, options, descendantCounts, channels);
-    const rotations = optimizeRawAnimationQuaternionKeys(track.rotations, track, trackIndex, target, options, descendantCounts, channels);
-    const scales = optimizeRawAnimationVec3Keys(track.scales, "scale", track, trackIndex, target, options, descendantCounts, channels);
+    const translations = optimizeRawAnimationVec3Keys(
+      track.translations,
+      "translation",
+      track,
+      trackIndex,
+      target,
+      options,
+      descendantCounts,
+      channels
+    );
+    const rotations = optimizeRawAnimationQuaternionKeys(
+      track.rotations,
+      track,
+      trackIndex,
+      target,
+      options,
+      descendantCounts,
+      channels
+    );
+    const scales = optimizeRawAnimationVec3Keys(
+      track.scales,
+      "scale",
+      track,
+      trackIndex,
+      target,
+      options,
+      descendantCounts,
+      channels
+    );
     inputKeyCount += track.translations.length + track.rotations.length + track.scales.length;
     outputKeyCount += translations.length + rotations.length + scales.length;
     const optimized: RawAnimationJointTrack = { translations, rotations, scales };
@@ -689,7 +813,11 @@ function optimizeValidatedRawAnimation(rawAnimation: RawAnimation, options: Anim
     channels
   };
   if (options.skeleton && options.sampleError !== undefined && options.sampleError !== false) {
-    stats.sampleError = compareAnimationSampleError(rawAnimation, optimized, createOptimizerSampleErrorOptions(options));
+    stats.sampleError = compareAnimationSampleError(
+      rawAnimation,
+      optimized,
+      createOptimizerSampleErrorOptions(options)
+    );
   }
   return {
     rawAnimation: optimized,
@@ -726,7 +854,16 @@ function optimizeRawAnimationVec3Keys(
 ): RawAnimationVec3Key[] {
   const tolerance = resolveAnimationOptimizerTolerance(property, track, target, options, descendantCounts);
   const optimized = decimateRawAnimationKeys(keys, property, tolerance.effective);
-  pushAnimationOptimizationChannelStats(stats, track, trackIndex, target, property, keys.length, optimized.length, tolerance);
+  pushAnimationOptimizationChannelStats(
+    stats,
+    track,
+    trackIndex,
+    target,
+    property,
+    keys.length,
+    optimized.length,
+    tolerance
+  );
   return optimized as RawAnimationVec3Key[];
 }
 
@@ -741,7 +878,16 @@ function optimizeRawAnimationQuaternionKeys(
 ): RawAnimationQuaternionKey[] {
   const tolerance = resolveAnimationOptimizerTolerance("rotation", track, target, options, descendantCounts);
   const optimized = decimateRawAnimationKeys(keys, "rotation", tolerance.effective);
-  pushAnimationOptimizationChannelStats(stats, track, trackIndex, target, "rotation", keys.length, optimized.length, tolerance);
+  pushAnimationOptimizationChannelStats(
+    stats,
+    track,
+    trackIndex,
+    target,
+    "rotation",
+    keys.length,
+    optimized.length,
+    tolerance
+  );
   return optimized as RawAnimationQuaternionKey[];
 }
 
@@ -760,10 +906,11 @@ function resolveAnimationOptimizerTolerance(
   descendantCounts: readonly number[]
 ): ResolvedAnimationOptimizerTolerance {
   const override = readAnimationOptimizerJointTolerance(track, target, options);
-  const base = override?.[property] ?? options.tolerances?.[property] ?? DEFAULT_ANIMATION_OPTIMIZER_TOLERANCES[property];
+  const base =
+    override?.[property] ?? options.tolerances?.[property] ?? DEFAULT_ANIMATION_OPTIMIZER_TOLERANCES[property];
   const jointWeight = override?.weight ?? 1;
   const hierarchyWeight = options.hierarchyWeight ?? 0;
-  const descendantCount = target.jointIndex >= 0 ? descendantCounts[target.jointIndex] ?? 0 : 0;
+  const descendantCount = target.jointIndex >= 0 ? (descendantCounts[target.jointIndex] ?? 0) : 0;
   return {
     effective: base / jointWeight / (1 + hierarchyWeight * descendantCount),
     jointWeight,
@@ -871,15 +1018,26 @@ function rawAnimationKeyInterpolationError(
 ): number {
   const alpha = right.time > left.time ? (key.time - left.time) / (right.time - left.time) : 0;
   if (property === "rotation") {
-    const expected = slerpQuat(normalizeQuat(cloneQuat((left as RawAnimationQuaternionKey).value)), normalizeQuat(cloneQuat((right as RawAnimationQuaternionKey).value)), alpha);
+    const expected = slerpQuat(
+      normalizeQuat(cloneQuat((left as RawAnimationQuaternionKey).value)),
+      normalizeQuat(cloneQuat((right as RawAnimationQuaternionKey).value)),
+      alpha
+    );
     return quaternionAngleError(expected, normalizeQuat(cloneQuat((key as RawAnimationQuaternionKey).value)));
   }
-  const expected = lerpVec3(cloneVec3((left as RawAnimationVec3Key).value), cloneVec3((right as RawAnimationVec3Key).value), alpha);
+  const expected = lerpVec3(
+    cloneVec3((left as RawAnimationVec3Key).value),
+    cloneVec3((right as RawAnimationVec3Key).value),
+    alpha
+  );
   return vec3Error(expected, cloneVec3((key as RawAnimationVec3Key).value));
 }
 
-function cloneRawAnimationKey(key: RawAnimationVec3Key | RawAnimationQuaternionKey, property: NormalizedTrackProperty): RawAnimationVec3Key | RawAnimationQuaternionKey {
-  return property === "rotation" ? cloneRawAnimationQuaternionKey(key as RawAnimationQuaternionKey) : cloneRawAnimationVec3Key(key as RawAnimationVec3Key);
+function cloneRawAnimationKey(
+  key: RawAnimationVec3Key | RawAnimationQuaternionKey,
+  property: NormalizedTrackProperty
+): RawAnimationVec3Key | RawAnimationQuaternionKey {
+  return property === "rotation" ? cloneRawAnimationQuaternionKey(key) : cloneRawAnimationVec3Key(key);
 }
 
 function countSkeletonDescendants(skeleton: Skeleton): number[] {
@@ -909,7 +1067,10 @@ function buildValidatedAnimationFromRawAnimation(rawAnimation: RawAnimation, ske
         values.set(rotation, keyIndex * stride);
         previousRotation = rotation;
       } else {
-        values.set(cloneVec3((key as RawAnimationVec3Key).value, channel.property === "scale" ? ONE_VEC3 : undefined), keyIndex * stride);
+        values.set(
+          cloneVec3((key as RawAnimationVec3Key).value, channel.property === "scale" ? ONE_VEC3 : undefined),
+          keyIndex * stride
+        );
       }
     }
     const track: AnimationTrack = { property: channel.property, times, values };
@@ -929,17 +1090,23 @@ function buildValidatedAnimationFromRawAnimation(rawAnimation: RawAnimation, ske
   return clip;
 }
 
-function buildValidatedAdditiveAnimationClip(clip: AnimationClip, skeleton: Skeleton, options: AdditiveAnimationClipBuildOptions): AnimationClip {
+function buildValidatedAdditiveAnimationClip(
+  clip: AnimationClip,
+  skeleton: Skeleton,
+  options: AdditiveAnimationClipBuildOptions
+): AnimationClip {
   const tracks = clip.tracks.map((track): AnimationTrack => {
     const property = normalizedTrackProperty(track.property)!;
     const stride = trackStride(property);
     const jointIndex = resolveTrackJointIndex(skeleton, track);
     const restTransform = skeleton.restPose[jointIndex]!;
-    const referenceTransform = options.referencePose?.[jointIndex] ?? sampleClipToPose(skeleton, clip, track.times[0]!, {
-      loop: false,
-      restPose: skeleton.restPose,
-      skipUnsupportedTracks: true
-    })[jointIndex]!;
+    const referenceTransform =
+      options.referencePose?.[jointIndex] ??
+      sampleClipToPose(skeleton, clip, track.times[0]!, {
+        loop: false,
+        restPose: skeleton.restPose,
+        skipUnsupportedTracks: true
+      })[jointIndex]!;
     const times = Float32Array.from(track.times);
     const values = new Float32Array(track.values.length);
     let previousRotation: Quat | undefined;
@@ -958,7 +1125,7 @@ function buildValidatedAdditiveAnimationClip(clip: AnimationClip, skeleton: Skel
         values.set(rotation, offset);
         previousRotation = rotation;
       } else {
-        values.set(value as Vec3, offset);
+        values.set(value, offset);
       }
     }
 
@@ -995,15 +1162,28 @@ function encodeAdditiveTrackValue(
   ];
 }
 
-function validateAdditiveReferencePose(issues: ClipValidationIssue[], skeleton: Skeleton, pose: readonly Transform[], label: string): void {
+function validateAdditiveReferencePose(
+  issues: ClipValidationIssue[],
+  skeleton: Skeleton,
+  pose: readonly Transform[],
+  label: string
+): void {
   if (pose.length !== skeleton.joints.length) {
-    issues.push({ joint: `<${label}>`, index: -1, message: `${label} length ${pose.length} does not match skeleton ${skeleton.joints.length}` });
+    issues.push({
+      joint: `<${label}>`,
+      index: -1,
+      message: `${label} length ${pose.length} does not match skeleton ${skeleton.joints.length}`
+    });
     return;
   }
   for (let index = 0; index < pose.length; index += 1) {
     const transform = pose[index];
     if (!transform || !isValidAdditiveReferenceTransform(transform)) {
-      issues.push({ joint: skeleton.joints[index]?.name ?? String(index), index, message: `${label} transform is not finite or quaternion is invalid` });
+      issues.push({
+        joint: skeleton.joints[index]?.name ?? String(index),
+        index,
+        message: `${label} transform is not finite or quaternion is invalid`
+      });
     }
   }
 }
@@ -1034,18 +1214,25 @@ function sampleRawAnimationRatioToTime(rawAnimation: RawAnimation, ratio: number
   return clamp(Number.isFinite(ratio) ? ratio : 0, 0, 1) * rawAnimation.duration;
 }
 
-function sampleValidatedRawAnimation(rawAnimation: RawAnimation, time: number, options: RawAnimationSampleOptions | RawAnimationRatioSampleOptions): Pose {
+function sampleValidatedRawAnimation(
+  rawAnimation: RawAnimation,
+  time: number,
+  options: RawAnimationSampleOptions | RawAnimationRatioSampleOptions
+): Pose {
   const tracks = readRawAnimationTracks(rawAnimation);
   if (!options.skeleton) return tracks.map((track) => sampleRawAnimationJointTrackNoValidate(track, time));
 
   const skeleton = options.skeleton;
   const restPose = options.restPose ?? createRestPose(skeleton);
-  const output = Array.from({ length: skeleton.joints.length }, (_, joint) => cloneTransform(readPoseTransformOrRest(skeleton, restPose, joint)));
+  const output = Array.from({ length: skeleton.joints.length }, (_, joint) =>
+    cloneTransform(readPoseTransformOrRest(skeleton, restPose, joint))
+  );
   for (const track of tracks) {
     const jointIndex = readRawAnimationTarget(track, skeleton).jointIndex;
     if (jointIndex < 0) continue;
     const transform = cloneTransform(output[jointIndex]);
-    if (track.translations.length > 0) transform.translation = sampleRawAnimationVec3Keys(track.translations, time, "translation");
+    if (track.translations.length > 0)
+      transform.translation = sampleRawAnimationVec3Keys(track.translations, time, "translation");
     if (track.rotations.length > 0) transform.rotation = sampleRawAnimationQuaternionKeys(track.rotations, time);
     if (track.scales.length > 0) transform.scale = sampleRawAnimationVec3Keys(track.scales, time, "scale");
     output[jointIndex] = transform;
@@ -1077,24 +1264,37 @@ type ModelSpaceSampleErrorAccumulator = ModelSpaceJointSampleErrorAccumulator & 
   joints: ModelSpaceJointSampleErrorAccumulator[];
 };
 
-function assertValidAnimationSampleSource(source: RawAnimation | AnimationClip, skeleton: Skeleton, label: string): void {
+function assertValidAnimationSampleSource(
+  source: RawAnimation | AnimationClip,
+  skeleton: Skeleton,
+  label: string
+): void {
   if (isRawAnimationSampleSource(source)) {
     const issues = validateRawAnimation(source, skeleton);
-    if (issues.length > 0) throw new Error(`${label} raw animation is invalid: ${issues.map(formatRawAnimationIssue).join("; ")}`);
+    if (issues.length > 0)
+      throw new Error(`${label} raw animation is invalid: ${issues.map(formatRawAnimationIssue).join("; ")}`);
     return;
   }
-  const issues = validateClip(source as AnimationClip, skeleton);
-  if (issues.length > 0) throw new Error(`${label} animation clip is invalid: ${issues.map(formatClipIssue).join("; ")}`);
+  const issues = validateClip(source, skeleton);
+  if (issues.length > 0)
+    throw new Error(`${label} animation clip is invalid: ${issues.map(formatClipIssue).join("; ")}`);
 }
 
 function isRawAnimationSampleSource(source: RawAnimation | AnimationClip): source is RawAnimation {
-  return Array.isArray(source.tracks) && source.tracks.some((track) => "translations" in track || "rotations" in track || "scales" in track);
+  return (
+    Array.isArray(source.tracks) &&
+    source.tracks.some((track) => "translations" in track || "rotations" in track || "scales" in track)
+  );
 }
 
-function readAnimationSampleErrorTimes(reference: RawAnimation | AnimationClip, options: AnimationSampleErrorOptions): readonly number[] {
+function readAnimationSampleErrorTimes(
+  reference: RawAnimation | AnimationClip,
+  options: AnimationSampleErrorOptions
+): readonly number[] {
   if (options.sampleTimes !== undefined) {
     const times = Array.from(options.sampleTimes);
-    if (times.some((time) => !Number.isFinite(time))) throw new Error("animation sample error sampleTimes must contain finite values");
+    if (times.some((time) => !Number.isFinite(time)))
+      throw new Error("animation sample error sampleTimes must contain finite values");
     return Object.freeze(times);
   }
   const frequency = options.sampleFrequency ?? 30;
@@ -1117,9 +1317,9 @@ function sampleAnimationSource(
     if (restPose !== undefined) options.restPose = restPose;
     return sampleRawAnimation(source, time, options);
   }
-  const options: SampleOptions = { loop: loop ?? (source as AnimationClip).loop ?? false };
+  const options: SampleOptions = { loop: loop ?? source.loop ?? false };
   if (restPose !== undefined) options.restPose = restPose;
-  return sampleClipToPose(skeleton, source as AnimationClip, time, options);
+  return sampleClipToPose(skeleton, source, time, options);
 }
 
 function createSampleErrorAccumulator(): AnimationSampleErrorAccumulator {
@@ -1139,7 +1339,13 @@ function createModelSpaceSampleErrorAccumulator(skeleton: Skeleton): ModelSpaceS
   };
 }
 
-function pushSampleError(accumulator: AnimationSampleErrorAccumulator, error: number, sample: number, time: number, jointIndex: number): void {
+function pushSampleError(
+  accumulator: AnimationSampleErrorAccumulator,
+  error: number,
+  sample: number,
+  time: number,
+  jointIndex: number
+): void {
   accumulator.sum += error * error;
   if (error > accumulator.max) {
     accumulator.max = error;
@@ -1175,7 +1381,11 @@ function pushModelSpaceSampleError(
   }
 }
 
-function finishSampleErrorAccumulator(accumulator: AnimationSampleErrorAccumulator, sampleCount: number, skeleton: Skeleton): AnimationSampleErrorMetric {
+function finishSampleErrorAccumulator(
+  accumulator: AnimationSampleErrorAccumulator,
+  sampleCount: number,
+  skeleton: Skeleton
+): AnimationSampleErrorMetric {
   const metric: AnimationSampleErrorMetric = {
     rms: sampleCount > 0 ? Math.sqrt(accumulator.sum / sampleCount) : 0,
     max: accumulator.max
@@ -1204,24 +1414,30 @@ function finishModelSpaceSampleErrorAccumulator(
     position: finishSampleErrorAccumulator(accumulator.position, jointSampleCount, skeleton),
     rotation: finishSampleErrorAccumulator(accumulator.rotation, jointSampleCount, skeleton),
     scale: finishSampleErrorAccumulator(accumulator.scale, jointSampleCount, skeleton),
-    joints: accumulator.joints.map((joint, jointIndex): AnimationModelSpaceJointSampleError => ({
-      jointIndex,
-      joint: skeleton.joints[jointIndex]?.name ?? String(jointIndex),
-      position: finishSampleErrorAccumulator(joint.position, sampleCount, skeleton),
-      rotation: finishSampleErrorAccumulator(joint.rotation, sampleCount, skeleton),
-      scale: finishSampleErrorAccumulator(joint.scale, sampleCount, skeleton)
-    }))
+    joints: accumulator.joints.map(
+      (joint, jointIndex): AnimationModelSpaceJointSampleError => ({
+        jointIndex,
+        joint: skeleton.joints[jointIndex]?.name ?? String(jointIndex),
+        position: finishSampleErrorAccumulator(joint.position, sampleCount, skeleton),
+        rotation: finishSampleErrorAccumulator(joint.rotation, sampleCount, skeleton),
+        scale: finishSampleErrorAccumulator(joint.scale, sampleCount, skeleton)
+      })
+    )
   };
 }
 
-function createModelSpaceComparablePose(skeleton: Skeleton, localPose: readonly Transform[]): ModelSpaceComparableTransform[] {
+function createModelSpaceComparablePose(
+  skeleton: Skeleton,
+  localPose: readonly Transform[]
+): ModelSpaceComparableTransform[] {
   const modelPose = localToModelPose(skeleton, localPose);
   const output: ModelSpaceComparableTransform[] = [];
   for (let jointIndex = 0; jointIndex < skeleton.joints.length; jointIndex += 1) {
     const local = readPoseTransformOrRest(skeleton, localPose, jointIndex);
     const parentIndex = skeleton.joints[jointIndex]!.parentIndex;
     const parent = parentIndex >= 0 ? output[parentIndex] : undefined;
-    if (parentIndex >= 0 && !parent) throw new Error(`model pose for parent ${parentIndex} must be available before comparing joint ${jointIndex}`);
+    if (parentIndex >= 0 && !parent)
+      throw new Error(`model pose for parent ${parentIndex} must be available before comparing joint ${jointIndex}`);
     const scale = parent ? multiplyVec3Components(parent.scale, local.scale) : cloneVec3(local.scale, ONE_VEC3);
     const rotation = parent ? multiplyQuat(parent.rotation, local.rotation) : normalizeQuat(cloneQuat(local.rotation));
     output[jointIndex] = {
@@ -1253,7 +1469,11 @@ function sampleRawAnimationJointTrackNoValidate(track: RawAnimationJointTrack, t
   };
 }
 
-function sampleRawAnimationVec3Keys(keys: readonly RawAnimationVec3Key[], time: number, property: "translation" | "scale"): Vec3 {
+function sampleRawAnimationVec3Keys(
+  keys: readonly RawAnimationVec3Key[],
+  time: number,
+  property: "translation" | "scale"
+): Vec3 {
   if (keys.length === 0) return defaultTrackSample(property) as Vec3;
   if (time <= keys[0]!.time) return cloneVec3(keys[0]!.value, property === "scale" ? ONE_VEC3 : undefined);
   const last = keys.length - 1;
@@ -1294,7 +1514,9 @@ function findLowerRawAnimationKey(keys: readonly { time: number }[], time: numbe
   return low - 1;
 }
 
-function readRawAnimationPropertyFilter(properties: readonly TrackProperty[] | undefined): ReadonlySet<NormalizedTrackProperty> | null {
+function readRawAnimationPropertyFilter(
+  properties: readonly TrackProperty[] | undefined
+): ReadonlySet<NormalizedTrackProperty> | null {
   if (!properties) return null;
   const filter = new Set<NormalizedTrackProperty>();
   for (const property of properties) {
@@ -1305,7 +1527,10 @@ function readRawAnimationPropertyFilter(properties: readonly TrackProperty[] | u
   return filter;
 }
 
-function readRawAnimationJointFilter(joints: readonly (number | string)[] | undefined, skeleton: Skeleton | undefined): ReadonlySet<string> | null {
+function readRawAnimationJointFilter(
+  joints: readonly (number | string)[] | undefined,
+  skeleton: Skeleton | undefined
+): ReadonlySet<string> | null {
   if (!joints) return null;
   const filter = new Set<string>();
   for (const joint of joints) {
@@ -1313,7 +1538,10 @@ function readRawAnimationJointFilter(joints: readonly (number | string)[] | unde
       filter.add(String(joint));
       continue;
     }
-    const jointIndex = typeof joint === "number" ? readRawAnimationFilterJointIndex(skeleton, joint) : resolveJointIndex(skeleton, joint);
+    const jointIndex =
+      typeof joint === "number"
+        ? readRawAnimationFilterJointIndex(skeleton, joint)
+        : resolveJointIndex(skeleton, joint);
     if (jointIndex < 0) throw new Error(`raw animation timepoint joint ${String(joint)} was not found`);
     filter.add(String(jointIndex));
   }
@@ -1381,27 +1609,47 @@ function validateRawAnimationTrackTarget(
   const fallbackName = String(track.joint ?? track.humanBone ?? "");
 
   if (hasJoint === hasHumanBone) {
-    issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation joint track needs exactly one joint or humanBone target" });
+    issues.push({
+      track: trackIndex,
+      joint: fallbackName,
+      message: "raw animation joint track needs exactly one joint or humanBone target"
+    });
     return { key: null, name: fallbackName, jointIndex: -1 };
   }
   if (hasJoint && (typeof track.joint !== "string" || track.joint.length === 0)) {
-    issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation joint target must be a non-empty string" });
+    issues.push({
+      track: trackIndex,
+      joint: fallbackName,
+      message: "raw animation joint target must be a non-empty string"
+    });
     return { key: null, name: fallbackName, jointIndex: -1 };
   }
   if (hasHumanBone) {
     if (typeof track.humanBone !== "string" || track.humanBone.length === 0) {
-      issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation humanBone target must be a non-empty string" });
+      issues.push({
+        track: trackIndex,
+        joint: fallbackName,
+        message: "raw animation humanBone target must be a non-empty string"
+      });
       return { key: null, name: fallbackName, jointIndex: -1 };
     }
     if (!isHumanoidBoneName(track.humanBone)) {
-      issues.push({ track: trackIndex, joint: track.humanBone, message: `raw animation track has unknown humanoid bone ${track.humanBone}` });
+      issues.push({
+        track: trackIndex,
+        joint: track.humanBone,
+        message: `raw animation track has unknown humanoid bone ${track.humanBone}`
+      });
       return { key: null, name: track.humanBone, jointIndex: -1 };
     }
   }
 
   if (!skeleton) return { key: fallbackName, name: fallbackName, jointIndex: -1 };
 
-  const jointIndex = hasJoint ? resolveJointIndex(skeleton, track.joint!) : resolveHumanoidIndex(skeleton, track.humanBone as HumanoidBoneName);
+  const jointIndex = hasJoint
+    ? resolveJointIndex(skeleton, track.joint!)
+    : track.humanBone && isHumanoidBoneName(track.humanBone)
+      ? resolveHumanoidIndex(skeleton, track.humanBone)
+      : -1;
   if (jointIndex < 0) {
     issues.push({ track: trackIndex, joint: fallbackName, message: "raw animation track does not map to skeleton" });
     return { key: null, name: fallbackName, jointIndex: -1 };
@@ -1422,22 +1670,47 @@ function validateRawAnimationKeys(
   for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
     const key = keys[keyIndex] as RawAnimationVec3Key | RawAnimationQuaternionKey | undefined;
     if (!isRawAnimationKeyObject(key)) {
-      issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key must be an object" });
+      issues.push({
+        track: trackIndex,
+        key: keyIndex,
+        joint,
+        property,
+        message: "raw animation key must be an object"
+      });
       continue;
     }
     if (!Number.isFinite(key.time)) {
-      issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key time must be finite" });
+      issues.push({
+        track: trackIndex,
+        key: keyIndex,
+        joint,
+        property,
+        message: "raw animation key time must be finite"
+      });
     } else {
       if (key.time < 0 || key.time > duration) {
-        issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key time must be within raw animation duration" });
+        issues.push({
+          track: trackIndex,
+          key: keyIndex,
+          joint,
+          property,
+          message: "raw animation key time must be within raw animation duration"
+        });
       }
       if (key.time <= previousTime) {
-        issues.push({ track: trackIndex, key: keyIndex, joint, property, message: "raw animation key times must be in strict ascending order" });
+        issues.push({
+          track: trackIndex,
+          key: keyIndex,
+          joint,
+          property,
+          message: "raw animation key times must be in strict ascending order"
+        });
       }
       previousTime = key.time;
     }
 
-    if (property === "rotation") validateRawAnimationQuaternionValue(issues, key.value, trackIndex, keyIndex, joint, property);
+    if (property === "rotation")
+      validateRawAnimationQuaternionValue(issues, key.value, trackIndex, keyIndex, joint, property);
     else validateRawAnimationVec3Value(issues, key.value, trackIndex, keyIndex, joint, property);
   }
 }
@@ -1452,7 +1725,13 @@ function validateRawAnimationVec3Value(
 ): void {
   const length = rawArrayLikeLength(value);
   if (length !== 3) {
-    issues.push({ track, key, joint, property, message: `raw animation ${property} key value must contain exactly 3 values` });
+    issues.push({
+      track,
+      key,
+      joint,
+      property,
+      message: `raw animation ${property} key value must contain exactly 3 values`
+    });
     return;
   }
   for (let component = 0; component < 3; component += 1) {
@@ -1473,7 +1752,13 @@ function validateRawAnimationQuaternionValue(
 ): void {
   const length = rawArrayLikeLength(value);
   if (length !== 4) {
-    issues.push({ track, key, joint, property, message: "raw animation rotation key value must contain exactly 4 values" });
+    issues.push({
+      track,
+      key,
+      joint,
+      property,
+      message: "raw animation rotation key value must contain exactly 4 values"
+    });
     return;
   }
   const components = value as ArrayLike<number>;
@@ -1489,10 +1774,18 @@ function validateRawAnimationQuaternionValue(
   }
 }
 
-function readRawAnimationTarget(track: RawAnimationJointTrack, skeleton?: Skeleton): { key: string; name: string; jointIndex: number } {
+function readRawAnimationTarget(
+  track: RawAnimationJointTrack,
+  skeleton?: Skeleton
+): { key: string; name: string; jointIndex: number } {
   const targetName = String(track.joint ?? track.humanBone ?? "");
   if (!skeleton) return { key: targetName, name: targetName, jointIndex: -1 };
-  const jointIndex = track.joint !== undefined ? resolveJointIndex(skeleton, track.joint) : resolveHumanoidIndex(skeleton, track.humanBone as HumanoidBoneName);
+  const jointIndex =
+    track.joint !== undefined
+      ? resolveJointIndex(skeleton, track.joint)
+      : track.humanBone && isHumanoidBoneName(track.humanBone)
+        ? resolveHumanoidIndex(skeleton, track.humanBone)
+        : -1;
   const jointName = skeleton.joints[jointIndex]?.name ?? targetName;
   return { key: String(jointIndex), name: `${jointName}[${jointIndex}]`, jointIndex };
 }
@@ -1537,13 +1830,19 @@ function readRawAnimationTracks(rawAnimation: RawAnimation): readonly RawAnimati
   return tracks;
 }
 
-function readRawAnimationKeys(track: RawAnimationJointTrack, property: NormalizedTrackProperty): readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[] {
+function readRawAnimationKeys(
+  track: RawAnimationJointTrack,
+  property: NormalizedTrackProperty
+): readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[] {
   const keys = readRawAnimationKeysForValidation(track, property);
   if (!keys) throw new Error(`raw animation ${property} keys must be an array`);
   return keys as readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[];
 }
 
-function readRawAnimationKeysForValidation(track: RawAnimationJointTrack, property: NormalizedTrackProperty): readonly unknown[] | null {
+function readRawAnimationKeysForValidation(
+  track: RawAnimationJointTrack,
+  property: NormalizedTrackProperty
+): readonly unknown[] | null {
   if (property === "translation") return Array.isArray(track.translations) ? track.translations : null;
   if (property === "rotation") return Array.isArray(track.rotations) ? track.rotations : null;
   return Array.isArray(track.scales) ? track.scales : null;
@@ -1574,4 +1873,3 @@ function assertRawAnimationJointTrackObject(value: unknown, label: string): asse
 function isRawAnimationKeyObject(value: unknown): value is { time: number; value: unknown } {
   return typeof value === "object" && value !== null && "time" in value && "value" in value;
 }
-

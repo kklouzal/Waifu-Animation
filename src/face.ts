@@ -1,4 +1,12 @@
-import { type RandomSource, clamp01, createSeededRandom, dampAlpha, dampValue, finiteNonNegative, randomRange } from "./math.js";
+import {
+  type RandomSource,
+  clamp01,
+  createSeededRandom,
+  dampAlpha,
+  dampValue,
+  finiteNonNegative,
+  randomRange
+} from "./math.js";
 
 export const VISEME_NAMES = ["aa", "ih", "ou", "ee", "oh"] as const;
 export type VisemeName = (typeof VISEME_NAMES)[number];
@@ -195,7 +203,12 @@ export class FacialExpressionMixer {
     this.setTarget(input);
     const talking = input.talking ?? true;
     const target = talking ? this.targetMouth : 0;
-    this.mouthLevel = dampValue(this.mouthLevel, target, target > this.mouthLevel ? this.mouthAttack : this.mouthRelease, deltaSeconds);
+    this.mouthLevel = dampValue(
+      this.mouthLevel,
+      target,
+      target > this.mouthLevel ? this.mouthAttack : this.mouthRelease,
+      deltaSeconds
+    );
     const visemes = this.visemes.update(deltaSeconds, talking);
     return {
       mouthLevel: this.mouthLevel,
@@ -205,7 +218,9 @@ export class FacialExpressionMixer {
   }
 }
 
-export function composeFacialExpressions(input: FacialExpressionInput & { visemes?: VisemeWeights }): Record<string, number> {
+export function composeFacialExpressions(
+  input: FacialExpressionInput & { visemes?: VisemeWeights }
+): Record<string, number> {
   const talking = input.talking ?? true;
   const energy = clamp01(input.energy ?? 0);
   const rapport = clamp01(input.rapport ?? 0);
@@ -216,7 +231,11 @@ export function composeFacialExpressions(input: FacialExpressionInput & { viseme
   const state = input.state ?? "idle";
   const warmSmile = mood === "warm" || mood === "playful" ? 0.05 + rapport * 0.07 : 0;
   const speechSmile = talking ? 1 : 0.26;
-  const smile = clamp01(warmSmile + cueSmile * 0.42 + (emotion === "happy" || emotion === "amused" ? (0.12 + energy * 0.16) * speechSmile : 0));
+  const smile = clamp01(
+    warmSmile +
+      cueSmile * 0.42 +
+      (emotion === "happy" || emotion === "amused" ? (0.12 + energy * 0.16) * speechSmile : 0)
+  );
   const thoughtful = emotion === "thinking" || state === "thinking" ? 0.18 + cueThinking * 0.16 : 0;
   const visemes = input.visemes ? visemeWeights((name) => clamp01(input.visemes?.[name] ?? 0)) : zeroVisemes();
   return {
@@ -230,7 +249,9 @@ export function composeFacialExpressions(input: FacialExpressionInput & { viseme
   };
 }
 
-export function mixExpressions(layers: Array<{ values: Record<string, number>; weight: number }>): Record<string, number> {
+export function mixExpressions(
+  layers: Array<{ values: Record<string, number>; weight: number }>
+): Record<string, number> {
   const output: Record<string, number> = {};
   for (const layer of layers) {
     const weight = clamp01(layer.weight);

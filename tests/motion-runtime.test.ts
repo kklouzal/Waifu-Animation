@@ -1,4 +1,8 @@
-import { runMotionAttachmentTests, runMotionRuntimeDiagnosticTests, runMotionThreeRuntimeUtilityTests } from "./motion-attachments-runtime.test.js";
+import {
+  runMotionAttachmentTests,
+  runMotionRuntimeDiagnosticTests,
+  runMotionThreeRuntimeUtilityTests
+} from "./motion-attachments-runtime.test.js";
 import { runMotionPosePolicyTests } from "./motion-pose-policy.test.js";
 import { runMotionPoseSamplingTests } from "./motion-pose-sampling.test.js";
 import { runMotionRootMotionTests, runMotionRuntimeRootMotionTests } from "./motion-root-motion.test.js";

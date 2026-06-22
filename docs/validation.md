@@ -82,7 +82,6 @@ Targeted presence-planner validation after moving deterministic cue/gaze/body ta
 - Command: `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/presence-planner/actions npm run visual:actions`
 - Result: passed with nine captures, recorded WebM, zero bad logs, zero motion issues, and bounded pose deltas from `0.0097` to `0.0352` across idle, speaking, thinking, emphasize, wave, listening, and shrug states.
 
-
 Historical targeted rendered foot-plant application validation after adding the reusable Three.js application hook:
 
 - Artifact directory: `/Warehouse/Waifu/cache/waifu-animation-foundation/2026-06-08/foot-plant-apply/animations`
@@ -111,7 +110,6 @@ The generated Mocap Online library currently records explicit root-motion policy
 - The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. See `docs/architecture.md` for the current Waifu skeletal runtime policy this validation assumes.
 - The package exposes an Ozz-inspired foot-plant planning job, reusable two-bone IK correction quaternions, and optional Three.js application hooks. Those remain reusable library capabilities, but current Waifu visual gates should not rely on app-side foot-plant application flags.
 - The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, non-skeletal look-at/face/viseme cues, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, arbitrary rendered foot planting, preserved root-motion application, prop attachments, or multi-avatar retargeting.
-
 
 ## 2026-06-08 Final Hardening Pass
 

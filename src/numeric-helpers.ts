@@ -15,10 +15,13 @@ const IDENTITY_MAT4_VALUES = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] as
 export function cloneFiniteMat4(matrix: NumericArray | undefined, options: CloneFiniteMat4Options = {}): Mat4 {
   if (isFiniteMat4(matrix, options)) return cloneMat4(matrix);
   if (isFiniteMat4(options.fallback, options)) return cloneMat4(options.fallback);
-  return new Float32Array(IDENTITY_MAT4_VALUES) as Mat4;
+  return new Float32Array(IDENTITY_MAT4_VALUES);
 }
 
-export function isFiniteMat4(matrix: NumericArray | undefined, options: FiniteMat4Options = {}): matrix is NumericArray {
+export function isFiniteMat4(
+  matrix: NumericArray | undefined,
+  options: FiniteMat4Options = {}
+): matrix is NumericArray {
   if (!matrix || matrix.length < 16) return false;
   if (options.requireIntegerLength === true && !Number.isInteger(matrix.length)) return false;
   for (let index = 0; index < 16; index += 1) {
@@ -68,11 +71,14 @@ export function sanitizePositiveIntegerWithFlooredFallback(value: number | undef
   return Number.isInteger(value) && value! > 0 ? value! : resolvedFallback;
 }
 
-export function sanitizeNonNegativeIntegerWithFlooredFallbackOrZero(value: number | undefined, fallback: number): number {
+export function sanitizeNonNegativeIntegerWithFlooredFallbackOrZero(
+  value: number | undefined,
+  fallback: number
+): number {
   if (value === undefined) return Math.max(0, Math.floor(fallback));
   return Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 function cloneMat4(matrix: NumericArray): Mat4 {
-  return new Float32Array(Array.from({ length: 16 }, (_, index) => matrix[index]!)) as Mat4;
+  return new Float32Array(Array.from({ length: 16 }, (_, index) => matrix[index]!));
 }

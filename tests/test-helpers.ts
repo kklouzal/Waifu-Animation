@@ -1,18 +1,20 @@
-import {
+import type {
   AnimationAction,
   AnimationManifestEntry,
-  AnimationMixer,
   AnimationRuntime,
   AnimationClip,
-  LoopOnce,
-  Object3D,
   Pose,
   ThreeRuntimeClip,
+  createThreeAnimationClip
+} from "./test-api.js";
+import {
+  AnimationMixer,
+  LoopOnce,
+  Object3D,
   Vector3,
   WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
   createSkeleton,
-  createThreeAnimationClip,
   normalizeVec3,
   quatFromAxisAngle,
   sampleClipToPose,
@@ -21,7 +23,10 @@ import {
   transformPoint
 } from "./test-api.js";
 
-type SourceRestQuaternionTrackOverrides = Omit<Partial<AnimationClip["tracks"][number]>, "sourceRestQuaternion" | "times" | "values"> & {
+type SourceRestQuaternionTrackOverrides = Omit<
+  Partial<AnimationClip["tracks"][number]>,
+  "sourceRestQuaternion" | "times" | "values"
+> & {
   sourceRestQuaternion?: ArrayLike<number>;
   times?: ArrayLike<number>;
   values?: ArrayLike<number>;
@@ -69,7 +74,10 @@ export const nodClip: AnimationClip = {
   ]
 };
 
-export function createRootMotionTestFixture(): { motionSkeleton: ReturnType<typeof createSkeleton>; motionClip: AnimationClip } {
+export function createRootMotionTestFixture(): {
+  motionSkeleton: ReturnType<typeof createSkeleton>;
+  motionClip: AnimationClip;
+} {
   const motionSkeleton = createSkeleton([
     { name: "root" },
     { name: "hips", parentName: "root", humanoid: "hips", rest: { translation: [0, 1, 0] } },
@@ -80,14 +88,24 @@ export function createRootMotionTestFixture(): { motionSkeleton: ReturnType<type
     duration: 1,
     loop: true,
     tracks: [
-      { joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 10, 0, 0]) },
+      {
+        joint: "root",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 10, 0, 0])
+      },
       {
         joint: "root",
         property: "rotation",
         times: toFloat32Array([0, 1]),
         values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI)])
       },
-      { humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 1, 0, 0, 1, 6]) }
+      {
+        humanBone: "hips",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 1, 0, 0, 1, 6])
+      }
     ]
   };
   return { motionSkeleton, motionClip };
@@ -132,7 +150,10 @@ export function assertFinitePose(pose: Pose): void {
   }
 }
 
-export function makeSourceRestQuaternionClip(id: string, track: SourceRestQuaternionTrackOverrides = {}): AnimationClip {
+export function makeSourceRestQuaternionClip(
+  id: string,
+  track: SourceRestQuaternionTrackOverrides = {}
+): AnimationClip {
   return {
     id,
     duration: 1,
@@ -140,8 +161,17 @@ export function makeSourceRestQuaternionClip(id: string, track: SourceRestQuater
   };
 }
 
-export function makeSourceRestQuaternionTrack(track: SourceRestQuaternionTrackOverrides = {}): AnimationClip["tracks"][number] {
-  const { humanBone = "head", joint, property = "quaternion", sourceRestQuaternion = [0, 0, 0, 1], times = [0], values = [0, 0, 0, 1] } = track;
+export function makeSourceRestQuaternionTrack(
+  track: SourceRestQuaternionTrackOverrides = {}
+): AnimationClip["tracks"][number] {
+  const {
+    humanBone = "head",
+    joint,
+    property = "quaternion",
+    sourceRestQuaternion = [0, 0, 0, 1],
+    times = [0],
+    values = [0, 0, 0, 1]
+  } = track;
   return {
     ...(joint === undefined ? { humanBone } : { joint }),
     property,
@@ -151,7 +181,12 @@ export function makeSourceRestQuaternionTrack(track: SourceRestQuaternionTrackOv
   };
 }
 
-export function makeTransformTrack(humanBone: string, property: "position" | "translation" | "quaternion", values: number[], times = [0]): AnimationClip["tracks"][number] {
+export function makeTransformTrack(
+  humanBone: string,
+  property: "position" | "translation" | "quaternion",
+  values: number[],
+  times = [0]
+): AnimationClip["tracks"][number] {
   return { humanBone, property, times: toFloat32Array(times), values: toFloat32Array(values) };
 }
 
@@ -217,7 +252,12 @@ export function binaryFloatByteOffsetForTest(buffer: ArrayBuffer): number {
   return headerBytes + trackCount * trackBytes + align4ForTest(stringBytes);
 }
 
-export function attachArmChain(root: Object3D, bones: Map<string, Object3D>, side: "left" | "right", sign: 1 | -1): void {
+export function attachArmChain(
+  root: Object3D,
+  bones: Map<string, Object3D>,
+  side: "left" | "right",
+  sign: 1 | -1
+): void {
   const upper = bones.get(`${side}UpperArm`)!;
   const lower = bones.get(`${side}LowerArm`)!;
   const hand = bones.get(`${side}Hand`)!;
@@ -277,7 +317,7 @@ export function makeRuntimeClipDiagnosticStub(options: {
     ...(options.emotions ? { emotions: options.emotions } : {}),
     ...(options.gestures ? { gestures: options.gestures } : {}),
     ...(options.source ? { source: options.source } : {})
-  } as ThreeRuntimeClip;
+  };
 }
 
 export function makeRuntimeActionStub(initialWeight: number): RuntimeActionStub {
@@ -328,7 +368,10 @@ export function makeRuntimeActionStub(initialWeight: number): RuntimeActionStub 
   } as unknown as RuntimeActionStub;
 }
 
-export function createMirroredLimbBones(mirroredLimbTargetRestLeft: readonly number[], mirroredLimbTargetRestRight: readonly number[]) {
+export function createMirroredLimbBones(
+  mirroredLimbTargetRestLeft: readonly number[],
+  mirroredLimbTargetRestRight: readonly number[]
+) {
   const root = new Object3D();
   root.name = "mirroredLimbRoot";
 
@@ -356,7 +399,12 @@ export function createMirroredLimbBones(mirroredLimbTargetRestLeft: readonly num
   return { root, leftUpperArm, leftLowerArm, rightUpperArm, rightLowerArm };
 }
 
-export function createSingleLimbBones(targetRest: readonly number[], upperName = "leftUpperArm", lowerName = "leftLowerArm", lowerOffset: readonly number[] = [0, 1, 0]) {
+export function createSingleLimbBones(
+  targetRest: readonly number[],
+  upperName = "leftUpperArm",
+  lowerName = "leftLowerArm",
+  lowerOffset: readonly number[] = [0, 1, 0]
+) {
   const root = new Object3D();
   root.name = "singleLimbRoot";
 
@@ -416,17 +464,28 @@ export function modelPosition(matrix: Float32Array): [number, number, number] {
   return transformPoint(matrix, [0, 0, 0]);
 }
 
-export function matrixDirection(matrix: Float32Array, localDirection: [number, number, number]): [number, number, number] {
+export function matrixDirection(
+  matrix: Float32Array,
+  localDirection: [number, number, number]
+): [number, number, number] {
   const origin = modelPosition(matrix);
   const point = transformPoint(matrix, localDirection);
   return normalizeVec3([point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]]);
 }
 
-export function assertMat4NearlyEqual(actual: ArrayLike<number>, expected: ArrayLike<number>, tolerance: number, message: string): void {
+export function assertMat4NearlyEqual(
+  actual: ArrayLike<number>,
+  expected: ArrayLike<number>,
+  tolerance: number,
+  message: string
+): void {
   assert.equal(actual.length, 16, `${message}: actual matrix length`);
   assert.equal(expected.length, 16, `${message}: expected matrix length`);
   for (let index = 0; index < 16; index += 1) {
-    assert.ok(Math.abs(actual[index]! - expected[index]!) <= tolerance, `${message}: matrix value ${index} expected ${expected[index]} got ${actual[index]}`);
+    assert.ok(
+      Math.abs(actual[index]! - expected[index]!) <= tolerance,
+      `${message}: matrix value ${index} expected ${expected[index]} got ${actual[index]}`
+    );
   }
 }
 
@@ -482,7 +541,11 @@ export function assertFiniteSampleErrorMetric(metric: { rms: number; max: number
   assert.ok(Number.isFinite(metric.max), `${label} max should be finite`);
 }
 
-export function quaternionNearlyEqual(actual: readonly number[], expected: readonly number[], tolerance: number): boolean {
+export function quaternionNearlyEqual(
+  actual: readonly number[],
+  expected: readonly number[],
+  tolerance: number
+): boolean {
   const direct =
     Math.abs(actual[0]! - expected[0]!) <= tolerance &&
     Math.abs(actual[1]! - expected[1]!) <= tolerance &&

@@ -197,7 +197,10 @@ function resolveRigidInstanceMatrix(
   return cloneFiniteMat4(source, { fallback: options.fallbackMatrix, requireIntegerLength: true });
 }
 
-function resolveRigidInstanceCount(modelMatrices: readonly MatrixLike[], options: Pick<RigidInstanceMatrixOptions, "count" | "jointIndices">): number {
+function resolveRigidInstanceCount(
+  modelMatrices: readonly MatrixLike[],
+  options: Pick<RigidInstanceMatrixOptions, "count" | "jointIndices">
+): number {
   const fallback = options.jointIndices ? options.jointIndices.length : modelMatrices.length;
   const count = sanitizeNonNegativeIntegerWithFlooredFallbackOrZero(options.count, fallback);
   return Math.min(count, fallback);

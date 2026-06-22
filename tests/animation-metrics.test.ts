@@ -1,14 +1,5 @@
-import {
-  AnimationRuntime,
-  assert,
-  clonePose,
-  poseDeltaMetric,
-  poseRotationMetric
-} from "./test-api.js";
-import {
-  nodClip,
-  skeleton
-} from "./test-helpers.js";
+import { AnimationRuntime, assert, clonePose, poseDeltaMetric, poseRotationMetric } from "./test-api.js";
+import { nodClip, skeleton } from "./test-helpers.js";
 
 export function createAnimationMetricsEvaluation(): ReturnType<AnimationRuntime["evaluate"]> {
   const metricRuntime = new AnimationRuntime(skeleton);
@@ -20,7 +11,12 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
   const metric = poseRotationMetric(skeleton.restPose, evaluated.localPose);
   assert.ok(metric.maxRotationDelta > 0);
   const signEquivalentPose = clonePose(skeleton.restPose);
-  signEquivalentPose[2]!.rotation = signEquivalentPose[2]!.rotation.map((component) => -component) as [number, number, number, number];
+  signEquivalentPose[2]!.rotation = signEquivalentPose[2]!.rotation.map((component) => -component) as [
+    number,
+    number,
+    number,
+    number
+  ];
   assert.equal(
     poseRotationMetric(skeleton.restPose, signEquivalentPose).maxRotationDelta,
     0,
@@ -37,9 +33,21 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
   invalidRotationMetricPose[1]!.rotation = [Number.NaN, 0, 0, 1];
   invalidRotationMetricPose[3]!.rotation = [0, 0, 0, 0];
   const invalidRotationMetric = poseRotationMetric(skeleton.restPose, invalidRotationMetricPose);
-  assert.equal(Number.isFinite(invalidRotationMetric.rmsRotationDelta), true, "pose rotation RMS should stay finite for invalid quaternions");
-  assert.equal(Number.isFinite(invalidRotationMetric.maxRotationDelta), true, "pose rotation max should stay finite for invalid quaternions");
-  assert.equal(invalidRotationMetric.invalidSamples, 2, "pose rotation metrics should count skipped invalid quaternion samples");
+  assert.equal(
+    Number.isFinite(invalidRotationMetric.rmsRotationDelta),
+    true,
+    "pose rotation RMS should stay finite for invalid quaternions"
+  );
+  assert.equal(
+    Number.isFinite(invalidRotationMetric.maxRotationDelta),
+    true,
+    "pose rotation max should stay finite for invalid quaternions"
+  );
+  assert.equal(
+    invalidRotationMetric.invalidSamples,
+    2,
+    "pose rotation metrics should count skipped invalid quaternion samples"
+  );
   assert.ok(
     invalidRotationMetric.maxRotationDelta > 1.56 && invalidRotationMetric.maxRotationDelta < 1.58,
     "pose rotation metrics should keep valid finite quaternion samples when invalid samples are skipped"
@@ -79,12 +87,32 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
   invalidPoseDeltaB[3]!.rotation = [0, 2, 0, 2];
   const invalidPoseDelta = poseDeltaMetric(invalidPoseDeltaA, invalidPoseDeltaB, skeleton);
   assert.equal(invalidPoseDelta.samples, skeleton.restPose.length);
-  assert.equal(invalidPoseDelta.translation.invalidSamples, 2, "pose delta metrics should count skipped invalid translation samples");
-  assert.equal(invalidPoseDelta.scale.invalidSamples, 2, "pose delta metrics should count skipped invalid scale samples");
-  assert.equal(invalidPoseDelta.rotation.invalidSamples, 2, "pose delta metrics should count skipped invalid rotation samples");
-  assert.equal(Number.isFinite(invalidPoseDelta.translation.rms), true, "translation RMS should stay finite for invalid samples");
+  assert.equal(
+    invalidPoseDelta.translation.invalidSamples,
+    2,
+    "pose delta metrics should count skipped invalid translation samples"
+  );
+  assert.equal(
+    invalidPoseDelta.scale.invalidSamples,
+    2,
+    "pose delta metrics should count skipped invalid scale samples"
+  );
+  assert.equal(
+    invalidPoseDelta.rotation.invalidSamples,
+    2,
+    "pose delta metrics should count skipped invalid rotation samples"
+  );
+  assert.equal(
+    Number.isFinite(invalidPoseDelta.translation.rms),
+    true,
+    "translation RMS should stay finite for invalid samples"
+  );
   assert.equal(Number.isFinite(invalidPoseDelta.scale.rms), true, "scale RMS should stay finite for invalid samples");
-  assert.equal(Number.isFinite(invalidPoseDelta.rotation.rms), true, "rotation RMS should stay finite for invalid samples");
+  assert.equal(
+    Number.isFinite(invalidPoseDelta.rotation.rms),
+    true,
+    "rotation RMS should stay finite for invalid samples"
+  );
   assert.equal(invalidPoseDelta.translation.max, 3);
   assert.equal(invalidPoseDelta.translation.maxJoint, "head");
   assert.equal(invalidPoseDelta.scale.max, 3);
@@ -98,8 +126,24 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
   malformedVec3PoseA[0]!.translation = [0, 0] as unknown as [number, number, number];
   malformedVec3PoseB[1]!.scale = [1] as unknown as [number, number, number];
   const malformedVec3PoseDelta = poseDeltaMetric(malformedVec3PoseA, malformedVec3PoseB, skeleton);
-  assert.equal(malformedVec3PoseDelta.translation.invalidSamples, 1, "pose delta metrics should count short translation tuples as invalid samples");
-  assert.equal(malformedVec3PoseDelta.scale.invalidSamples, 1, "pose delta metrics should count short scale tuples as invalid samples");
-  assert.equal(Number.isFinite(malformedVec3PoseDelta.translation.rms), true, "short translation tuples should not poison translation RMS");
-  assert.equal(Number.isFinite(malformedVec3PoseDelta.scale.rms), true, "short scale tuples should not poison scale RMS");
+  assert.equal(
+    malformedVec3PoseDelta.translation.invalidSamples,
+    1,
+    "pose delta metrics should count short translation tuples as invalid samples"
+  );
+  assert.equal(
+    malformedVec3PoseDelta.scale.invalidSamples,
+    1,
+    "pose delta metrics should count short scale tuples as invalid samples"
+  );
+  assert.equal(
+    Number.isFinite(malformedVec3PoseDelta.translation.rms),
+    true,
+    "short translation tuples should not poison translation RMS"
+  );
+  assert.equal(
+    Number.isFinite(malformedVec3PoseDelta.scale.rms),
+    true,
+    "short scale tuples should not poison scale RMS"
+  );
 }

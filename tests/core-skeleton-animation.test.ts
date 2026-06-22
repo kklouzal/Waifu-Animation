@@ -1,13 +1,10 @@
+import type { AnimationClip, RawAnimation, RawSkeletonJoint, Skeleton } from "./test-api.js";
 import {
   AdditiveAnimationBuilder,
   AnimationBuilder,
-  AnimationClip,
   AnimationOptimizer,
   AnimationRuntime,
   NO_PARENT,
-  RawAnimation,
-  RawSkeletonJoint,
-  Skeleton,
   SkeletonBuilder,
   WAIFU_ANIMATION_BINARY_FORMAT,
   additiveDeltaPose,
@@ -64,7 +61,10 @@ import {
   vectorNearlyEqual
 } from "./test-helpers.js";
 
-export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: AnimationClip; rawBuiltPose: ReturnType<typeof sampleClipToPose> }> {
+export async function runCoreSkeletonAnimationTests(): Promise<{
+  rawBuiltClip: AnimationClip;
+  rawBuiltPose: ReturnType<typeof sampleClipToPose>;
+}> {
   const repairedTransform = normalizeTransform({
     translation: [Number.NaN, 2, Infinity],
     rotation: [0, 0, 0, 0],
@@ -82,7 +82,9 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   assert.deepEqual(clonedTransform.rotation, [0, 0, 0, 1]);
   assert.deepEqual(clonedTransform.scale, [1, 2, 1]);
   assert.deepEqual(identityTransform(), cloneTransform(undefined));
-  const repairedRestSkeleton = createSkeleton([{ name: "root", rest: { translation: [Number.NaN, 5, Infinity], scale: [Number.NaN, 3, -Infinity] } }]);
+  const repairedRestSkeleton = createSkeleton([
+    { name: "root", rest: { translation: [Number.NaN, 5, Infinity], scale: [Number.NaN, 3, -Infinity] } }
+  ]);
   assert.deepEqual(repairedRestSkeleton.restPose[0]!.translation, [0, 5, 0]);
   assert.deepEqual(repairedRestSkeleton.restPose[0]!.scale, [1, 3, 1]);
   const explicitRootSkeleton = createSkeleton([
@@ -103,11 +105,7 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "createSkeleton should reject non-string runtime joint names"
   );
   assert.throws(
-    () =>
-      createSkeleton([
-        { name: "root" },
-        { name: "child", parentIndex: 0.5 }
-      ]),
+    () => createSkeleton([{ name: "root" }, { name: "child", parentIndex: 0.5 }]),
     /joint child parent index must be an integer/,
     "createSkeleton should reject non-integer parent indices"
   );
@@ -132,29 +130,17 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   );
   assert.throws(
     () =>
-      createSkeleton([
-        { name: "root" },
-        { name: "child", parentIndex: 2 },
-        { name: "futureParent", parentIndex: 0 }
-      ]),
+      createSkeleton([{ name: "root" }, { name: "child", parentIndex: 2 }, { name: "futureParent", parentIndex: 0 }]),
     /joint child parent must appear before child/,
     "createSkeleton should reject future parent indices"
   );
   assert.throws(
-    () =>
-      createSkeleton([
-        { name: "root" },
-        { name: "child", parentName: "missing" }
-      ]),
+    () => createSkeleton([{ name: "root" }, { name: "child", parentName: "missing" }]),
     /joint child parent missing was not found/,
     "createSkeleton should reject missing parent names"
   );
   assert.throws(
-    () =>
-      createSkeleton([
-        { name: "root" },
-        { name: "child", parentName: "" }
-      ]),
+    () => createSkeleton([{ name: "root" }, { name: "child", parentName: "" }]),
     /joint child parent name must be a non-empty string/,
     "createSkeleton should reject explicitly empty parent names instead of falling back to the default root"
   );
@@ -168,7 +154,8 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "createSkeleton should reject duplicate humanoid bone assignments"
   );
   assert.throws(
-    () => createSkeleton([{ name: "root", humanoid: "pelvis" } as unknown as Parameters<typeof createSkeleton>[0][number]]),
+    () =>
+      createSkeleton([{ name: "root", humanoid: "pelvis" } as unknown as Parameters<typeof createSkeleton>[0][number]]),
     /joint root has invalid humanoid bone pelvis/,
     "createSkeleton should reject invalid humanoid bone identifiers from runtime input"
   );
@@ -180,7 +167,10 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   };
   assert.ok(
     validateSkeleton(duplicateHumanoidSkeleton).some(
-      (issue) => issue.index === 3 && issue.joint === "leftUpperArm" && issue.message === "duplicate humanoid bone head also assigned to head"
+      (issue) =>
+        issue.index === 3 &&
+        issue.joint === "leftUpperArm" &&
+        issue.message === "duplicate humanoid bone head also assigned to head"
     ),
     "validateSkeleton should report duplicate humanoid bone assignments on malformed skeletons"
   );
@@ -190,7 +180,8 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   } as unknown as Skeleton;
   assert.ok(
     validateSkeleton(invalidJointHumanoidSkeleton).some(
-      (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "joint has invalid humanoid bone pelvis"
+      (issue) =>
+        issue.index === 2 && issue.joint === "head" && issue.message === "joint has invalid humanoid bone pelvis"
     ),
     "validateSkeleton should report invalid humanoid bone identifiers on joints"
   );
@@ -210,7 +201,8 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   };
   assert.ok(
     validateSkeleton(duplicateJointNameSkeleton).some(
-      (issue) => issue.index === 3 && issue.joint === "head" && issue.message === "duplicate joint name also assigned to index 2"
+      (issue) =>
+        issue.index === 3 && issue.joint === "head" && issue.message === "duplicate joint name also assigned to index 2"
     ),
     "validateSkeleton should report duplicate joint names on externally mutated skeletons"
   );
@@ -219,7 +211,9 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     joints: skeleton.joints.map((joint, index) => (index === 2 ? { ...joint, name: 123 as unknown as string } : joint))
   };
   assert.ok(
-    validateSkeleton(invalidJointNameSkeleton).some((issue) => issue.index === 2 && issue.message === "joint has no name"),
+    validateSkeleton(invalidJointNameSkeleton).some(
+      (issue) => issue.index === 2 && issue.message === "joint has no name"
+    ),
     "validateSkeleton should report non-string joint names on externally mutated skeletons"
   );
   const staleParentsSkeleton = {
@@ -228,7 +222,8 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   };
   assert.ok(
     validateSkeleton(staleParentsSkeleton).some(
-      (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "parents entry does not match joint parent"
+      (issue) =>
+        issue.index === 2 && issue.joint === "head" && issue.message === "parents entry does not match joint parent"
     ),
     "validateSkeleton should report stale parents arrays"
   );
@@ -242,11 +237,16 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   );
   const staleRestPoseSkeleton = {
     ...skeleton,
-    restPose: skeleton.restPose.map((transform, index) => (index === 2 ? { ...cloneTransform(transform), translation: [0, 99, 0] as [number, number, number] } : cloneTransform(transform)))
+    restPose: skeleton.restPose.map((transform, index) =>
+      index === 2
+        ? { ...cloneTransform(transform), translation: [0, 99, 0] as [number, number, number] }
+        : cloneTransform(transform)
+    )
   };
   assert.ok(
     validateSkeleton(staleRestPoseSkeleton).some(
-      (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "rest pose entry does not match joint rest"
+      (issue) =>
+        issue.index === 2 && issue.joint === "head" && issue.message === "rest pose entry does not match joint rest"
     ),
     "validateSkeleton should report stale rest pose entries"
   );
@@ -270,7 +270,10 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   };
   const staleNameToIndexIssues = validateSkeleton(staleNameToIndexSkeleton);
   assert.ok(
-    staleNameToIndexIssues.some((issue) => issue.index === 2 && issue.joint === "head" && issue.message === "nameToIndex entry does not match joint index"),
+    staleNameToIndexIssues.some(
+      (issue) =>
+        issue.index === 2 && issue.joint === "head" && issue.message === "nameToIndex entry does not match joint index"
+    ),
     "validateSkeleton should report mismatched nameToIndex lookups"
   );
   assert.ok(
@@ -289,7 +292,12 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   } as unknown as Skeleton;
   const staleHumanoidIssues = validateSkeleton(staleHumanoidSkeleton);
   assert.ok(
-    staleHumanoidIssues.some((issue) => issue.index === 2 && issue.joint === "head" && issue.message === "humanoid map entry head does not match joint index"),
+    staleHumanoidIssues.some(
+      (issue) =>
+        issue.index === 2 &&
+        issue.joint === "head" &&
+        issue.message === "humanoid map entry head does not match joint index"
+    ),
     "validateSkeleton should report mismatched humanoid map lookups"
   );
   assert.ok(
@@ -306,7 +314,9 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     ])
   } as unknown as Skeleton;
   assert.ok(
-    validateSkeleton(invalidHumanoidMapSkeleton).some((issue) => issue.message === "humanoid map entry pelvis has invalid humanoid bone name"),
+    validateSkeleton(invalidHumanoidMapSkeleton).some(
+      (issue) => issue.message === "humanoid map entry pelvis has invalid humanoid bone name"
+    ),
     "validateSkeleton should report invalid humanoid map entry names"
   );
   const nonMapLookupSkeleton = {
@@ -314,7 +324,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     nameToIndex: {} as Skeleton["nameToIndex"]
   };
   const nonMapLookupReport = validateAnimationInputs(nonMapLookupSkeleton, nodClip);
-  assert.equal(nonMapLookupReport.accepted, false, "invalid skeleton lookup maps should make animation inputs unacceptable");
+  assert.equal(
+    nonMapLookupReport.accepted,
+    false,
+    "invalid skeleton lookup maps should make animation inputs unacceptable"
+  );
   assert.ok(
     nonMapLookupReport.skeletonIssues.some((issue) => issue.message === "nameToIndex map is invalid"),
     "validateAnimationInputs should report malformed skeleton lookup maps instead of throwing during clip validation"
@@ -333,7 +347,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     { name: "rightLowerLeg", parentName: "rightUpperLeg", humanoid: "rightLowerLeg" },
     { name: "rightFoot", parentName: "rightLowerLeg", humanoid: "rightFoot" }
   ]);
-  assert.deepEqual(validateSkeleton(validHumanoidHierarchySkeleton), [], "validateSkeleton should accept a coherent humanoid hierarchy");
+  assert.deepEqual(
+    validateSkeleton(validHumanoidHierarchySkeleton),
+    [],
+    "validateSkeleton should accept a coherent humanoid hierarchy"
+  );
   const invalidHumanoidHierarchySkeleton = createSkeleton([
     { name: "hips", humanoid: "hips" },
     { name: "spine", parentName: "hips", humanoid: "spine" },
@@ -349,19 +367,28 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   const invalidHumanoidHierarchyIssues = validateSkeleton(invalidHumanoidHierarchySkeleton);
   assert.ok(
     invalidHumanoidHierarchyIssues.some(
-      (issue) => issue.index === 4 && issue.joint === "head" && issue.message === "humanoid bone head must be a descendant of neck"
+      (issue) =>
+        issue.index === 4 &&
+        issue.joint === "head" &&
+        issue.message === "humanoid bone head must be a descendant of neck"
     ),
     "validateSkeleton should report head mappings outside the neck chain"
   );
   assert.ok(
     invalidHumanoidHierarchyIssues.some(
-      (issue) => issue.index === 6 && issue.joint === "leftLowerArm" && issue.message === "humanoid bone leftLowerArm must be a descendant of leftUpperArm"
+      (issue) =>
+        issue.index === 6 &&
+        issue.joint === "leftLowerArm" &&
+        issue.message === "humanoid bone leftLowerArm must be a descendant of leftUpperArm"
     ),
     "validateSkeleton should report lower-arm mappings outside the upper-arm chain"
   );
   assert.ok(
     invalidHumanoidHierarchyIssues.some(
-      (issue) => issue.index === 9 && issue.joint === "rightFoot" && issue.message === "humanoid bone rightFoot must be a descendant of rightLowerLeg"
+      (issue) =>
+        issue.index === 9 &&
+        issue.joint === "rightFoot" &&
+        issue.message === "humanoid bone rightFoot must be a descendant of rightLowerLeg"
     ),
     "validateSkeleton should report foot mappings outside the lower-leg chain"
   );
@@ -425,7 +452,10 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     ["propTip", "propRoot", "arm", "head", "spine", "root"],
     "iterateJointsReverseDepthFirst should visit leaves before their parents"
   );
-  assert.throws(() => Array.from(iterateJointsDepthFirst(traversalSkeleton, "missing")), /depth-first traversal joint missing was not found/);
+  assert.throws(
+    () => Array.from(iterateJointsDepthFirst(traversalSkeleton, "missing")),
+    /depth-first traversal joint missing was not found/
+  );
 
   const rawSkeleton = createRawSkeleton([
     {
@@ -439,9 +469,7 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
           children: [
             {
               name: "neck",
-              children: [
-                { name: "head", humanoid: "head", rest: { translation: [0, 2, 0] } }
-              ]
+              children: [{ name: "head", humanoid: "head", rest: { translation: [0, 2, 0] } }]
             }
           ]
         },
@@ -453,8 +481,16 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
       children: [{ name: "propTip", rest: { translation: [0, 0, 5] } }]
     }
   ]);
-  assert.deepEqual(validateRawSkeleton(rawSkeleton), [], "validateRawSkeleton should accept a named roots/children hierarchy");
-  assert.equal(countRawSkeletonJoints(rawSkeleton), 7, "countRawSkeletonJoints should count all raw roots and descendants");
+  assert.deepEqual(
+    validateRawSkeleton(rawSkeleton),
+    [],
+    "validateRawSkeleton should accept a named roots/children hierarchy"
+  );
+  assert.equal(
+    countRawSkeletonJoints(rawSkeleton),
+    7,
+    "countRawSkeletonJoints should count all raw roots and descendants"
+  );
   assert.deepEqual(
     Array.from(iterateRawSkeletonDepthFirst(rawSkeleton), (item) => ({
       index: item.index,
@@ -493,10 +529,21 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     ],
     "buildSkeletonFromRawSkeleton should preserve deterministic depth-first ordering and parent-before-child indices"
   );
-  assert.equal(builtRawSkeleton.nameToIndex.get("head"), 3, "raw skeleton builder should preserve runtime parent/name lookup maps");
-  assert.equal(builtRawSkeleton.joints[builtRawSkeleton.nameToIndex.get("head")!]!.parentIndex, builtRawSkeleton.nameToIndex.get("neck"));
+  assert.equal(
+    builtRawSkeleton.nameToIndex.get("head"),
+    3,
+    "raw skeleton builder should preserve runtime parent/name lookup maps"
+  );
+  assert.equal(
+    builtRawSkeleton.joints[builtRawSkeleton.nameToIndex.get("head")!]!.parentIndex,
+    builtRawSkeleton.nameToIndex.get("neck")
+  );
   assert.equal(builtRawSkeleton.humanoid.get("head"), 3, "raw skeleton builder should preserve humanoid aliases");
-  assert.deepEqual(builtRawSkeleton.restPose[1]!.translation, [0, 1, 0], "raw skeleton builder should clone normalized local rest poses");
+  assert.deepEqual(
+    builtRawSkeleton.restPose[1]!.translation,
+    [0, 1, 0],
+    "raw skeleton builder should clone normalized local rest poses"
+  );
   const classBuiltRawSkeleton = new SkeletonBuilder().build(rawSkeleton);
   assert.deepEqual(
     classBuiltRawSkeleton.joints.map((joint) => joint.name),
@@ -504,7 +551,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "SkeletonBuilder should expose the raw-to-runtime build split"
   );
   const editableRawSkeleton = createRawSkeleton();
-  assert.deepEqual(validateRawSkeleton(editableRawSkeleton), [], "empty raw skeletons should remain valid editable offline objects");
+  assert.deepEqual(
+    validateRawSkeleton(editableRawSkeleton),
+    [],
+    "empty raw skeletons should remain valid editable offline objects"
+  );
   const editableRoot = createRawSkeletonJoint({ name: "editableRoot" });
   editableRoot.children.push(createRawSkeletonJoint({ name: "editableChild", rest: { translation: [0, 3, 0] } }));
   editableRawSkeleton.roots.push(editableRoot);
@@ -514,34 +565,63 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "raw skeleton roots and children should remain mutable for offline authoring"
   );
   const clonedRawSkeleton = cloneRawSkeleton(rawSkeleton);
-  assert.notEqual(clonedRawSkeleton.roots[0], rawSkeleton.roots[0], "cloneRawSkeleton should create new root joint objects");
-  assert.notEqual(clonedRawSkeleton.roots[0]!.children[0], rawSkeleton.roots[0]!.children[0], "cloneRawSkeleton should deep-clone child joints");
+  assert.notEqual(
+    clonedRawSkeleton.roots[0],
+    rawSkeleton.roots[0],
+    "cloneRawSkeleton should create new root joint objects"
+  );
+  assert.notEqual(
+    clonedRawSkeleton.roots[0]!.children[0],
+    rawSkeleton.roots[0]!.children[0],
+    "cloneRawSkeleton should deep-clone child joints"
+  );
   clonedRawSkeleton.roots[0]!.children[0]!.rest!.translation![1] = 99;
-  assert.deepEqual(rawSkeleton.roots[0]!.children[0]!.rest!.translation, [0, 1, 0], "cloneRawSkeleton should not alias rest pose arrays");
-  rawSkeleton.roots[0]!.children[0]!.rest!.translation![1] = 42;
-  assert.deepEqual(builtRawSkeleton.restPose[1]!.translation, [0, 1, 0], "raw skeleton builds should not alias mutable raw rest poses");
-  rawSkeleton.roots[0]!.children[0]!.rest!.translation![1] = 1;
-  const duplicateRawSkeleton = createRawSkeleton([
-    { name: "root", children: [{ name: "dup" }] },
-    { name: "dup" }
-  ]);
+  assert.deepEqual(
+    rawSkeleton.roots[0]!.children[0]!.rest!.translation,
+    [0, 1, 0],
+    "cloneRawSkeleton should not alias rest pose arrays"
+  );
+  rawSkeleton.roots[0]!.children[0]!.rest!.translation[1] = 42;
+  assert.deepEqual(
+    builtRawSkeleton.restPose[1]!.translation,
+    [0, 1, 0],
+    "raw skeleton builds should not alias mutable raw rest poses"
+  );
+  rawSkeleton.roots[0]!.children[0]!.rest!.translation[1] = 1;
+  const duplicateRawSkeleton = createRawSkeleton([{ name: "root", children: [{ name: "dup" }] }, { name: "dup" }]);
   assert.ok(
-    validateRawSkeleton(duplicateRawSkeleton).some((issue) => issue.message === "duplicate raw skeleton joint name also assigned to index 1"),
+    validateRawSkeleton(duplicateRawSkeleton).some(
+      (issue) => issue.message === "duplicate raw skeleton joint name also assigned to index 1"
+    ),
     "validateRawSkeleton should reject duplicate names across roots and descendants"
   );
-  assert.throws(() => buildSkeletonFromRawSkeleton(duplicateRawSkeleton), /duplicate raw skeleton joint name/, "raw skeleton builder should reject duplicate names");
+  assert.throws(
+    () => buildSkeletonFromRawSkeleton(duplicateRawSkeleton),
+    /duplicate raw skeleton joint name/,
+    "raw skeleton builder should reject duplicate names"
+  );
   const cycleRoot: RawSkeletonJoint = createRawSkeletonJoint({ name: "cycleRoot" });
   cycleRoot.children.push(cycleRoot);
   assert.ok(
     validateRawSkeleton({ roots: [cycleRoot] }).some((issue) => issue.message === "raw skeleton contains a cycle"),
     "validateRawSkeleton should report child cycles"
   );
-  assert.throws(() => Array.from(iterateRawSkeletonDepthFirst({ roots: [cycleRoot] })), /cycle/, "raw depth-first traversal should guard cycles");
+  assert.throws(
+    () => Array.from(iterateRawSkeletonDepthFirst({ roots: [cycleRoot] })),
+    /cycle/,
+    "raw depth-first traversal should guard cycles"
+  );
   assert.throws(() => cloneRawSkeleton({ roots: [cycleRoot] }), /cycle/, "cloneRawSkeleton should guard cycles");
-  assert.throws(() => buildSkeletonFromRawSkeleton({ roots: [cycleRoot] }), /cycle/, "raw skeleton builder should reject cycles");
+  assert.throws(
+    () => buildSkeletonFromRawSkeleton({ roots: [cycleRoot] }),
+    /cycle/,
+    "raw skeleton builder should reject cycles"
+  );
   const malformedRawSkeleton = { roots: [{ name: "root" } as RawSkeletonJoint] };
   assert.ok(
-    validateRawSkeleton(malformedRawSkeleton).some((issue) => issue.message === "raw skeleton joint children must be an array"),
+    validateRawSkeleton(malformedRawSkeleton).some(
+      (issue) => issue.message === "raw skeleton joint children must be an array"
+    ),
     "validateRawSkeleton should report malformed raw joints with missing children arrays"
   );
   assert.throws(
@@ -550,21 +630,15 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "raw skeleton builder should reject empty runtime builds"
   );
   assert.ok(
-    validateRawSkeleton({ roots: [{ name: "root", humanoid: "pelvis", children: [] } as unknown as RawSkeletonJoint] }).some(
-      (issue) => issue.message === "raw skeleton joint has invalid humanoid bone pelvis"
-    ),
+    validateRawSkeleton({
+      roots: [{ name: "root", humanoid: "pelvis", children: [] } as unknown as RawSkeletonJoint]
+    }).some((issue) => issue.message === "raw skeleton joint has invalid humanoid bone pelvis"),
     "validateRawSkeleton should reject invalid humanoid identifiers"
   );
 
   const editableRawAnimationTrack = createRawAnimationJointTrack({ joint: "leftUpperArm" });
-  editableRawAnimationTrack.translations.push(
-    { time: 0, value: [0, 0, 0] },
-    { time: 2, value: [2, 0, 0] }
-  );
-  editableRawAnimationTrack.rotations.push(
-    { time: 0, value: [0, 0, 0, 2] },
-    { time: 2, value: [0, 0, 0, -1] }
-  );
+  editableRawAnimationTrack.translations.push({ time: 0, value: [0, 0, 0] }, { time: 2, value: [2, 0, 0] });
+  editableRawAnimationTrack.rotations.push({ time: 0, value: [0, 0, 0, 2] }, { time: 2, value: [0, 0, 0, -1] });
   const rawAnimation = createRawAnimation({
     id: "raw-builder",
     name: "Raw Builder",
@@ -589,7 +663,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
       }
     ]
   });
-  assert.deepEqual(validateRawAnimation(rawAnimation, skeleton), [], "validateRawAnimation should accept strict raw joint TRS tracks");
+  assert.deepEqual(
+    validateRawAnimation(rawAnimation, skeleton),
+    [],
+    "validateRawAnimation should accept strict raw joint TRS tracks"
+  );
   const rawBuiltClip = new AnimationBuilder().build(rawAnimation, skeleton);
   assert.equal(rawBuiltClip.id, "raw-builder");
   assert.equal(rawBuiltClip.name, "Raw Builder");
@@ -602,7 +680,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "AnimationBuilder should emit deterministic skeleton-order tracks with TRS property ordering"
   );
   const rawBuiltPose = sampleClipToPose(skeleton, rawBuiltClip, 1, { loop: false });
-  assert.deepEqual(rawBuiltPose[3]!.translation, [1, 0, 0], "built raw animation clips should sample as ordinary AnimationClips");
+  assert.deepEqual(
+    rawBuiltPose[3]!.translation,
+    [1, 0, 0],
+    "built raw animation clips should sample as ordinary AnimationClips"
+  );
   assert.deepEqual(rawBuiltPose[1]!.scale, [1.5, 1.5, 1.5], "raw scale keys should build into runtime scale tracks");
   assert.ok(
     quaternionNearlyEqual(Array.from(rawBuiltClip.tracks[3]!.values.slice(0, 4)), [0, 0, 0, 1], 1e-6),
@@ -612,9 +694,21 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     quaternionNearlyEqual(Array.from(rawBuiltClip.tracks[3]!.values.slice(4, 8)), [0, 0, 0, 1], 1e-6),
     "AnimationBuilder should keep adjacent raw rotation keys in the shortest quaternion hemisphere"
   );
-  assert.deepEqual(rawAnimation.tracks[0]!.rotations[1]!.value, [0, 0, 0, -1], "AnimationBuilder should not mutate raw rotation key values");
-  assert.equal(validateClip(rawBuiltClip, skeleton).length, 0, "built raw animations should pass runtime clip validation");
-  assert.equal(buildAnimationFromRawAnimation(rawAnimation, skeleton).tracks.length, rawBuiltClip.tracks.length, "buildAnimationFromRawAnimation should expose the same builder path");
+  assert.deepEqual(
+    rawAnimation.tracks[0]!.rotations[1]!.value,
+    [0, 0, 0, -1],
+    "AnimationBuilder should not mutate raw rotation key values"
+  );
+  assert.equal(
+    validateClip(rawBuiltClip, skeleton).length,
+    0,
+    "built raw animations should pass runtime clip validation"
+  );
+  assert.equal(
+    buildAnimationFromRawAnimation(rawAnimation, skeleton).tracks.length,
+    rawBuiltClip.tracks.length,
+    "buildAnimationFromRawAnimation should expose the same builder path"
+  );
 
   const rawOptimizerSource = createRawAnimation({
     id: "raw-optimizer",
@@ -654,7 +748,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     skeleton,
     tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 }
   });
-  assert.equal(rawOptimizerResult.ok, true, "AnimationOptimizer should return an optimized raw animation for valid input");
+  assert.equal(
+    rawOptimizerResult.ok,
+    true,
+    "AnimationOptimizer should return an optimized raw animation for valid input"
+  );
   if (rawOptimizerResult.ok) {
     assert.equal(rawOptimizerResult.rawAnimation.id, rawOptimizerSource.id);
     assert.equal(rawOptimizerResult.rawAnimation.name, rawOptimizerSource.name);
@@ -663,9 +761,17 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     assert.equal(rawOptimizerResult.stats.inputKeyCount, 9);
     assert.equal(rawOptimizerResult.stats.outputKeyCount, 6);
     assert.equal(rawOptimizerResult.stats.removedKeyCount, 3);
-    assert.equal(rawOptimizerResult.rawAnimation.tracks[0]!.translations.length, 2, "linear translation keys should be reduced");
+    assert.equal(
+      rawOptimizerResult.rawAnimation.tracks[0]!.translations.length,
+      2,
+      "linear translation keys should be reduced"
+    );
     assert.equal(rawOptimizerResult.rawAnimation.tracks[1]!.scales.length, 2, "linear scale keys should be reduced");
-    assert.equal(rawOptimizerResult.rawAnimation.tracks[2]!.rotations.length, 2, "slerp-linear rotation keys should be reduced");
+    assert.equal(
+      rawOptimizerResult.rawAnimation.tracks[2]!.rotations.length,
+      2,
+      "slerp-linear rotation keys should be reduced"
+    );
     assert.deepEqual(
       rawOptimizerResult.rawAnimation.tracks[0]!.translations.map((key) => key.time),
       [0, 2],
@@ -681,17 +787,43 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
       [0, 2],
       "raw animation optimization should preserve first and last rotation keys"
     );
-    assert.notEqual(rawOptimizerResult.rawAnimation.tracks[0]!.translations, rawOptimizerSource.tracks[0]!.translations);
+    assert.notEqual(
+      rawOptimizerResult.rawAnimation.tracks[0]!.translations,
+      rawOptimizerSource.tracks[0]!.translations
+    );
     const optimizedRuntimeClip = buildAnimationFromRawAnimation(rawOptimizerResult.rawAnimation, skeleton);
-    const runtimeSampleError = compareAnimationSampleError(rawOptimizerSource, optimizedRuntimeClip, { skeleton, sampleFrequency: 8 });
+    const runtimeSampleError = compareAnimationSampleError(rawOptimizerSource, optimizedRuntimeClip, {
+      skeleton,
+      sampleFrequency: 8
+    });
     assert.equal(runtimeSampleError.sampleCount, 17);
-    assert.ok(runtimeSampleError.translation.max < 1e-5, "raw/runtime sample-error comparison should report preserved translation samples");
-    assert.ok(runtimeSampleError.scale.max < 1e-5, "raw/runtime sample-error comparison should report preserved scale samples");
-    assert.ok(runtimeSampleError.rotation.max < 1e-5, "raw/runtime sample-error comparison should report preserved shortest-path rotation samples");
+    assert.ok(
+      runtimeSampleError.translation.max < 1e-5,
+      "raw/runtime sample-error comparison should report preserved translation samples"
+    );
+    assert.ok(
+      runtimeSampleError.scale.max < 1e-5,
+      "raw/runtime sample-error comparison should report preserved scale samples"
+    );
+    assert.ok(
+      runtimeSampleError.rotation.max < 1e-5,
+      "raw/runtime sample-error comparison should report preserved shortest-path rotation samples"
+    );
   }
-  assert.equal(JSON.stringify(rawOptimizerSource), rawOptimizerSourceSnapshot, "raw animation optimization should not mutate source raw animation data");
-  const optimizedRawViaFunction = optimizeRawAnimation(rawOptimizerSource, { skeleton, tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 } });
-  assert.equal(optimizedRawViaFunction.tracks[0]!.translations.length, 2, "optimizeRawAnimation should expose the same reduction path");
+  assert.equal(
+    JSON.stringify(rawOptimizerSource),
+    rawOptimizerSourceSnapshot,
+    "raw animation optimization should not mutate source raw animation data"
+  );
+  const optimizedRawViaFunction = optimizeRawAnimation(rawOptimizerSource, {
+    skeleton,
+    tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 }
+  });
+  assert.equal(
+    optimizedRawViaFunction.tracks[0]!.translations.length,
+    2,
+    "optimizeRawAnimation should expose the same reduction path"
+  );
 
   const propagatedErrorSkeleton = createSkeleton([
     { name: "root" },
@@ -737,28 +869,43 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     sampleTimes: [1],
     includeModelSpace: true
   });
-  assert.ok(propagatedSampleError.modelSpace, "sample-error comparison should include model-space diagnostics when requested");
-  assert.equal(propagatedSampleError.modelSpace!.position.maxJoint, "tip", "propagated model-space position error should identify the farthest affected descendant");
   assert.ok(
-    propagatedSampleError.modelSpace!.joints[1]!.position.max > propagatedSampleError.translation.max,
+    propagatedSampleError.modelSpace,
+    "sample-error comparison should include model-space diagnostics when requested"
+  );
+  assert.equal(
+    propagatedSampleError.modelSpace.position.maxJoint,
+    "tip",
+    "propagated model-space position error should identify the farthest affected descendant"
+  );
+  assert.ok(
+    propagatedSampleError.modelSpace.joints[1]!.position.max > propagatedSampleError.translation.max,
     "parent translation/rotation should produce model-space position error on an unchanged child joint"
   );
   assert.ok(
-    propagatedSampleError.modelSpace!.joints[2]!.position.max > propagatedSampleError.modelSpace!.joints[1]!.position.max,
+    propagatedSampleError.modelSpace.joints[2]!.position.max > propagatedSampleError.modelSpace.joints[1]!.position.max,
     "parent rotation should accumulate larger propagated model-space position error on farther descendants"
   );
   assert.ok(
-    propagatedSampleError.modelSpace!.joints[2]!.rotation.max >= propagatedSampleError.rotation.max,
+    propagatedSampleError.modelSpace.joints[2]!.rotation.max >= propagatedSampleError.rotation.max,
     "descendant model-space rotation error should inherit parent rotation differences"
   );
   assertFiniteAnimationSampleError(propagatedSampleError, "propagated model-space raw/raw sample error");
 
   const propagatedCandidateClip = buildAnimationFromRawAnimation(propagatedCandidateRaw, propagatedErrorSkeleton);
-  const propagatedRuntimeModelError = compareAnimationModelSpaceSampleError(propagatedReferenceRaw, propagatedCandidateClip, {
-    skeleton: propagatedErrorSkeleton,
-    sampleTimes: [1]
-  });
-  assert.equal(propagatedRuntimeModelError.position.maxJoint, "tip", "raw/runtime model-space comparison should preserve descendant max-joint diagnostics");
+  const propagatedRuntimeModelError = compareAnimationModelSpaceSampleError(
+    propagatedReferenceRaw,
+    propagatedCandidateClip,
+    {
+      skeleton: propagatedErrorSkeleton,
+      sampleTimes: [1]
+    }
+  );
+  assert.equal(
+    propagatedRuntimeModelError.position.maxJoint,
+    "tip",
+    "raw/runtime model-space comparison should preserve descendant max-joint diagnostics"
+  );
   assertFiniteModelSpaceSampleError(propagatedRuntimeModelError, "propagated raw/runtime model-space sample error");
 
   const propagatedReferenceClip = buildAnimationFromRawAnimation(propagatedReferenceRaw, propagatedErrorSkeleton);
@@ -767,12 +914,32 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     sampleFrequency: 4,
     includeModelSpace: true
   });
-  assert.equal(identicalRawError.translation.max, 0, "identical raw sample comparison should have zero local translation error");
-  assert.equal(identicalRawError.rotation.max, 0, "identical raw sample comparison should have zero local rotation error");
+  assert.equal(
+    identicalRawError.translation.max,
+    0,
+    "identical raw sample comparison should have zero local translation error"
+  );
+  assert.equal(
+    identicalRawError.rotation.max,
+    0,
+    "identical raw sample comparison should have zero local rotation error"
+  );
   assert.equal(identicalRawError.scale.max, 0, "identical raw sample comparison should have zero local scale error");
-  assert.equal(identicalRawError.modelSpace!.position.max, 0, "identical raw sample comparison should have zero model-space position error");
-  assert.equal(identicalRawError.modelSpace!.rotation.max, 0, "identical raw sample comparison should have zero model-space rotation error");
-  assert.equal(identicalRawError.modelSpace!.scale.max, 0, "identical raw sample comparison should have zero model-space scale error");
+  assert.equal(
+    identicalRawError.modelSpace!.position.max,
+    0,
+    "identical raw sample comparison should have zero model-space position error"
+  );
+  assert.equal(
+    identicalRawError.modelSpace!.rotation.max,
+    0,
+    "identical raw sample comparison should have zero model-space rotation error"
+  );
+  assert.equal(
+    identicalRawError.modelSpace!.scale.max,
+    0,
+    "identical raw sample comparison should have zero model-space scale error"
+  );
   assertFiniteAnimationSampleError(identicalRawError, "identical raw model-space sample error");
 
   const identicalRuntimeError = compareAnimationSampleError(propagatedReferenceClip, propagatedReferenceClip, {
@@ -780,9 +947,21 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     sampleFrequency: 4,
     includeModelSpace: true
   });
-  assert.equal(identicalRuntimeError.modelSpace!.position.max, 0, "identical runtime clip comparison should have zero model-space position error");
-  assert.equal(identicalRuntimeError.modelSpace!.rotation.max, 0, "identical runtime clip comparison should have zero model-space rotation error");
-  assert.equal(identicalRuntimeError.modelSpace!.scale.max, 0, "identical runtime clip comparison should have zero model-space scale error");
+  assert.equal(
+    identicalRuntimeError.modelSpace!.position.max,
+    0,
+    "identical runtime clip comparison should have zero model-space position error"
+  );
+  assert.equal(
+    identicalRuntimeError.modelSpace!.rotation.max,
+    0,
+    "identical runtime clip comparison should have zero model-space rotation error"
+  );
+  assert.equal(
+    identicalRuntimeError.modelSpace!.scale.max,
+    0,
+    "identical runtime clip comparison should have zero model-space scale error"
+  );
   assertFiniteAnimationSampleError(identicalRuntimeError, "identical runtime model-space sample error");
 
   const optimizedRawWithSampleDiagnostics = tryOptimizeRawAnimation(rawOptimizerSource, {
@@ -790,11 +969,21 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     tolerances: { translation: 1e-5, rotation: 1e-5, scale: 1e-5 },
     sampleError: { sampleFrequency: 8 }
   });
-  assert.equal(optimizedRawWithSampleDiagnostics.ok, true, "AnimationOptimizer should attach optional sample-error diagnostics for valid input");
+  assert.equal(
+    optimizedRawWithSampleDiagnostics.ok,
+    true,
+    "AnimationOptimizer should attach optional sample-error diagnostics for valid input"
+  );
   if (optimizedRawWithSampleDiagnostics.ok) {
-    assert.ok(optimizedRawWithSampleDiagnostics.stats.sampleError?.modelSpace, "optimizer sample diagnostics should include propagated model-space error by default");
-    assert.ok(optimizedRawWithSampleDiagnostics.stats.sampleError!.modelSpace!.position.max < 1e-5);
-    assertFiniteAnimationSampleError(optimizedRawWithSampleDiagnostics.stats.sampleError!, "optimizer model-space sample diagnostics");
+    assert.ok(
+      optimizedRawWithSampleDiagnostics.stats.sampleError?.modelSpace,
+      "optimizer sample diagnostics should include propagated model-space error by default"
+    );
+    assert.ok(optimizedRawWithSampleDiagnostics.stats.sampleError.modelSpace.position.max < 1e-5);
+    assertFiniteAnimationSampleError(
+      optimizedRawWithSampleDiagnostics.stats.sampleError,
+      "optimizer model-space sample diagnostics"
+    );
   }
 
   const rawOptimizerShortestQuaternion = createRawAnimation({
@@ -811,7 +1000,10 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
       }
     ]
   });
-  const optimizedShortestQuaternionRaw = optimizeRawAnimation(rawOptimizerShortestQuaternion, { skeleton, tolerances: { rotation: 0 } });
+  const optimizedShortestQuaternionRaw = optimizeRawAnimation(rawOptimizerShortestQuaternion, {
+    skeleton,
+    tolerances: { rotation: 0 }
+  });
   assert.equal(
     optimizedShortestQuaternionRaw.tracks[0]!.rotations.length,
     2,
@@ -832,9 +1024,20 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
       }
     ]
   });
-  const hierarchyLooseOptimization = optimizeRawAnimation(hierarchyToleranceRawAnimation, { skeleton, tolerances: { translation: 0.1 } });
-  assert.equal(hierarchyLooseOptimization.tracks[0]!.translations.length, 2, "loose root tolerance should remove small root deviations");
-  const hierarchySensitiveOptimization = optimizeRawAnimation(hierarchyToleranceRawAnimation, { skeleton, tolerances: { translation: 0.1 }, hierarchyWeight: 1 });
+  const hierarchyLooseOptimization = optimizeRawAnimation(hierarchyToleranceRawAnimation, {
+    skeleton,
+    tolerances: { translation: 0.1 }
+  });
+  assert.equal(
+    hierarchyLooseOptimization.tracks[0]!.translations.length,
+    2,
+    "loose root tolerance should remove small root deviations"
+  );
+  const hierarchySensitiveOptimization = optimizeRawAnimation(hierarchyToleranceRawAnimation, {
+    skeleton,
+    tolerances: { translation: 0.1 },
+    hierarchyWeight: 1
+  });
   assert.equal(
     hierarchySensitiveOptimization.tracks[0]!.translations.length,
     3,
@@ -845,7 +1048,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     tolerances: { translation: 0.1 },
     jointTolerances: { hips: { weight: 10 } }
   });
-  assert.equal(jointWeightedOptimization.tracks[0]!.translations.length, 3, "per-joint optimizer weights should make matching joints stricter");
+  assert.equal(
+    jointWeightedOptimization.tracks[0]!.translations.length,
+    3,
+    "per-joint optimizer weights should make matching joints stricter"
+  );
 
   const firstFrameAdditiveSourceClip: AnimationClip = {
     id: "first-frame-additive-source",
@@ -876,18 +1083,44 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   assert.equal(firstFrameAdditiveClip.name, firstFrameAdditiveSourceClip.name);
   assert.equal(firstFrameAdditiveClip.loop, true);
   assert.deepEqual(firstFrameAdditiveClip.metadata, { source: "authored" });
-  assert.notEqual(firstFrameAdditiveClip.tracks[0]!.times, firstFrameAdditiveSourceClip.tracks[0]!.times, "additive builder should not alias source track times");
-  assert.equal(validateClip(firstFrameAdditiveClip, skeleton).length, 0, "first-frame additive clips should be valid ordinary AnimationClips");
-  const firstFrameStartDelta = additiveDeltaPose(skeleton.restPose, sampleClipToPose(skeleton, firstFrameAdditiveClip, 0.25, { loop: false }));
-  assert.ok(vectorNearlyEqual(firstFrameStartDelta[0]!.translation, [0, 0, 0], 1e-6), "default additive builder should use each channel's first key as the translation reference");
-  const firstFrameEndDelta = additiveDeltaPose(skeleton.restPose, sampleClipToPose(skeleton, firstFrameAdditiveClip, 1, { loop: false }));
-  assert.ok(vectorNearlyEqual(firstFrameEndDelta[0]!.translation, [3, 6, 0], 1e-6), "first-frame additive builder should preserve translation deltas through rest-pose sampling");
+  assert.notEqual(
+    firstFrameAdditiveClip.tracks[0]!.times,
+    firstFrameAdditiveSourceClip.tracks[0]!.times,
+    "additive builder should not alias source track times"
+  );
+  assert.equal(
+    validateClip(firstFrameAdditiveClip, skeleton).length,
+    0,
+    "first-frame additive clips should be valid ordinary AnimationClips"
+  );
+  const firstFrameStartDelta = additiveDeltaPose(
+    skeleton.restPose,
+    sampleClipToPose(skeleton, firstFrameAdditiveClip, 0.25, { loop: false })
+  );
+  assert.ok(
+    vectorNearlyEqual(firstFrameStartDelta[0]!.translation, [0, 0, 0], 1e-6),
+    "default additive builder should use each channel's first key as the translation reference"
+  );
+  const firstFrameEndDelta = additiveDeltaPose(
+    skeleton.restPose,
+    sampleClipToPose(skeleton, firstFrameAdditiveClip, 1, { loop: false })
+  );
+  assert.ok(
+    vectorNearlyEqual(firstFrameEndDelta[0]!.translation, [3, 6, 0], 1e-6),
+    "first-frame additive builder should preserve translation deltas through rest-pose sampling"
+  );
   assert.ok(
     quaternionNearlyEqual(firstFrameEndDelta[2]!.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
     "first-frame additive builder should encode rotation deltas from the first keyed rotation"
   );
   const runtimeFirstFrameAdditive = new AnimationRuntime(skeleton);
-  runtimeFirstFrameAdditive.setLayer("additive", firstFrameAdditiveClip, { time: 1, loop: false, weight: 1, targetWeight: 1, blendMode: "additive" });
+  runtimeFirstFrameAdditive.setLayer("additive", firstFrameAdditiveClip, {
+    time: 1,
+    loop: false,
+    weight: 1,
+    targetWeight: 1,
+    blendMode: "additive"
+  });
   assert.ok(
     vectorNearlyEqual(runtimeFirstFrameAdditive.evaluate().localPose[0]!.translation, [3, 7, 0], 1e-6),
     "generated additive clips should compose through the existing runtime additive layer path"
@@ -914,33 +1147,66 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
       }
     ]
   };
-  const explicitReferenceAdditiveClip = buildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, { referencePose: explicitReferencePose });
-  const explicitReferenceDelta = additiveDeltaPose(skeleton.restPose, sampleClipToPose(skeleton, explicitReferenceAdditiveClip, 0, { loop: false }));
-  assert.ok(vectorNearlyEqual(explicitReferenceDelta[3]!.translation, [3, 0, 0], 1e-6), "explicit reference poses should drive additive translation deltas");
+  const explicitReferenceAdditiveClip = buildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, {
+    referencePose: explicitReferencePose
+  });
+  const explicitReferenceDelta = additiveDeltaPose(
+    skeleton.restPose,
+    sampleClipToPose(skeleton, explicitReferenceAdditiveClip, 0, { loop: false })
+  );
+  assert.ok(
+    vectorNearlyEqual(explicitReferenceDelta[3]!.translation, [3, 0, 0], 1e-6),
+    "explicit reference poses should drive additive translation deltas"
+  );
   assert.ok(
     quaternionNearlyEqual(explicitReferenceDelta[3]!.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
     "explicit reference poses should drive additive rotation deltas"
   );
-  const shortReferenceAdditiveBuild = tryBuildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, { referencePose: explicitReferencePose.slice(0, 1) });
-  assert.equal(shortReferenceAdditiveBuild.ok, false, "additive builder should reject reference poses shorter than the skeleton");
+  const shortReferenceAdditiveBuild = tryBuildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, {
+    referencePose: explicitReferencePose.slice(0, 1)
+  });
+  assert.equal(
+    shortReferenceAdditiveBuild.ok,
+    false,
+    "additive builder should reject reference poses shorter than the skeleton"
+  );
   if (!shortReferenceAdditiveBuild.ok) {
-    assert.ok(shortReferenceAdditiveBuild.issues.some((issue) => issue.message.includes("reference pose length 1 does not match skeleton 4")));
+    assert.ok(
+      shortReferenceAdditiveBuild.issues.some((issue) =>
+        issue.message.includes("reference pose length 1 does not match skeleton 4")
+      )
+    );
   }
   const nonFiniteReferencePose = clonePose(skeleton.restPose);
   nonFiniteReferencePose[0]!.translation = [Number.NaN, 0, 0];
   assert.throws(
-    () => buildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, { referencePose: nonFiniteReferencePose }),
+    () =>
+      buildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, {
+        referencePose: nonFiniteReferencePose
+      }),
     /reference pose transform is not finite/,
     "additive builder should fail clearly on non-finite reference transforms"
   );
 
   const clonedRawAnimation = cloneRawAnimation(rawAnimation);
   assert.notEqual(clonedRawAnimation, rawAnimation, "cloneRawAnimation should create a new raw animation object");
-  assert.notEqual(clonedRawAnimation.tracks[0], rawAnimation.tracks[0], "cloneRawAnimation should clone raw joint tracks");
+  assert.notEqual(
+    clonedRawAnimation.tracks[0],
+    rawAnimation.tracks[0],
+    "cloneRawAnimation should clone raw joint tracks"
+  );
   clonedRawAnimation.tracks[0]!.translations[0]!.value[0] = 99;
-  assert.deepEqual(rawAnimation.tracks[0]!.translations[0]!.value, [0, 0, 0], "cloneRawAnimation should not alias raw translation key values");
+  assert.deepEqual(
+    rawAnimation.tracks[0]!.translations[0]!.value,
+    [0, 0, 0],
+    "cloneRawAnimation should not alias raw translation key values"
+  );
   rawAnimation.tracks[0]!.translations[0]!.value[0] = 123;
-  assert.equal(rawBuiltClip.tracks[2]!.values[0], 0, "built AnimationClips should not alias mutable raw animation values");
+  assert.equal(
+    rawBuiltClip.tracks[2]!.values[0],
+    0,
+    "built AnimationClips should not alias mutable raw animation values"
+  );
   rawAnimation.tracks[0]!.translations[0]!.value[0] = 0;
 
   const missingRawAnimation = createRawAnimation({
@@ -954,13 +1220,25 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "validateRawAnimation should reject raw joint tracks that do not map to a supplied skeleton"
   );
   const missingRawAnimationBuild = tryBuildAnimationFromRawAnimation(missingRawAnimation, skeleton);
-  assert.equal(missingRawAnimationBuild.ok, false, "tryBuildAnimationFromRawAnimation should return issues instead of a clip for invalid raw input");
+  assert.equal(
+    missingRawAnimationBuild.ok,
+    false,
+    "tryBuildAnimationFromRawAnimation should return issues instead of a clip for invalid raw input"
+  );
   const missingRawAnimationOptimization = tryOptimizeRawAnimation(missingRawAnimation, { skeleton });
-  assert.equal(missingRawAnimationOptimization.ok, false, "tryOptimizeRawAnimation should return issues instead of optimized raw data for invalid input");
+  assert.equal(
+    missingRawAnimationOptimization.ok,
+    false,
+    "tryOptimizeRawAnimation should return issues instead of optimized raw data for invalid input"
+  );
   if (!missingRawAnimationOptimization.ok) {
     assert.equal(missingRawAnimationOptimization.rawAnimation, null);
     assert.equal(missingRawAnimationOptimization.stats, null);
-    assert.ok(missingRawAnimationOptimization.issues.some((issue) => issue.message === "raw animation track does not map to skeleton"));
+    assert.ok(
+      missingRawAnimationOptimization.issues.some(
+        (issue) => issue.message === "raw animation track does not map to skeleton"
+      )
+    );
   }
   assert.throws(
     () => buildAnimationFromRawAnimation(missingRawAnimation, skeleton),
@@ -987,7 +1265,9 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     ]
   });
   assert.ok(
-    validateRawAnimation(duplicateRawAnimation, skeleton).some((issue) => issue.message.includes("duplicate raw animation target channel head[2].rotation")),
+    validateRawAnimation(duplicateRawAnimation, skeleton).some((issue) =>
+      issue.message.includes("duplicate raw animation target channel head[2].rotation")
+    ),
     "validateRawAnimation should reject duplicate resolved target channels"
   );
   assert.throws(
@@ -1018,7 +1298,9 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "validateRawAnimation should reject unsorted raw key times"
   );
   assert.ok(
-    invalidRawKeyIssues.some((issue) => issue.message === "raw animation key time must be within raw animation duration"),
+    invalidRawKeyIssues.some(
+      (issue) => issue.message === "raw animation key time must be within raw animation duration"
+    ),
     "validateRawAnimation should reject raw key times outside the animation duration"
   );
   assert.ok(
@@ -1048,7 +1330,9 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   };
   const invalidQuaternionRawIssues = validateRawAnimation(invalidQuaternionRawAnimation, skeleton);
   assert.ok(
-    invalidQuaternionRawIssues.some((issue) => issue.message === "raw animation rotation key quaternion must be normalizable"),
+    invalidQuaternionRawIssues.some(
+      (issue) => issue.message === "raw animation rotation key quaternion must be normalizable"
+    ),
     "validateRawAnimation should reject zero-length raw quaternions"
   );
   assert.ok(
@@ -1056,20 +1340,34 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "validateRawAnimation should reject non-finite raw quaternion components"
   );
   assert.ok(
-    invalidQuaternionRawIssues.some((issue) => issue.message === "raw animation rotation key value must contain exactly 4 values"),
+    invalidQuaternionRawIssues.some(
+      (issue) => issue.message === "raw animation rotation key value must contain exactly 4 values"
+    ),
     "validateRawAnimation should reject malformed raw quaternion shapes"
   );
 
   const emptyRawAnimation = createRawAnimation({ id: "raw-empty", duration: 1 });
   assert.ok(
-    validateRawAnimation(emptyRawAnimation).some((issue) => issue.message === "raw animation has no keyed transform channels"),
+    validateRawAnimation(emptyRawAnimation).some(
+      (issue) => issue.message === "raw animation has no keyed transform channels"
+    ),
     "validateRawAnimation should reject empty raw animations"
   );
   assert.equal(tryBuildAnimationFromRawAnimation(emptyRawAnimation).ok, false, "empty raw animations should not build");
-  assert.throws(() => buildAnimationFromRawAnimation(emptyRawAnimation), /no keyed transform channels/, "empty raw animation builds should fail explicitly");
-  const emptyTrackRawAnimation = createRawAnimation({ id: "raw-empty-track", duration: 1, tracks: [{ joint: "head" }] });
+  assert.throws(
+    () => buildAnimationFromRawAnimation(emptyRawAnimation),
+    /no keyed transform channels/,
+    "empty raw animation builds should fail explicitly"
+  );
+  const emptyTrackRawAnimation = createRawAnimation({
+    id: "raw-empty-track",
+    duration: 1,
+    tracks: [{ joint: "head" }]
+  });
   assert.ok(
-    validateRawAnimation(emptyTrackRawAnimation).some((issue) => issue.message === "raw animation joint track has no transform keys"),
+    validateRawAnimation(emptyTrackRawAnimation).some(
+      (issue) => issue.message === "raw animation joint track has no transform keys"
+    ),
     "validateRawAnimation should reject raw joint tracks with no TRS keys"
   );
   const invalidHeaderRawAnimation = createRawAnimation({
@@ -1082,7 +1380,9 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
     "validateRawAnimation should reject missing raw animation ids"
   );
   assert.ok(
-    validateRawAnimation(invalidHeaderRawAnimation).some((issue) => issue.message === "raw animation duration must be positive and finite"),
+    validateRawAnimation(invalidHeaderRawAnimation).some(
+      (issue) => issue.message === "raw animation duration must be positive and finite"
+    ),
     "validateRawAnimation should reject non-positive raw animation durations"
   );
 
@@ -1099,7 +1399,7 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
         rotations: [
           { time: 0, value: [0, 0, 0, 1] },
           { time: 0.5, value: [0, 0, 0, 1] },
-          { time: 2, value: quatFromAxisAngle([0, 1, 0], Math.PI / 2).map((value) => -value) as [number, number, number, number] }
+          { time: 2, value: quatFromAxisAngle([0, 1, 0], Math.PI / 2).map((value) => -value) }
         ]
       },
       {
@@ -1150,52 +1450,114 @@ export async function runCoreSkeletonAnimationTests(): Promise<{ rawBuiltClip: A
   );
 
   const fixedRateSamples = createFixedRateSamplingTimes(1.01, 2);
-  assert.equal(fixedRateSamples.sampleCount, 4, "fixed-rate sampling should include a clipped final sample when duration is between periods");
+  assert.equal(
+    fixedRateSamples.sampleCount,
+    4,
+    "fixed-rate sampling should include a clipped final sample when duration is between periods"
+  );
   assert.deepEqual(fixedRateSamples.times, [0, 0.5, 1, 1.01]);
   assert.ok(vectorNearlyEqual(fixedRateSamples.ratios, [0, 0.5 / 1.01, 1 / 1.01, 1], 1e-12));
   const zeroDurationFixedRateSamples = createFixedRateSamplingTimes(0, 30);
-  assert.deepEqual(zeroDurationFixedRateSamples.times, [0], "zero-duration fixed-rate sampling should produce one bounded sample at time zero");
+  assert.deepEqual(
+    zeroDurationFixedRateSamples.times,
+    [0],
+    "zero-duration fixed-rate sampling should produce one bounded sample at time zero"
+  );
   assert.deepEqual(zeroDurationFixedRateSamples.ratios, [0], "zero-duration fixed-rate ratios should stay bounded");
-  assert.deepEqual(createFixedRateSamplingTimes(Number.NaN, 30).times, [0], "non-finite durations should sanitize to a bounded zero-duration sample");
-  assert.throws(() => createFixedRateSamplingTimes(1, 0), /frequency must be positive and finite/, "fixed-rate sampling should reject invalid frequencies");
+  assert.deepEqual(
+    createFixedRateSamplingTimes(Number.NaN, 30).times,
+    [0],
+    "non-finite durations should sanitize to a bounded zero-duration sample"
+  );
+  assert.throws(
+    () => createFixedRateSamplingTimes(1, 0),
+    /frequency must be positive and finite/,
+    "fixed-rate sampling should reject invalid frequencies"
+  );
 
   const rawUtilityPose = sampleRawAnimation(rawUtilityAnimation, 1, { skeleton, loop: false });
-  assert.deepEqual(rawUtilityPose[2]!.translation, [1, 0, 0], "sampleRawAnimation should interpolate raw translation keys onto a skeleton pose");
+  assert.deepEqual(
+    rawUtilityPose[2]!.translation,
+    [1, 0, 0],
+    "sampleRawAnimation should interpolate raw translation keys onto a skeleton pose"
+  );
   assert.ok(
     quaternionNearlyEqual(rawUtilityPose[2]!.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 6), 1e-5),
     "sampleRawAnimation should interpolate raw rotation keys along the shortest quaternion path"
   );
-  assert.deepEqual(rawUtilityPose[1]!.scale, [2, 2, 2], "sampleRawAnimation should clamp to the last raw scale key before the sample time");
-  assert.deepEqual(rawUtilityPose[0]!.translation, [0, 1, 0], "sampleRawAnimation should keep rest transforms for unkeyed skeleton joints");
+  assert.deepEqual(
+    rawUtilityPose[1]!.scale,
+    [2, 2, 2],
+    "sampleRawAnimation should clamp to the last raw scale key before the sample time"
+  );
+  assert.deepEqual(
+    rawUtilityPose[0]!.translation,
+    [0, 1, 0],
+    "sampleRawAnimation should keep rest transforms for unkeyed skeleton joints"
+  );
   const rawRatioStartPose = sampleRawAnimationAtRatio(rawUtilityAnimation, Number.NaN, { skeleton });
   const rawRatioEndPose = sampleRawAnimationAtRatio(rawUtilityAnimation, 2, { skeleton });
-  assert.deepEqual(rawRatioStartPose[2]!.translation, [0, 0, 0], "raw ratio sampling should clamp non-finite ratios to the first sample");
-  assert.deepEqual(rawRatioEndPose[2]!.translation, [2, 0, 0], "raw ratio sampling should clamp ratios above one to the last sample");
+  assert.deepEqual(
+    rawRatioStartPose[2]!.translation,
+    [0, 0, 0],
+    "raw ratio sampling should clamp non-finite ratios to the first sample"
+  );
+  assert.deepEqual(
+    rawRatioEndPose[2]!.translation,
+    [2, 0, 0],
+    "raw ratio sampling should clamp ratios above one to the last sample"
+  );
   const rawTrackOrderSamples = sampleRawAnimation(rawUtilityAnimation, 1, { loop: false });
-  assert.equal(rawTrackOrderSamples.length, rawUtilityAnimation.tracks.length, "sampling raw animation without a skeleton should return raw track-order transforms");
-  assert.deepEqual(rawTrackOrderSamples[2]!.translation, [0, 0.4, 0], "raw track-order sampling should use raw track identity defaults without skeleton rest mapping");
+  assert.equal(
+    rawTrackOrderSamples.length,
+    rawUtilityAnimation.tracks.length,
+    "sampling raw animation without a skeleton should return raw track-order transforms"
+  );
+  assert.deepEqual(
+    rawTrackOrderSamples[2]!.translation,
+    [0, 0.4, 0],
+    "raw track-order sampling should use raw track identity defaults without skeleton rest mapping"
+  );
   assert.throws(
     () => sampleRawAnimation(missingRawAnimation, 0.5, { skeleton }),
     /raw animation track does not map to skeleton/,
     "sampleRawAnimation should reject skeleton mapping failures"
   );
-  assert.throws(() => sampleRawAnimation(emptyRawAnimation, 0), /no keyed transform channels/, "sampleRawAnimation should reject empty raw animations");
+  assert.throws(
+    () => sampleRawAnimation(emptyRawAnimation, 0),
+    /no keyed transform channels/,
+    "sampleRawAnimation should reject empty raw animations"
+  );
   const rawNormalizationAnimation = createRawAnimation({
     id: "raw-normalized-sample",
     duration: 1,
     tracks: [{ joint: "head", rotations: [{ time: 0, value: [0, 0, 0, 2] }] }]
   });
   const rawNormalizationSample = sampleRawAnimation(rawNormalizationAnimation, 0, { skeleton });
-  assert.deepEqual(rawNormalizationSample[2]!.rotation, [0, 0, 0, 1], "raw sampling should normalize quaternion samples");
+  assert.deepEqual(
+    rawNormalizationSample[2]!.rotation,
+    [0, 0, 0, 1],
+    "raw sampling should normalize quaternion samples"
+  );
   assert.deepEqual(
     rawNormalizationAnimation.tracks[0]!.rotations[0]!.value,
     [0, 0, 0, 2],
     "raw sampling should not mutate raw quaternion key values"
   );
   rawUtilityPose[2]!.translation[0] = 99;
-  assert.deepEqual(rawUtilityAnimation.tracks[0]!.translations[0]!.value, [0, 0, 0], "raw sampled poses should not alias raw translation keys");
+  assert.deepEqual(
+    rawUtilityAnimation.tracks[0]!.translations[0]!.value,
+    [0, 0, 0],
+    "raw sampled poses should not alias raw translation keys"
+  );
   assert.equal(validateAnimationInputs(skeleton, nodClip).accepted, true);
-  assert.equal(inspectClipAsset({ id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, nodClip).accepted, true);
+  assert.equal(
+    inspectClipAsset(
+      { id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT },
+      nodClip
+    ).accepted,
+    true
+  );
 
   return { rawBuiltClip, rawBuiltPose };
 }

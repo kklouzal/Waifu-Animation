@@ -31,7 +31,11 @@ export function runPresenceTargetTests(): void {
     deltaSeconds: 1 / 30,
     targets: [{ bone: "head", rotation: [0.1, 0.2, 0], influence: 1, speed: Number.NaN }]
   });
-  assert.equal(presenceFallbackSpeed.applied, true, "Three presence application should fall back from non-finite target speeds");
+  assert.equal(
+    presenceFallbackSpeed.applied,
+    true,
+    "Three presence application should fall back from non-finite target speeds"
+  );
   assert.ok(
     [
       presenceFallbackSpeedBone.quaternion.x,
@@ -49,14 +53,17 @@ export function runPresenceTargetTests(): void {
     }).issues.length,
     1
   );
-
 }
 export function runPresencePlanningTests(): void {
   const look = distributeLookAt([0.4, 0.2, 2]);
   assert.ok(look.head.yaw > 0);
   assert.ok(look.eyes.pitch > 0);
   const behindLook = distributeLookAt([0, 0, -1], { maxYaw: 0.5 });
-  assert.equal(behindLook.eyes.yaw, 0.21, "directly behind targets should clamp toward the yaw limit instead of collapsing to center");
+  assert.equal(
+    behindLook.eyes.yaw,
+    0.21,
+    "directly behind targets should clamp toward the yaw limit instead of collapsing to center"
+  );
   const hostileLook = distributeLookAt([Number.NaN, Infinity, -1], {
     maxYaw: Number.POSITIVE_INFINITY,
     maxPitch: Number.NaN,
@@ -67,7 +74,9 @@ export function runPresencePlanningTests(): void {
     torsoWeight: 3
   });
   assert.ok(
-    Object.values(hostileLook).every((part) => Number.isFinite(part.yaw) && Number.isFinite(part.pitch) && Number.isFinite(part.weight)),
+    Object.values(hostileLook).every(
+      (part) => Number.isFinite(part.yaw) && Number.isFinite(part.pitch) && Number.isFinite(part.weight)
+    ),
     "look-at distribution should stay finite when options contain non-finite limits or weights"
   );
   assert.ok(
@@ -81,7 +90,11 @@ export function runPresencePlanningTests(): void {
     { id: "infinite", position: [0, 1, 0], weight: Number.POSITIVE_INFINITY },
     { id: "negative", position: [1, 0, 0], weight: -4 }
   ]);
-  assert.equal(noPositiveAttention, null, "attention scheduler should return null when no target has a positive finite weight");
+  assert.equal(
+    noPositiveAttention,
+    null,
+    "attention scheduler should return null when no target has a positive finite weight"
+  );
   const weightedAttention = new AttentionScheduler("attention-weighted-safety");
   const finiteWeightedAttention = weightedAttention.choose(1_000, [
     { id: "ignored-nan", position: [0, 0, 1], weight: Number.NaN },
@@ -195,16 +208,33 @@ export function runPresencePlanningTests(): void {
   );
   const finiteDwellAttention = new AttentionScheduler("attention-dwell");
   assert.equal(
-    finiteDwellAttention.choose(Number.POSITIVE_INFINITY, [{ id: "finite-dwell", position: [0, 0, 1], weight: 1 }], Number.NaN, Number.POSITIVE_INFINITY)?.id,
+    finiteDwellAttention.choose(
+      Number.POSITIVE_INFINITY,
+      [{ id: "finite-dwell", position: [0, 0, 1], weight: 1 }],
+      Number.NaN,
+      Number.POSITIVE_INFINITY
+    )?.id,
     "finite-dwell",
     "non-finite dwell and now inputs should not prevent a finite scheduler choice"
   );
-  assert.equal(Number.isFinite(breathingWeight(Number.NaN, 0.5)), true, "breathing weight should ignore non-finite elapsed time");
+  assert.equal(
+    Number.isFinite(breathingWeight(Number.NaN, 0.5)),
+    true,
+    "breathing weight should ignore non-finite elapsed time"
+  );
 
   const presenceA = new PresencePlanner("presence-test", 0);
   const presenceB = new PresencePlanner("presence-test", 0);
-  presenceA.onBehaviorChange({ state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 }, { attentiveness: 0.8 }, 100);
-  presenceB.onBehaviorChange({ state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 }, { attentiveness: 0.8 }, 100);
+  presenceA.onBehaviorChange(
+    { state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 },
+    { attentiveness: 0.8 },
+    100
+  );
+  presenceB.onBehaviorChange(
+    { state: "thinking", gesture: "thinking", gaze: "down", energy: 0.52 },
+    { attentiveness: 0.8 },
+    100
+  );
   const deterministicPresenceInput: Parameters<PresencePlanner["update"]>[0] = {
     nowMs: 260,
     elapsedSeconds: 1.25,
@@ -231,8 +261,14 @@ export function runPresencePlanningTests(): void {
     clipBaseInfluence: Number.NaN,
     clipOverlayInfluence: Number.NaN
   });
-  assert.ok(finitePresenceFrame.lookAtTarget.every(Number.isFinite), "presence look target should stay finite for non-finite timing");
-  assert.ok(finitePresenceFrame.boneTargets.every((target) => target.rotation.every(Number.isFinite)), "presence bone targets should stay finite for non-finite timing");
+  assert.ok(
+    finitePresenceFrame.lookAtTarget.every(Number.isFinite),
+    "presence look target should stay finite for non-finite timing"
+  );
+  assert.ok(
+    finitePresenceFrame.boneTargets.every((target) => target.rotation.every(Number.isFinite)),
+    "presence bone targets should stay finite for non-finite timing"
+  );
   const hostileCuePresence = new PresencePlanner("presence-hostile-cue", Number.NaN);
   hostileCuePresence.scheduleCue("nod", Number.NaN, Number.NaN, Number.NaN, 1);
   const hostileCuePresenceFrame = hostileCuePresence.update({
@@ -240,7 +276,10 @@ export function runPresencePlanningTests(): void {
     elapsedSeconds: Number.NaN,
     deltaSeconds: 1 / 30
   });
-  assert.ok(hostileCuePresenceFrame.cueAmounts.nod > 0, "presence cues should sanitize non-finite schedule times instead of being dropped");
+  assert.ok(
+    hostileCuePresenceFrame.cueAmounts.nod > 0,
+    "presence cues should sanitize non-finite schedule times instead of being dropped"
+  );
   assert.ok(
     Object.values(hostileCuePresenceFrame.cueAmounts).every(Number.isFinite) &&
       hostileCuePresenceFrame.lookAtTarget.every(Number.isFinite) &&
@@ -258,7 +297,6 @@ export function runPresencePlanningTests(): void {
     Object.values(hostileSpeechPresenceFrame.cueAmounts).every(Number.isFinite),
     "speech performance scheduling should sanitize non-finite duration and start times"
   );
-
 }
 export function runFacialAnimationTests(): void {
   const visemes = new VisemeMixer({ maxTotal: 0.4 });
@@ -266,7 +304,10 @@ export function runFacialAnimationTests(): void {
   const mixed = visemes.update(1 / 30);
   assert.ok(mixed.aa + mixed.ou <= 0.4001);
   assert.deepEqual(limitVisemeStack({ aa: 0.2, ih: 0.2, ou: 0.2, ee: 0.2, oh: 0.2 }, Number.NaN), zeroVisemes());
-  const hostileLimitedVisemes = limitVisemeStack({ aa: Number.NaN, ih: -1, ou: 2, ee: 0.5, oh: Number.POSITIVE_INFINITY }, 1);
+  const hostileLimitedVisemes = limitVisemeStack(
+    { aa: Number.NaN, ih: -1, ou: 2, ee: 0.5, oh: Number.POSITIVE_INFINITY },
+    1
+  );
   assert.ok(
     Object.values(hostileLimitedVisemes).every((value) => Number.isFinite(value) && value >= 0 && value <= 1),
     "limitVisemeStack should sanitize hostile viseme weights before normalization"
@@ -277,17 +318,29 @@ export function runFacialAnimationTests(): void {
   );
   const invalidVisemes = new VisemeMixer({ maxTotal: Number.NaN });
   invalidVisemes.setTarget({ aa: 1, ih: 1 });
-  assert.ok(Object.values(invalidVisemes.update(Number.NaN)).every(Number.isFinite), "viseme mixer should keep weights finite for non-finite timing and limits");
+  assert.ok(
+    Object.values(invalidVisemes.update(Number.NaN)).every(Number.isFinite),
+    "viseme mixer should keep weights finite for non-finite timing and limits"
+  );
   const invalidIntensityVisemes = new VisemeMixer({ intensity: Number.NaN });
   invalidIntensityVisemes.setTarget({ aa: 1 });
-  assert.ok(Object.values(invalidIntensityVisemes.update(1 / 30)).every(Number.isFinite), "viseme mixer should keep weights finite for non-finite intensity");
+  assert.ok(
+    Object.values(invalidIntensityVisemes.update(1 / 30)).every(Number.isFinite),
+    "viseme mixer should keep weights finite for non-finite intensity"
+  );
 
   const partialAttackVisemes = new VisemeMixer({ attack: { aa: 60 }, release: 20, maxTotal: 1 });
   partialAttackVisemes.setTarget({ aa: 0.5, ih: 0.5 });
   const partialAttackMixed = partialAttackVisemes.update(1 / 30);
   assert.ok(partialAttackMixed.ih > 0, "partial viseme attack maps should fall back for unspecified visemes");
-  assert.ok(Math.abs(partialAttackMixed.aa - 0.5 * dampAlpha(60, 1 / 30)) < 1e-6, "partial viseme attack maps should respect specified speeds");
-  assert.ok(Math.abs(partialAttackMixed.ih - 0.5 * dampAlpha(30, 1 / 30)) < 1e-6, "partial viseme attack maps should use the default attack speed");
+  assert.ok(
+    Math.abs(partialAttackMixed.aa - 0.5 * dampAlpha(60, 1 / 30)) < 1e-6,
+    "partial viseme attack maps should respect specified speeds"
+  );
+  assert.ok(
+    Math.abs(partialAttackMixed.ih - 0.5 * dampAlpha(30, 1 / 30)) < 1e-6,
+    "partial viseme attack maps should use the default attack speed"
+  );
 
   const partialReleaseVisemes = new VisemeMixer({ attack: 30, release: { aa: 40 }, maxTotal: 1 });
   partialReleaseVisemes.setTarget({ aa: 0.5, ih: 0.5 });
@@ -295,10 +348,23 @@ export function runFacialAnimationTests(): void {
   partialReleaseVisemes.setTarget({});
   const beforePartialRelease = { ...partialReleaseVisemes.current };
   const partialReleaseMixed = partialReleaseVisemes.update(1 / 30);
-  assert.ok(partialReleaseMixed.ih < beforePartialRelease.ih, "partial viseme release maps should fall back for unspecified visemes");
-  assert.ok(Math.abs(partialReleaseMixed.aa - beforePartialRelease.aa * (1 - dampAlpha(40, 1 / 30))) < 1e-6, "partial viseme release maps should respect specified speeds");
-  assert.ok(Math.abs(partialReleaseMixed.ih - beforePartialRelease.ih * (1 - dampAlpha(20, 1 / 30))) < 1e-6, "partial viseme release maps should use the default release speed");
-  const malformedSpeedVisemes = new VisemeMixer({ attack: { aa: Number.NaN }, release: { aa: Number.NaN }, maxTotal: 1 });
+  assert.ok(
+    partialReleaseMixed.ih < beforePartialRelease.ih,
+    "partial viseme release maps should fall back for unspecified visemes"
+  );
+  assert.ok(
+    Math.abs(partialReleaseMixed.aa - beforePartialRelease.aa * (1 - dampAlpha(40, 1 / 30))) < 1e-6,
+    "partial viseme release maps should respect specified speeds"
+  );
+  assert.ok(
+    Math.abs(partialReleaseMixed.ih - beforePartialRelease.ih * (1 - dampAlpha(20, 1 / 30))) < 1e-6,
+    "partial viseme release maps should use the default release speed"
+  );
+  const malformedSpeedVisemes = new VisemeMixer({
+    attack: { aa: Number.NaN },
+    release: { aa: Number.NaN },
+    maxTotal: 1
+  });
   malformedSpeedVisemes.setTarget({ aa: 0.5 });
   const malformedSpeedAttack = malformedSpeedVisemes.update(1 / 30);
   assert.ok(
@@ -332,8 +398,16 @@ export function runFacialAnimationTests(): void {
   assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
   blink.trigger(32, 100);
   assert.equal(blink.update(48, 1 / 60, 0.5), 1);
-  assert.equal(Number.isFinite(blink.update(200, Number.NaN, 0.5)), true, "blink scheduler should ignore non-finite delta time");
-  assert.equal(blink.update(216, Number.NaN, 0.5), blink.update(216, Number.NaN, 0.5), "blink scheduler should keep non-finite delta decay deterministic");
+  assert.equal(
+    Number.isFinite(blink.update(200, Number.NaN, 0.5)),
+    true,
+    "blink scheduler should ignore non-finite delta time"
+  );
+  assert.equal(
+    blink.update(216, Number.NaN, 0.5),
+    blink.update(216, Number.NaN, 0.5),
+    "blink scheduler should keep non-finite delta decay deterministic"
+  );
   const hostileBlink = new BlinkScheduler("hostile-blink", Number.NaN);
   hostileBlink.trigger(Number.NaN, Number.NaN);
   assert.equal(hostileBlink.update(0, 1 / 60, 0.5), 1, "blink triggers should sanitize non-finite hold timing");

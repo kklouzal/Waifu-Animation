@@ -127,13 +127,17 @@ export function lengthVec3(value: Vec3): number {
 function cloneFiniteNormalFallbackVec3(fallback: Vec3): Vec3 {
   if (!fallback.every(isFiniteNumber)) return [0, 0, 1];
   const length = lengthVec3(fallback);
-  return Number.isFinite(length) && length > EPSILON ? [fallback[0] / length, fallback[1] / length, fallback[2] / length] : [0, 0, 1];
+  return Number.isFinite(length) && length > EPSILON
+    ? [fallback[0] / length, fallback[1] / length, fallback[2] / length]
+    : [0, 0, 1];
 }
 
 export function normalizeVec3(value: Vec3, fallback: Vec3 = [0, 0, 1]): Vec3 {
   if (!value.every(isFiniteNumber)) return cloneFiniteNormalFallbackVec3(fallback);
   const length = lengthVec3(value);
-  return Number.isFinite(length) && length > EPSILON ? [value[0] / length, value[1] / length, value[2] / length] : cloneFiniteNormalFallbackVec3(fallback);
+  return Number.isFinite(length) && length > EPSILON
+    ? [value[0] / length, value[1] / length, value[2] / length]
+    : cloneFiniteNormalFallbackVec3(fallback);
 }
 
 export function lerpVec3(a: Vec3, b: Vec3, t: number): Vec3 {
@@ -176,8 +180,14 @@ export function conjugateQuat(value: Quat): Quat {
 }
 
 export function multiplyQuat(a: Quat, b: Quat): Quat {
-  const ax = a[0], ay = a[1], az = a[2], aw = a[3];
-  const bx = b[0], by = b[1], bz = b[2], bw = b[3];
+  const ax = a[0],
+    ay = a[1],
+    az = a[2],
+    aw = a[3];
+  const bx = b[0],
+    by = b[1],
+    bz = b[2],
+    bw = b[3];
   return normalizeQuat([
     aw * bx + ax * bw + ay * bz - az * by,
     aw * by - ax * bz + ay * bw + az * bx,
@@ -217,9 +227,14 @@ export function slerpQuat(a: Quat, b: Quat, t: number): Quat {
   const theta = theta0 * amount;
   const sinTheta = Math.sin(theta);
   const sinTheta0 = Math.sin(theta0);
-  const s0 = Math.cos(theta) - cos * sinTheta / sinTheta0;
+  const s0 = Math.cos(theta) - (cos * sinTheta) / sinTheta0;
   const s1 = sinTheta / sinTheta0;
-  return normalizeQuat([a[0] * s0 + end[0] * s1, a[1] * s0 + end[1] * s1, a[2] * s0 + end[2] * s1, a[3] * s0 + end[3] * s1]);
+  return normalizeQuat([
+    a[0] * s0 + end[0] * s1,
+    a[1] * s0 + end[1] * s1,
+    a[2] * s0 + end[2] * s1,
+    a[3] * s0 + end[3] * s1
+  ]);
 }
 
 export function quatFromAxisAngle(axis: Vec3, radians: number): Quat {
@@ -337,10 +352,18 @@ export function applyTransformDelta(base: Transform, delta: Transform, weight: n
 export function composeMat4(transform: Transform): Mat4 {
   const [x, y, z, w] = normalizeQuat(transform.rotation);
   const [sx, sy, sz] = transform.scale;
-  const x2 = x + x, y2 = y + y, z2 = z + z;
-  const xx = x * x2, xy = x * y2, xz = x * z2;
-  const yy = y * y2, yz = y * z2, zz = z * z2;
-  const wx = w * x2, wy = w * y2, wz = w * z2;
+  const x2 = x + x,
+    y2 = y + y,
+    z2 = z + z;
+  const xx = x * x2,
+    xy = x * y2,
+    xz = x * z2;
+  const yy = y * y2,
+    yz = y * z2,
+    zz = z * z2;
+  const wx = w * x2,
+    wy = w * y2,
+    wz = w * z2;
   const out = new Float32Array(16);
   out[0] = (1 - (yy + zz)) * sx;
   out[1] = (xy + wz) * sx;
@@ -380,7 +403,9 @@ export function multiplyMat4(a: Mat4, b: Mat4): Mat4 {
 }
 
 export function transformPoint(matrix: Mat4, point: Vec3): Vec3 {
-  const x = point[0], y = point[1], z = point[2];
+  const x = point[0],
+    y = point[1],
+    z = point[2];
   return [
     (matrix[0] ?? 0) * x + (matrix[4] ?? 0) * y + (matrix[8] ?? 0) * z + (matrix[12] ?? 0),
     (matrix[1] ?? 0) * x + (matrix[5] ?? 0) * y + (matrix[9] ?? 0) * z + (matrix[13] ?? 0),

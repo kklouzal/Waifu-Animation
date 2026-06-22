@@ -1,6 +1,18 @@
-import type { AdditiveAnimationClipBuildOptions, AnimationOptimizerJointTolerance, AnimationOptimizerOptions, AnimationOptimizerSampleErrorOptions, AnimationOptimizerTolerances } from "./clip.js";
+import type {
+  AdditiveAnimationClipBuildOptions,
+  AnimationOptimizerJointTolerance,
+  AnimationOptimizerOptions,
+  AnimationOptimizerSampleErrorOptions,
+  AnimationOptimizerTolerances
+} from "./clip.js";
 import type { Transform } from "./math.js";
-import type { ExtractRawRootMotionOptions, MotionCarrier, MotionExtractionAxisMask, MotionExtractionReference, MotionRotationExtractionMode } from "./motion.js";
+import type {
+  ExtractRawRootMotionOptions,
+  MotionCarrier,
+  MotionExtractionAxisMask,
+  MotionExtractionReference,
+  MotionRotationExtractionMode
+} from "./motion.js";
 import type { BakedCameraJointOptions, MatrixLike, RigidInstanceMatrixOptions } from "./baked.js";
 import type { JointReference, Skeleton } from "./skeleton.js";
 import type { UserTrackInterpolation, UserTrackType } from "./tracks.js";
@@ -54,10 +66,12 @@ export type AnimationOptimizationImportPlan = {
   options: AnimationOptimizerOptions;
   tolerances: Required<AnimationOptimizerTolerances>;
   hierarchyWeight: number;
-  diagnostics: false | {
-    sampleFrequency?: number;
-    includeModelSpace?: boolean;
-  };
+  diagnostics:
+    | false
+    | {
+        sampleFrequency?: number;
+        includeModelSpace?: boolean;
+      };
   source?: Readonly<Record<string, unknown>>;
 };
 
@@ -135,12 +149,18 @@ const DEFAULT_BAKED_NODE_TYPES: BakedSkeletonNodeTypes = {
   any: false
 };
 
-export function normalizeOzzOfflineImportConfig(input: unknown): ImporterConfigNormalizationResult<OzzOfflineImportPlan> {
+export function normalizeOzzOfflineImportConfig(
+  input: unknown
+): ImporterConfigNormalizationResult<OzzOfflineImportPlan> {
   const issues: ImporterConfigIssue[] = [];
   const record = asRecord(input);
   const firstAnimation = readFirstAnimationRecord(record);
-  const additive = normalizeAdditiveReferenceImportConfig(readFirstDefined(record, ["additive", "additiveReference", "additive_reference"]));
-  const motion = normalizeRawMotionExtractionImportConfig(readFirstDefined(record, ["motion", "motionExtraction", "motion_extraction", "rootMotion", "root_motion"]));
+  const additive = normalizeAdditiveReferenceImportConfig(
+    readFirstDefined(record, ["additive", "additiveReference", "additive_reference"])
+  );
+  const motion = normalizeRawMotionExtractionImportConfig(
+    readFirstDefined(record, ["motion", "motionExtraction", "motion_extraction", "rootMotion", "root_motion"])
+  );
   const optimization = normalizeAnimationOptimizationImportConfig(
     readFirstDefined(record, ["optimization", "optimizationSettings", "optimization_settings"]) ??
       readFirstDefined(firstAnimation, ["optimization", "optimizationSettings", "optimization_settings"])
@@ -160,13 +180,16 @@ export function normalizeOzzOfflineImportConfig(input: unknown): ImporterConfigN
   };
 }
 
-export function normalizeAdditiveReferenceImportConfig(input: unknown): ImporterConfigNormalizationResult<AdditiveReferenceImportPlan> {
+export function normalizeAdditiveReferenceImportConfig(
+  input: unknown
+): ImporterConfigNormalizationResult<AdditiveReferenceImportPlan> {
   const issues: ImporterConfigIssue[] = [];
   const record = asRecord(input);
   const source = cloneRecord(readFirstDefined(record, ["source", "metadata"]));
-  const rawPolicy = typeof input === "string"
-    ? input
-    : readFirstDefined(record, ["policy", "reference", "referencePolicy", "reference_policy"]);
+  const rawPolicy =
+    typeof input === "string"
+      ? input
+      : readFirstDefined(record, ["policy", "reference", "referencePolicy", "reference_policy"]);
   const referencePose = readFirstDefined(record, ["referencePose", "reference_pose", "pose"]);
   const policy = normalizeAdditiveReferencePolicy(rawPolicy, referencePose, issues, "additive.policy");
 
@@ -174,48 +197,70 @@ export function normalizeAdditiveReferenceImportConfig(input: unknown): Importer
     const pose = normalizeReferencePose(referencePose, issues, "additive.referencePose");
     if (pose.length > 0) {
       return {
-        plan: withOptionalSource({
-          policy,
-          options: { referencePose: pose },
-          requiresSkeletonRestPose: false
-        }, source),
+        plan: withOptionalSource(
+          {
+            policy,
+            options: { referencePose: pose },
+            requiresSkeletonRestPose: false
+          },
+          source
+        ),
         issues
       };
     }
-    issues.push({ path: "additive.referencePose", message: "explicit additive reference pose is invalid; using first keyed sample" });
+    issues.push({
+      path: "additive.referencePose",
+      message: "explicit additive reference pose is invalid; using first keyed sample"
+    });
     return {
-      plan: withOptionalSource({
-        policy: "first-key",
-        options: {},
-        requiresSkeletonRestPose: false
-      }, source),
+      plan: withOptionalSource(
+        {
+          policy: "first-key",
+          options: {},
+          requiresSkeletonRestPose: false
+        },
+        source
+      ),
       issues
     };
   }
 
   return {
-    plan: withOptionalSource({
-      policy,
-      options: {},
-      requiresSkeletonRestPose: policy === "skeleton-rest"
-    }, source),
+    plan: withOptionalSource(
+      {
+        policy,
+        options: {},
+        requiresSkeletonRestPose: policy === "skeleton-rest"
+      },
+      source
+    ),
     issues
   };
 }
 
-export function toAdditiveAnimationOptions(plan: AdditiveReferenceImportPlan, skeleton?: Skeleton): AdditiveAnimationClipBuildOptions {
+export function toAdditiveAnimationOptions(
+  plan: AdditiveReferenceImportPlan,
+  skeleton?: Skeleton
+): AdditiveAnimationClipBuildOptions {
   if (plan.policy === "skeleton-rest" && skeleton) {
     return { referencePose: skeleton.restPose.map(cloneTransformStrict) };
   }
   return plan.options.referencePose ? { referencePose: plan.options.referencePose.map(cloneTransformStrict) } : {};
 }
 
-export function normalizeRawMotionExtractionImportConfig(input: unknown): ImporterConfigNormalizationResult<RawMotionExtractionImportPlan> {
+export function normalizeRawMotionExtractionImportConfig(
+  input: unknown
+): ImporterConfigNormalizationResult<RawMotionExtractionImportPlan> {
   const issues: ImporterConfigIssue[] = [];
   const record = asRecord(input);
   const source = cloneRecord(readFirstDefined(record, ["source", "metadata"]));
   const enabled = readBoolean(readFirstDefined(record, ["enable", "enabled"]), true, issues, "motion.enabled");
-  const reference = readMotionReference(readFirstDefined(record, ["reference"]), "skeleton", issues, "motion.reference");
+  const reference = readMotionReference(
+    readFirstDefined(record, ["reference"]),
+    "skeleton",
+    issues,
+    "motion.reference"
+  );
   const defaultBake = readBoolean(readFirstDefined(record, ["bake"]), true, issues, "motion.bake");
   const defaultLoop = readBoolean(readFirstDefined(record, ["loop"]), false, issues, "motion.loop");
   const carrier = normalizeMotionCarrier(
@@ -225,38 +270,57 @@ export function normalizeRawMotionExtractionImportConfig(input: unknown): Import
   );
 
   const translation = enabled
-    ? normalizeMotionTranslationChannel(readFirstDefined(record, ["translation", "position"]), reference, defaultBake, defaultLoop, issues)
+    ? normalizeMotionTranslationChannel(
+        readFirstDefined(record, ["translation", "position"]),
+        reference,
+        defaultBake,
+        defaultLoop,
+        issues
+      )
     : null;
   const rotation = enabled
-    ? normalizeMotionRotationChannel(readFirstDefined(record, ["rotation"]), reference, defaultBake, defaultLoop, issues)
+    ? normalizeMotionRotationChannel(
+        readFirstDefined(record, ["rotation"]),
+        reference,
+        defaultBake,
+        defaultLoop,
+        issues
+      )
     : null;
 
   const options: ExtractRawRootMotionOptions = {
-    translation: translation ? {
-      axes: translation.axes,
-      reference: translation.reference,
-      bake: translation.bake,
-      loop: translation.loop
-    } : false,
-    rotation: rotation ? {
-      mode: rotation.mode,
-      reference: rotation.reference,
-      bake: rotation.bake,
-      loop: rotation.loop
-    } : false
+    translation: translation
+      ? {
+          axes: translation.axes,
+          reference: translation.reference,
+          bake: translation.bake,
+          loop: translation.loop
+        }
+      : false,
+    rotation: rotation
+      ? {
+          mode: rotation.mode,
+          reference: rotation.reference,
+          bake: rotation.bake,
+          loop: rotation.loop
+        }
+      : false
   };
   if (carrier) options.carrier = carrier;
   const rawAnimationId = readString(readFirstDefined(record, ["rawAnimationId", "raw_animation_id"]));
   if (rawAnimationId) options.rawAnimationId = rawAnimationId;
 
   return {
-    plan: withOptionalSource({
-      enabled,
-      options,
-      translation,
-      rotation,
-      nonMutatingBake: Boolean(translation?.bake || rotation?.bake)
-    }, source),
+    plan: withOptionalSource(
+      {
+        enabled,
+        options,
+        translation,
+        rotation,
+        nonMutatingBake: Boolean(translation?.bake || rotation?.bake)
+      },
+      source
+    ),
     issues
   };
 }
@@ -265,7 +329,9 @@ export function toRawRootMotionExtractionOptions(plan: RawMotionExtractionImport
   return cloneRawRootMotionOptions(plan.options);
 }
 
-export function normalizeAnimationOptimizationImportConfig(input: unknown): ImporterConfigNormalizationResult<AnimationOptimizationImportPlan> {
+export function normalizeAnimationOptimizationImportConfig(
+  input: unknown
+): ImporterConfigNormalizationResult<AnimationOptimizationImportPlan> {
   const issues: ImporterConfigIssue[] = [];
   const record = asRecord(input);
   const source = cloneRecord(readFirstDefined(record, ["source", "metadata"]));
@@ -293,8 +359,7 @@ export function normalizeAnimationOptimizationImportConfig(input: unknown): Impo
       "optimization.tolerances.rotation"
     ),
     scale: readFiniteNonNegative(
-      readFirstDefined(tolerancesRecord, ["scale"]) ??
-        readFirstDefined(record, ["scaleTolerance", "scale_tolerance"]),
+      readFirstDefined(tolerancesRecord, ["scale"]) ?? readFirstDefined(record, ["scaleTolerance", "scale_tolerance"]),
       toleranceFallback,
       issues,
       "optimization.tolerances.scale"
@@ -317,18 +382,24 @@ export function normalizeAnimationOptimizationImportConfig(input: unknown): Impo
   if (sampleError !== false && sampleError !== undefined) options.sampleError = sampleError;
 
   return {
-    plan: withOptionalSource({
-      enabled,
-      options,
-      tolerances,
-      hierarchyWeight,
-      diagnostics
-    }, source),
+    plan: withOptionalSource(
+      {
+        enabled,
+        options,
+        tolerances,
+        hierarchyWeight,
+        diagnostics
+      },
+      source
+    ),
     issues
   };
 }
 
-export function toAnimationOptimizerOptions(plan: AnimationOptimizationImportPlan, skeleton?: Skeleton): AnimationOptimizerOptions {
+export function toAnimationOptimizerOptions(
+  plan: AnimationOptimizationImportPlan,
+  skeleton?: Skeleton
+): AnimationOptimizerOptions {
   const options: AnimationOptimizerOptions = {
     tolerances: { ...plan.tolerances },
     hierarchyWeight: plan.hierarchyWeight
@@ -352,11 +423,20 @@ export function normalizeUserTrackImportSpecs(input: unknown): ImporterConfigNor
       issues.push({ path, message: "user track import spec must be an object", value });
       return;
     }
-    const type = normalizeUserTrackType(readFirstDefined(record, ["type", "trackType", "track_type"]), issues, `${path}.type`);
+    const type = normalizeUserTrackType(
+      readFirstDefined(record, ["type", "trackType", "track_type"]),
+      issues,
+      `${path}.type`
+    );
     if (!type) return;
     const source = normalizeUserTrackSource(record, animationName, issues, path);
     if (!source) return;
-    const interpolation = normalizeInterpolation(readFirstDefined(record, ["interpolation", "defaultInterpolation", "default_interpolation"]), "linear", issues, `${path}.interpolation`);
+    const interpolation = normalizeInterpolation(
+      readFirstDefined(record, ["interpolation", "defaultInterpolation", "default_interpolation"]),
+      "linear",
+      issues,
+      `${path}.interpolation`
+    );
     const rawName = readString(readFirstDefined(record, ["name", "trackName", "track_name"]));
     const name = rawName && rawName.length > 0 ? rawName : `${source.nodeName}.${source.propertyName}`;
     tracks.push({
@@ -379,15 +459,27 @@ export function normalizeBakedImportConfig(input: unknown): ImporterConfigNormal
   const record = asRecord(input);
   const source = cloneRecord(readFirstDefined(record, ["source", "metadata"]));
   const skeletonImport = asRecord(asRecord(readFirstDefined(record, ["skeleton"]))?.import);
-  const nodeTypes = normalizeBakedNodeTypes(readFirstDefined(skeletonImport, ["types", "nodeTypes", "node_types"]), issues);
-  const cameraOptions = normalizeBakedCameraOptions(readFirstDefined(record, ["camera", "cameraJoint", "camera_joint"]), issues);
-  const rigid = normalizeBakedRigidInstances(readFirstDefined(record, ["rigidInstances", "rigid_instances", "instances"]), issues);
+  const nodeTypes = normalizeBakedNodeTypes(
+    readFirstDefined(skeletonImport, ["types", "nodeTypes", "node_types"]),
+    issues
+  );
+  const cameraOptions = normalizeBakedCameraOptions(
+    readFirstDefined(record, ["camera", "cameraJoint", "camera_joint"]),
+    issues
+  );
+  const rigid = normalizeBakedRigidInstances(
+    readFirstDefined(record, ["rigidInstances", "rigid_instances", "instances"]),
+    issues
+  );
   return {
-    plan: withOptionalSource({
-      camera: { options: cameraOptions },
-      rigidInstances: rigid,
-      skeletonNodeTypes: nodeTypes
-    }, source),
+    plan: withOptionalSource(
+      {
+        camera: { options: cameraOptions },
+        rigidInstances: rigid,
+        skeletonNodeTypes: nodeTypes
+      },
+      source
+    ),
     issues
   };
 }
@@ -398,7 +490,10 @@ export function toBakedCameraJointOptions(plan: BakedImportPlan): BakedCameraJoi
 
 export function toRigidInstanceMatrixOptions(plan: BakedImportPlan, skeleton?: Skeleton): RigidInstanceMatrixOptions {
   const options: RigidInstanceMatrixOptions = { ...plan.rigidInstances.options };
-  if (skeleton && (plan.rigidInstances.filters.includes.length > 0 || plan.rigidInstances.filters.excludes.length > 0)) {
+  if (
+    skeleton &&
+    (plan.rigidInstances.filters.includes.length > 0 || plan.rigidInstances.filters.excludes.length > 0)
+  ) {
     options.jointIndices = resolveFilteredJointIndices(skeleton, plan.rigidInstances.filters);
   }
   return options;
@@ -412,9 +507,21 @@ function normalizeAdditiveReferencePolicy(
 ): AdditiveReferencePolicy {
   if (referencePose !== undefined) return "explicit-pose";
   if (value === undefined || value === null) return "first-key";
-  const normalized = String(value).trim().toLocaleLowerCase().replace(/_/g, "-");
-  if (normalized === "first" || normalized === "first-key" || normalized === "first-frame" || normalized === "default") return "first-key";
-  if (normalized === "skeleton" || normalized === "rest" || normalized === "rest-pose" || normalized === "skeleton-rest") return "skeleton-rest";
+  const raw = readString(value);
+  if (!raw) {
+    issues.push({ path, message: "unsupported additive reference policy; using first keyed sample", value });
+    return "first-key";
+  }
+  const normalized = raw.trim().toLocaleLowerCase().replace(/_/g, "-");
+  if (normalized === "first" || normalized === "first-key" || normalized === "first-frame" || normalized === "default")
+    return "first-key";
+  if (
+    normalized === "skeleton" ||
+    normalized === "rest" ||
+    normalized === "rest-pose" ||
+    normalized === "skeleton-rest"
+  )
+    return "skeleton-rest";
   if (normalized === "explicit" || normalized === "explicit-pose" || normalized === "pose") return "explicit-pose";
   issues.push({ path, message: "unsupported additive reference policy; using first keyed sample", value });
   return "first-key";
@@ -443,10 +550,20 @@ function normalizeMotionTranslationChannel(
 ): RawMotionTranslationImportPlan | null {
   if (input === false || input === null) return null;
   const record = asRecord(input);
-  const axes = normalizeAxisMask(readFirstDefined(record, ["axes", "components"]), OZZ_DEFAULT_TRANSLATION_AXES, issues, "motion.translation.axes");
+  const axes = normalizeAxisMask(
+    readFirstDefined(record, ["axes", "components"]),
+    OZZ_DEFAULT_TRANSLATION_AXES,
+    issues,
+    "motion.translation.axes"
+  );
   return {
     axes,
-    reference: readMotionReference(readFirstDefined(record, ["reference"]), defaultReference, issues, "motion.translation.reference"),
+    reference: readMotionReference(
+      readFirstDefined(record, ["reference"]),
+      defaultReference,
+      issues,
+      "motion.translation.reference"
+    ),
     bake: readBoolean(readFirstDefined(record, ["bake"]), defaultBake, issues, "motion.translation.bake"),
     loop: readBoolean(readFirstDefined(record, ["loop"]), defaultLoop, issues, "motion.translation.loop")
   };
@@ -461,12 +578,22 @@ function normalizeMotionRotationChannel(
 ): RawMotionRotationImportPlan | null {
   if (input === false || input === null) return null;
   const record = asRecord(input);
-  const axes = normalizeAxisMask(readFirstDefined(record, ["axes", "components"]), OZZ_DEFAULT_ROTATION_AXES, issues, "motion.rotation.axes");
+  const axes = normalizeAxisMask(
+    readFirstDefined(record, ["axes", "components"]),
+    OZZ_DEFAULT_ROTATION_AXES,
+    issues,
+    "motion.rotation.axes"
+  );
   const mode = normalizeRotationMode(readFirstDefined(record, ["mode"]), axes, issues, "motion.rotation.mode");
   return {
     mode,
     axes,
-    reference: readMotionReference(readFirstDefined(record, ["reference"]), defaultReference, issues, "motion.rotation.reference"),
+    reference: readMotionReference(
+      readFirstDefined(record, ["reference"]),
+      defaultReference,
+      issues,
+      "motion.rotation.reference"
+    ),
     bake: readBoolean(readFirstDefined(record, ["bake"]), defaultBake, issues, "motion.rotation.bake"),
     loop: readBoolean(readFirstDefined(record, ["loop"]), defaultLoop, issues, "motion.rotation.loop")
   };
@@ -484,7 +611,10 @@ function normalizeRotationMode(
   }
   if (axes.x || axes.z) {
     if (!axes.y) {
-      issues.push({ path: "motion.rotation.axes", message: "pitch/roll-only extraction is not supported by core raw extraction; using full rotation" });
+      issues.push({
+        path: "motion.rotation.axes",
+        message: "pitch/roll-only extraction is not supported by core raw extraction; using full rotation"
+      });
     }
     return "full";
   }
@@ -533,17 +663,29 @@ function isAxisName(value: unknown): value is "x" | "y" | "z" {
   return value === "x" || value === "y" || value === "z";
 }
 
-function normalizeMotionCarrier(input: unknown, issues: ImporterConfigIssue[], path: string): MotionCarrier | undefined {
+function normalizeMotionCarrier(
+  input: unknown,
+  issues: ImporterConfigIssue[],
+  path: string
+): MotionCarrier | undefined {
   if (input === undefined || input === null) return undefined;
   if (typeof input === "number") {
     if (Number.isInteger(input) && input >= 0) return { jointIndex: input };
-    issues.push({ path, message: "motion carrier joint index must be a non-negative integer; using root", value: input });
+    issues.push({
+      path,
+      message: "motion carrier joint index must be a non-negative integer; using root",
+      value: input
+    });
     return undefined;
   }
   if (typeof input === "string") return { joint: input };
   const record = asRecord(input);
   if (!record) {
-    issues.push({ path, message: "motion carrier must be a joint name, joint index, or object; using root", value: input });
+    issues.push({
+      path,
+      message: "motion carrier must be a joint name, joint index, or object; using root",
+      value: input
+    });
     return undefined;
   }
   const jointIndex = readFirstDefined(record, ["jointIndex", "joint_index", "index"]);
@@ -552,7 +694,11 @@ function normalizeMotionCarrier(input: unknown, issues: ImporterConfigIssue[], p
   if (joint) return { joint };
   const humanBone = readString(readFirstDefined(record, ["humanBone", "human_bone", "humanoid"]));
   if (humanBone) return { humanBone };
-  issues.push({ path, message: "motion carrier object must name jointIndex, joint, or humanBone; using root", value: input });
+  issues.push({
+    path,
+    message: "motion carrier object must name jointIndex, joint, or humanBone; using root",
+    value: input
+  });
   return undefined;
 }
 
@@ -584,7 +730,11 @@ function normalizeJointTolerances(
   }
   const overrides = asRecord(raw);
   if (!overrides) {
-    issues.push({ path: "optimization.jointTolerances", message: "joint tolerance overrides must be an object or array", value: raw });
+    issues.push({
+      path: "optimization.jointTolerances",
+      message: "joint tolerance overrides must be an object or array",
+      value: raw
+    });
     return output;
   }
   for (const [key, value] of Object.entries(overrides)) {
@@ -604,10 +754,27 @@ function normalizeJointToleranceEntry(
     issues.push({ path, message: "joint tolerance override must be an object", value: input });
     return null;
   }
-  const keyValue = readFirstDefined(record, ["name", "joint", "jointName", "joint_name", "humanBone", "human_bone", "index", "jointIndex", "joint_index"]);
-  const key = typeof keyValue === "number" && Number.isInteger(keyValue) && keyValue >= 0 ? String(keyValue) : readString(keyValue);
+  const keyValue = readFirstDefined(record, [
+    "name",
+    "joint",
+    "jointName",
+    "joint_name",
+    "humanBone",
+    "human_bone",
+    "index",
+    "jointIndex",
+    "joint_index"
+  ]);
+  const key =
+    typeof keyValue === "number" && Number.isInteger(keyValue) && keyValue >= 0
+      ? String(keyValue)
+      : readString(keyValue);
   if (!key) {
-    issues.push({ path, message: "joint tolerance override must include a joint name, humanoid name, or joint index", value: input });
+    issues.push({
+      path,
+      message: "joint tolerance override must include a joint name, humanoid name, or joint index",
+      value: input
+    });
     return null;
   }
   const normalized = normalizeJointToleranceValues(record, path, issues);
@@ -624,11 +791,31 @@ function normalizeJointToleranceValues(
     issues.push({ path, message: "joint tolerance override value must be an object", value: input });
     return null;
   }
-  const toleranceFallback = readFiniteNonNegative(readFirstDefined(record, ["tolerance"]), Number.NaN, issues, `${path}.tolerance`);
+  const toleranceFallback = readFiniteNonNegative(
+    readFirstDefined(record, ["tolerance"]),
+    Number.NaN,
+    issues,
+    `${path}.tolerance`
+  );
   const output: AnimationOptimizerJointTolerance = {};
-  const translation = readFiniteNonNegative(readFirstDefined(record, ["translation", "translationTolerance", "translation_tolerance"]), toleranceFallback, issues, `${path}.translation`);
-  const rotation = readFiniteNonNegative(readFirstDefined(record, ["rotation", "rotationTolerance", "rotation_tolerance"]), toleranceFallback, issues, `${path}.rotation`);
-  const scale = readFiniteNonNegative(readFirstDefined(record, ["scale", "scaleTolerance", "scale_tolerance"]), toleranceFallback, issues, `${path}.scale`);
+  const translation = readFiniteNonNegative(
+    readFirstDefined(record, ["translation", "translationTolerance", "translation_tolerance"]),
+    toleranceFallback,
+    issues,
+    `${path}.translation`
+  );
+  const rotation = readFiniteNonNegative(
+    readFirstDefined(record, ["rotation", "rotationTolerance", "rotation_tolerance"]),
+    toleranceFallback,
+    issues,
+    `${path}.rotation`
+  );
+  const scale = readFiniteNonNegative(
+    readFirstDefined(record, ["scale", "scaleTolerance", "scale_tolerance"]),
+    toleranceFallback,
+    issues,
+    `${path}.scale`
+  );
   if (Number.isFinite(translation)) output.translation = translation;
   if (Number.isFinite(rotation)) output.rotation = rotation;
   if (Number.isFinite(scale)) output.scale = scale;
@@ -649,22 +836,38 @@ function normalizeOptimizationDiagnostics(
   if (raw === true) return {};
   const diagnostics = asRecord(raw);
   if (!diagnostics) {
-    issues.push({ path: "optimization.diagnostics", message: "optimizer diagnostics must be boolean or object; disabling diagnostics", value: raw });
+    issues.push({
+      path: "optimization.diagnostics",
+      message: "optimizer diagnostics must be boolean or object; disabling diagnostics",
+      value: raw
+    });
     return false;
   }
   const output: Exclude<AnimationOptimizationImportPlan["diagnostics"], false> = {};
   const sampleFrequency = readFirstDefined(diagnostics, ["sampleFrequency", "sample_frequency"]);
   if (sampleFrequency !== undefined) {
-    output.sampleFrequency = readFinitePositive(sampleFrequency, 30, issues, "optimization.diagnostics.sampleFrequency");
+    output.sampleFrequency = readFinitePositive(
+      sampleFrequency,
+      30,
+      issues,
+      "optimization.diagnostics.sampleFrequency"
+    );
   }
   const includeModelSpace = readFirstDefined(diagnostics, ["includeModelSpace", "include_model_space"]);
   if (includeModelSpace !== undefined) {
-    output.includeModelSpace = readBoolean(includeModelSpace, true, issues, "optimization.diagnostics.includeModelSpace");
+    output.includeModelSpace = readBoolean(
+      includeModelSpace,
+      true,
+      issues,
+      "optimization.diagnostics.includeModelSpace"
+    );
   }
   return output;
 }
 
-function diagnosticsToSampleError(diagnostics: AnimationOptimizationImportPlan["diagnostics"]): true | AnimationOptimizerSampleErrorOptions | false {
+function diagnosticsToSampleError(
+  diagnostics: AnimationOptimizationImportPlan["diagnostics"]
+): true | AnimationOptimizerSampleErrorOptions | false {
   if (diagnostics === false) return false;
   const sampleError: AnimationOptimizerSampleErrorOptions = {};
   if (diagnostics.sampleFrequency !== undefined) sampleError.sampleFrequency = diagnostics.sampleFrequency;
@@ -728,7 +931,9 @@ function normalizeUserTrackSource(
   if (resolvedAnimationName) source.animationName = resolvedAnimationName;
   const sourceType = readString(readFirstDefined(record, ["sourceType", "source_type", "type"]));
   if (sourceType) source.sourceType = sourceType;
-  const outputFilename = readString(readFirstDefined(record, ["filename", "output", "outputFilename", "output_filename"]));
+  const outputFilename = readString(
+    readFirstDefined(record, ["filename", "output", "outputFilename", "output_filename"])
+  );
   if (outputFilename) source.outputFilename = outputFilename;
   return source;
 }
@@ -746,21 +951,24 @@ function normalizeInterpolation(
 }
 
 function findUserTrackSpecInputs(input: unknown): { value: unknown; path: string; animationName?: string }[] {
-  if (Array.isArray(input)) return input.map((value, index) => ({ value, path: `userTracks[${index}]` }));
+  if (isUnknownArray(input)) return input.map((value, index) => ({ value, path: `userTracks[${index}]` }));
   const record = asRecord(input);
   const direct = readFirstDefined(record, ["userTracks", "user_tracks", "properties"]);
-  if (Array.isArray(direct)) return direct.map((value, index) => ({ value, path: `userTracks[${index}]` }));
+  if (isUnknownArray(direct)) return direct.map((value, index) => ({ value, path: `userTracks[${index}]` }));
   const tracks = asRecord(readFirstDefined(record, ["tracks"]));
-  if (Array.isArray(tracks?.properties)) return tracks.properties.map((value, index) => ({ value, path: `tracks.properties[${index}]` }));
+  if (isUnknownArray(tracks?.properties))
+    return tracks.properties.map((value, index) => ({ value, path: `tracks.properties[${index}]` }));
   const animations = readFirstDefined(record, ["animations"]);
-  if (!Array.isArray(animations)) return [];
+  if (!isUnknownArray(animations)) return [];
   const specs: { value: unknown; path: string; animationName?: string }[] = [];
   animations.forEach((animation, animationIndex) => {
     const animationRecord = asRecord(animation);
-    const animationName = readString(readFirstDefined(animationRecord, ["name", "filename", "animationName", "animation_name"]));
+    const animationName = readString(
+      readFirstDefined(animationRecord, ["name", "filename", "animationName", "animation_name"])
+    );
     const animationTracks = asRecord(readFirstDefined(animationRecord, ["tracks"]));
     const properties = animationTracks?.properties;
-    if (!Array.isArray(properties)) return;
+    if (!isUnknownArray(properties)) return;
     properties.forEach((value, propertyIndex) => {
       const item: { value: unknown; path: string; animationName?: string } = {
         value,
@@ -788,13 +996,22 @@ function normalizeBakedCameraOptions(input: unknown, issues: ImporterConfigIssue
   const record = asRecord(input);
   if (!record) return { includes: "camera" };
   const options: BakedCameraJointOptions = {};
-  const joint = normalizeJointReference(readFirstDefined(record, ["joint", "jointName", "joint_name", "index", "jointIndex", "joint_index"]), issues, "baked.camera.joint");
+  const joint = normalizeJointReference(
+    readFirstDefined(record, ["joint", "jointName", "joint_name", "index", "jointIndex", "joint_index"]),
+    issues,
+    "baked.camera.joint"
+  );
   if (joint !== undefined) options.joint = joint;
   const includes = readString(readFirstDefined(record, ["includes", "name", "jointIncludes", "joint_includes"]));
   if (includes) options.includes = includes;
   const caseSensitive = readFirstDefined(record, ["caseSensitive", "case_sensitive"]);
-  if (caseSensitive !== undefined) options.caseSensitive = readBoolean(caseSensitive, false, issues, "baked.camera.caseSensitive");
-  const fallbackMatrix = normalizeMatrix(readFirstDefined(record, ["fallbackMatrix", "fallback_matrix"]), issues, "baked.camera.fallbackMatrix");
+  if (caseSensitive !== undefined)
+    options.caseSensitive = readBoolean(caseSensitive, false, issues, "baked.camera.caseSensitive");
+  const fallbackMatrix = normalizeMatrix(
+    readFirstDefined(record, ["fallbackMatrix", "fallback_matrix"]),
+    issues,
+    "baked.camera.fallbackMatrix"
+  );
   if (fallbackMatrix) options.fallbackMatrix = fallbackMatrix;
   if (options.joint === undefined && options.includes === undefined) options.includes = "camera";
   return options;
@@ -808,20 +1025,45 @@ function normalizeBakedRigidInstances(
   const options: RigidInstanceMatrixOptions = {};
   const filters: BakedRigidInstanceJointFilters = { includes: [], excludes: [], caseSensitive: false };
   if (record) {
-    const jointIndices = normalizeJointIndices(readFirstDefined(record, ["jointIndices", "joint_indices", "indices"]), issues, "baked.rigidInstances.jointIndices");
+    const jointIndices = normalizeJointIndices(
+      readFirstDefined(record, ["jointIndices", "joint_indices", "indices"]),
+      issues,
+      "baked.rigidInstances.jointIndices"
+    );
     if (jointIndices) options.jointIndices = jointIndices;
     const count = readFirstDefined(record, ["count"]);
     if (count !== undefined) options.count = readNonNegativeInteger(count, 0, issues, "baked.rigidInstances.count");
-    const fallbackMatrix = normalizeMatrix(readFirstDefined(record, ["fallbackMatrix", "fallback_matrix"]), issues, "baked.rigidInstances.fallbackMatrix");
+    const fallbackMatrix = normalizeMatrix(
+      readFirstDefined(record, ["fallbackMatrix", "fallback_matrix"]),
+      issues,
+      "baked.rigidInstances.fallbackMatrix"
+    );
     if (fallbackMatrix) options.fallbackMatrix = fallbackMatrix;
-    filters.includes = normalizeStringList(readFirstDefined(record, ["jointNameIncludes", "joint_name_includes", "includes"]), issues, "baked.rigidInstances.includes");
-    filters.excludes = normalizeStringList(readFirstDefined(record, ["jointNameExcludes", "joint_name_excludes", "excludes"]), issues, "baked.rigidInstances.excludes");
-    filters.caseSensitive = readBoolean(readFirstDefined(record, ["caseSensitive", "case_sensitive"]), false, issues, "baked.rigidInstances.caseSensitive");
+    filters.includes = normalizeStringList(
+      readFirstDefined(record, ["jointNameIncludes", "joint_name_includes", "includes"]),
+      issues,
+      "baked.rigidInstances.includes"
+    );
+    filters.excludes = normalizeStringList(
+      readFirstDefined(record, ["jointNameExcludes", "joint_name_excludes", "excludes"]),
+      issues,
+      "baked.rigidInstances.excludes"
+    );
+    filters.caseSensitive = readBoolean(
+      readFirstDefined(record, ["caseSensitive", "case_sensitive"]),
+      false,
+      issues,
+      "baked.rigidInstances.caseSensitive"
+    );
   }
   return { options, filters };
 }
 
-function normalizeJointReference(input: unknown, issues: ImporterConfigIssue[], path: string): JointReference | undefined {
+function normalizeJointReference(
+  input: unknown,
+  issues: ImporterConfigIssue[],
+  path: string
+): JointReference | undefined {
   if (input === undefined || input === null) return undefined;
   if (typeof input === "string") return input;
   if (typeof input === "number" && Number.isInteger(input) && input >= -1) return input;
@@ -831,13 +1073,13 @@ function normalizeJointReference(input: unknown, issues: ImporterConfigIssue[], 
 
 function normalizeJointIndices(input: unknown, issues: ImporterConfigIssue[], path: string): number[] | undefined {
   if (input === undefined) return undefined;
-  if (!Array.isArray(input)) {
+  if (!isUnknownArray(input)) {
     issues.push({ path, message: "joint indices must be an array", value: input });
     return undefined;
   }
   const output: number[] = [];
   input.forEach((value, index) => {
-    if (Number.isInteger(value) && value >= 0) output.push(value);
+    if (typeof value === "number" && Number.isInteger(value) && value >= 0) output.push(value);
     else issues.push({ path: `${path}[${index}]`, message: "joint index must be a non-negative integer", value });
   });
   return output;
@@ -853,8 +1095,8 @@ function normalizeMatrix(input: unknown, issues: ImporterConfigIssue[], path: st
 }
 
 function resolveFilteredJointIndices(skeleton: Skeleton, filters: BakedRigidInstanceJointFilters): number[] {
-  const includes = filters.includes.map((value) => filters.caseSensitive ? value : value.toLocaleLowerCase());
-  const excludes = filters.excludes.map((value) => filters.caseSensitive ? value : value.toLocaleLowerCase());
+  const includes = filters.includes.map((value) => (filters.caseSensitive ? value : value.toLocaleLowerCase()));
+  const excludes = filters.excludes.map((value) => (filters.caseSensitive ? value : value.toLocaleLowerCase()));
   const output: number[] = [];
   skeleton.joints.forEach((joint, index) => {
     const name = filters.caseSensitive ? joint.name : joint.name.toLocaleLowerCase();
@@ -882,7 +1124,12 @@ function normalizeTransform(input: unknown, path: string, issues: ImporterConfig
   };
 }
 
-function normalizeNumberTuple(input: unknown, length: number, path: string, issues: ImporterConfigIssue[]): number[] | null {
+function normalizeNumberTuple(
+  input: unknown,
+  length: number,
+  path: string,
+  issues: ImporterConfigIssue[]
+): number[] | null {
   if (!isArrayLike(input) || input.length < length) {
     issues.push({ path, message: `expected ${length} numeric components`, value: input });
     return null;
@@ -912,7 +1159,10 @@ function cloneRawRootMotionOptions(options: ExtractRawRootMotionOptions): Extrac
   if (options.translation === false) {
     cloned.translation = false;
   } else if (typeof options.translation === "object") {
-    cloned.translation = { ...options.translation, ...(options.translation.axes ? { axes: { ...options.translation.axes } } : {}) };
+    cloned.translation = {
+      ...options.translation,
+      ...(options.translation.axes ? { axes: { ...options.translation.axes } } : {})
+    };
   } else if (options.translation !== undefined) {
     cloned.translation = options.translation;
   }
@@ -921,7 +1171,7 @@ function cloneRawRootMotionOptions(options: ExtractRawRootMotionOptions): Extrac
   } else if (typeof options.rotation === "object") {
     cloned.rotation = { ...options.rotation };
   }
-  if (options.carrier) cloned.carrier = { ...options.carrier } as MotionCarrier;
+  if (options.carrier) cloned.carrier = { ...options.carrier };
   if (options.reference !== undefined) cloned.reference = options.reference;
   if (options.bake !== undefined) cloned.bake = options.bake;
   if (options.loop !== undefined) cloned.loop = options.loop;
@@ -998,7 +1248,13 @@ function normalizeStringList(input: unknown, issues: ImporterConfigIssue[], path
 }
 
 function asRecord(input: unknown): Record<string, unknown> | null {
-  return typeof input === "object" && input !== null && !Array.isArray(input) ? input as Record<string, unknown> : null;
+  return typeof input === "object" && input !== null && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : null;
+}
+
+function isUnknownArray(input: unknown): input is unknown[] {
+  return Array.isArray(input);
 }
 
 function cloneRecord(input: unknown): Record<string, unknown> | undefined {
@@ -1018,7 +1274,12 @@ function withOptionalSource<T extends object>(value: T, source: Record<string, u
 }
 
 function isArrayLike(input: unknown): input is ArrayLike<number> {
-  return typeof input === "object" && input !== null && "length" in input && Number.isInteger((input as ArrayLike<number>).length);
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    "length" in input &&
+    Number.isInteger((input as ArrayLike<number>).length)
+  );
 }
 
 function isMatrixLike(input: unknown): input is MatrixLike {

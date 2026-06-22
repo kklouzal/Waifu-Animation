@@ -1,4 +1,13 @@
-import { EPSILON, clamp01, dotQuat, ensureShortestQuat, isFiniteNumber, normalizeQuat, slerpQuat, type Quat } from "./math.js";
+import {
+  EPSILON,
+  clamp01,
+  dotQuat,
+  ensureShortestQuat,
+  isFiniteNumber,
+  normalizeQuat,
+  slerpQuat,
+  type Quat
+} from "./math.js";
 
 export type UserTrackType = "float" | "float2" | "float3" | "float4" | "quaternion";
 export type UserTrackInterpolation = "linear" | "step";
@@ -161,9 +170,12 @@ export function validateUserTrack(track: UserTrack): UserTrackValidationIssue[] 
     issues.push({ field: "type", message: `unsupported user track type ${String(track.type)}` });
     return issues;
   }
-  if (!(track.ratios instanceof Float32Array)) issues.push({ field: "ratios", message: "track ratios must be a Float32Array" });
-  if (!(track.values instanceof Float32Array)) issues.push({ field: "values", message: "track values must be a Float32Array" });
-  if (!(track.steps instanceof Uint8Array)) issues.push({ field: "steps", message: "track steps must be a Uint8Array" });
+  if (!(track.ratios instanceof Float32Array))
+    issues.push({ field: "ratios", message: "track ratios must be a Float32Array" });
+  if (!(track.values instanceof Float32Array))
+    issues.push({ field: "values", message: "track values must be a Float32Array" });
+  if (!(track.steps instanceof Uint8Array))
+    issues.push({ field: "steps", message: "track steps must be a Uint8Array" });
   if (issues.length > 0) return issues;
 
   const stride = trackValueSize(track.type);
@@ -194,7 +206,7 @@ export function validateUserTrack(track: UserTrack): UserTrackValidationIssue[] 
 }
 
 export function tryBuildUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>): UserTrackBuildResult<T> {
-  const issues = validateRawUserTrack(raw as RawUserTrack);
+  const issues = validateRawUserTrack(raw);
   if (issues.length > 0) return { ok: false, track: null, issues };
   return { ok: true, track: buildValidatedUserTrack(raw), issues: [] };
 }
@@ -206,7 +218,7 @@ export function buildUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>): U
 }
 
 export function getRawUserTrackStats<T extends UserTrackType>(raw: RawUserTrack<T>): RawUserTrackStats<T> {
-  const issues = validateRawUserTrack(raw as RawUserTrack);
+  const issues = validateRawUserTrack(raw);
   if (issues.length > 0) throw trackValidationError("raw user track", issues);
   let linearKeyCount = 0;
   let stepKeyCount = 0;
@@ -230,10 +242,14 @@ export function optimizeRawUserTrack<T extends UserTrackType>(
 ): UserTrackOptimizationResult<T> {
   const before = getRawUserTrackStats(raw);
   const tolerance = readOptimizationTolerance(options.tolerance);
-  const optimizedKeyframes = decimateRawUserTrackKeys(raw, raw.type === "quaternion" ? 1 - Math.cos(0.5 * tolerance) : tolerance);
-  const track: RawUserTrack<T> = raw.name === undefined
-    ? { type: raw.type, keyframes: optimizedKeyframes }
-    : { type: raw.type, name: raw.name, keyframes: optimizedKeyframes };
+  const optimizedKeyframes = decimateRawUserTrackKeys(
+    raw,
+    raw.type === "quaternion" ? 1 - Math.cos(0.5 * tolerance) : tolerance
+  );
+  const track: RawUserTrack<T> =
+    raw.name === undefined
+      ? { type: raw.type, keyframes: optimizedKeyframes }
+      : { type: raw.type, name: raw.name, keyframes: optimizedKeyframes };
   const after = getRawUserTrackStats(track);
   return { track, before, after, removedKeyCount: before.keyCount - after.keyCount };
 }
@@ -243,7 +259,7 @@ export function sampleRawUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>
 }
 
 export function sampleUserTrack<T extends UserTrackType>(track: UserTrack<T>, ratio: number): UserTrackValue<T> {
-  const issues = validateUserTrack(track as UserTrack);
+  const issues = validateUserTrack(track);
   if (issues.length > 0) throw trackValidationError("user track", issues);
 
   const ratios = track.ratios;
@@ -266,14 +282,17 @@ export function sampleUserTrack<T extends UserTrackType>(track: UserTrack<T>, ra
 
 export function triggerFloatTrackEdges(job: TrackTriggeringJob): TrackTriggerEdge[] {
   if (job.track.type !== "float") throw new Error("track triggering only supports float user tracks");
-  if (![job.from, job.to, job.threshold].every(isFiniteNumber)) throw new Error("track triggering from, to, and threshold must be finite");
+  if (![job.from, job.to, job.threshold].every(isFiniteNumber))
+    throw new Error("track triggering from, to, and threshold must be finite");
   const maxLoopCount = finitePositiveInteger(job.maxLoopCount, DEFAULT_TRACK_TRIGGER_MAX_LOOPS, "maxLoopCount");
   const maxEdgeCount = finitePositiveInteger(job.maxEdgeCount, DEFAULT_TRACK_TRIGGER_MAX_EDGES, "maxEdgeCount");
   const issues = validateUserTrack(job.track);
   if (issues.length > 0) throw trackValidationError("float user track", issues);
   if (job.from === job.to || job.track.ratios.length === 0) return [];
 
-  return job.to > job.from ? triggerForward(job, maxLoopCount, maxEdgeCount) : triggerBackward(job, maxLoopCount, maxEdgeCount);
+  return job.to > job.from
+    ? triggerForward(job, maxLoopCount, maxEdgeCount)
+    : triggerBackward(job, maxLoopCount, maxEdgeCount);
 }
 
 function buildValidatedUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>): UserTrack<T> {
@@ -298,11 +317,15 @@ function buildValidatedUserTrack<T extends UserTrackType>(raw: RawUserTrack<T>):
 
 function readOptimizationTolerance(value: number | undefined): number {
   if (value === undefined) return 1e-3;
-  if (!isFiniteNumber(value) || value < 0) throw new Error("track optimization tolerance must be finite and non-negative");
+  if (!isFiniteNumber(value) || value < 0)
+    throw new Error("track optimization tolerance must be finite and non-negative");
   return value;
 }
 
-function decimateRawUserTrackKeys<T extends UserTrackType>(raw: RawUserTrack<T>, tolerance: number): RawUserTrackKeyframe<T>[] {
+function decimateRawUserTrackKeys<T extends UserTrackType>(
+  raw: RawUserTrack<T>,
+  tolerance: number
+): RawUserTrackKeyframe<T>[] {
   const keyframes: RawUserTrackKeyframe<T>[] = [];
   let previousQuat: Quat | undefined;
   for (const key of raw.keyframes) {
@@ -327,7 +350,11 @@ function decimateRawUserTrackKeys<T extends UserTrackType>(raw: RawUserTrack<T>,
           candidate = index;
           break;
         }
-        const distance = valueDistance(raw.type, interpolateOptimizedValue(raw.type, keyframes[left]!, keyframes[right]!, key), key.value);
+        const distance = valueDistance(
+          raw.type,
+          interpolateOptimizedValue(raw.type, keyframes[left]!, keyframes[right]!, key),
+          key.value
+        );
         if (distance > tolerance && distance > maxDistance) {
           maxDistance = distance;
           candidate = index;
@@ -354,7 +381,11 @@ function decimateRawUserTrackKeys<T extends UserTrackType>(raw: RawUserTrack<T>,
   return keyframes;
 }
 
-function cloneOptimizableKey<T extends UserTrackType>(type: T, key: RawUserTrackKeyframe<T>, previousQuat: Quat | undefined): RawUserTrackKeyframe<T> {
+function cloneOptimizableKey<T extends UserTrackType>(
+  type: T,
+  key: RawUserTrackKeyframe<T>,
+  previousQuat: Quat | undefined
+): RawUserTrackKeyframe<T> {
   const flat = flattenTrackValue(type, key.value);
   const value = type === "quaternion" ? fixupQuaternion(flat, previousQuat) : flat;
   return {
@@ -386,12 +417,14 @@ function interpolateOptimizedValue<T extends UserTrackType>(
   const a = left.value as ArrayLike<number>;
   const b = right.value as ArrayLike<number>;
   const result: number[] = [];
-  for (let component = 0; component < stride; component += 1) result.push(a[component]! + (b[component]! - a[component]!) * amount);
+  for (let component = 0; component < stride; component += 1)
+    result.push(a[component]! + (b[component]! - a[component]!) * amount);
   return result as UserTrackValue<T>;
 }
 
 function valueDistance<T extends UserTrackType>(type: T, a: UserTrackValue<T>, b: UserTrackValue<T>): number {
-  if (type === "quaternion") return 1 - Math.min(1, Math.abs(dotQuat(normalizeQuat(a as Quat), normalizeQuat(b as Quat))));
+  if (type === "quaternion")
+    return 1 - Math.min(1, Math.abs(dotQuat(normalizeQuat(a as Quat), normalizeQuat(b as Quat))));
   if (type === "float") return Math.abs((a as number) - (b as number));
   const stride = trackValueSize(type);
   const left = a as ArrayLike<number>;
@@ -468,7 +501,13 @@ function triggerBackward(job: TrackTriggeringJob, maxLoopCount: number, maxEdgeC
     guardLoopCount(++loopCount, maxLoopCount);
     while (inner >= 0) {
       const current = inner;
-      const edge = detectFloatEdge(job.track, current === 0 ? keyCount - 1 : current - 1, current, false, job.threshold);
+      const edge = detectFloatEdge(
+        job.track,
+        current === 0 ? keyCount - 1 : current - 1,
+        current,
+        false,
+        job.threshold
+      );
       if (edge) {
         edge.ratio += outer;
         if (edge.ratio >= job.to && (edge.ratio < job.from || job.from >= 1 + outer)) {
@@ -485,7 +524,13 @@ function triggerBackward(job: TrackTriggeringJob, maxLoopCount: number, maxEdgeC
   return edges;
 }
 
-function detectFloatEdge(track: FloatTrack, left: number, right: number, forward: boolean, threshold: number): TrackTriggerEdge | null {
+function detectFloatEdge(
+  track: FloatTrack,
+  left: number,
+  right: number,
+  forward: boolean,
+  threshold: number
+): TrackTriggerEdge | null {
   const leftValue = track.values[left]!;
   const rightValue = track.values[right]!;
   let rising: boolean;
@@ -497,11 +542,22 @@ function detectFloatEdge(track: FloatTrack, left: number, right: number, forward
     return null;
   }
 
-  const ratio = track.steps[left] === 1 ? track.ratios[right]! : right === 0 ? 0 : unlerpRatio(track.ratios[left]!, track.ratios[right]!, leftValue, rightValue, threshold);
+  const ratio =
+    track.steps[left] === 1
+      ? track.ratios[right]!
+      : right === 0
+        ? 0
+        : unlerpRatio(track.ratios[left]!, track.ratios[right]!, leftValue, rightValue, threshold);
   return { ratio, rising };
 }
 
-function unlerpRatio(leftRatio: number, rightRatio: number, leftValue: number, rightValue: number, threshold: number): number {
+function unlerpRatio(
+  leftRatio: number,
+  rightRatio: number,
+  leftValue: number,
+  rightValue: number,
+  threshold: number
+): number {
   const alpha = (threshold - leftValue) / (rightValue - leftValue);
   return leftRatio + (rightRatio - leftRatio) * alpha;
 }
@@ -536,9 +592,18 @@ function upperBound(values: Float32Array, ratio: number): number {
   return low;
 }
 
-function interpolateRuntimeValues<T extends UserTrackType>(track: UserTrack<T>, left: number, right: number, alpha: number): UserTrackValue<T> {
+function interpolateRuntimeValues<T extends UserTrackType>(
+  track: UserTrack<T>,
+  left: number,
+  right: number,
+  alpha: number
+): UserTrackValue<T> {
   if (track.type === "quaternion") {
-    return slerpQuat(readRuntimeValue(track, left) as Quat, readRuntimeValue(track, right) as Quat, alpha) as UserTrackValue<T>;
+    return slerpQuat(
+      readRuntimeValue(track, left) as Quat,
+      readRuntimeValue(track, right) as Quat,
+      alpha
+    ) as UserTrackValue<T>;
   }
 
   const stride = trackValueSize(track.type);
@@ -566,7 +631,8 @@ function readRuntimeValue<T extends UserTrackType>(track: UserTrack<T>, index: n
   if (stride === 1) return track.values[offset]! as UserTrackValue<T>;
   const value: number[] = [];
   for (let component = 0; component < stride; component += 1) value.push(track.values[offset + component]!);
-  if (track.type === "quaternion") return normalizeQuat([value[0]!, value[1]!, value[2]!, value[3]!]) as UserTrackValue<T>;
+  if (track.type === "quaternion")
+    return normalizeQuat([value[0]!, value[1]!, value[2]!, value[3]!]) as UserTrackValue<T>;
   return value as UserTrackValue<T>;
 }
 
@@ -585,7 +651,8 @@ function flattenTrackValue(type: UserTrackType, value: UserTrackValue<UserTrackT
 function validateValue(type: UserTrackType, value: unknown, key: number, issues: UserTrackValidationIssue[]): void {
   const stride = trackValueSize(type);
   if (type === "float") {
-    if (!isFiniteNumber(value as number)) issues.push({ key, field: "value", message: "float keyframe value must be finite" });
+    if (!isFiniteNumber(value as number))
+      issues.push({ key, field: "value", message: "float keyframe value must be finite" });
     return;
   }
 
@@ -594,19 +661,30 @@ function validateValue(type: UserTrackType, value: unknown, key: number, issues:
     return;
   }
   for (let component = 0; component < stride; component += 1) {
-    if (!isFiniteNumber(value[component]!)) issues.push({ key, field: "value", message: `${type} keyframe components must be finite` });
+    if (!isFiniteNumber(value[component]!))
+      issues.push({ key, field: "value", message: `${type} keyframe components must be finite` });
   }
   if (type === "quaternion" && Math.hypot(value[0]!, value[1]!, value[2]!, value[3]!) <= EPSILON) {
     issues.push({ key, field: "value", message: "quaternion keyframe value must be normalizable" });
   }
 }
 
-function validateFlatValue(type: UserTrackType, values: Float32Array, offset: number, key: number, issues: UserTrackValidationIssue[]): void {
+function validateFlatValue(
+  type: UserTrackType,
+  values: Float32Array,
+  offset: number,
+  key: number,
+  issues: UserTrackValidationIssue[]
+): void {
   const stride = trackValueSize(type);
   for (let component = 0; component < stride; component += 1) {
-    if (!isFiniteNumber(values[offset + component]!)) issues.push({ key, field: "values", message: "runtime track values must be finite" });
+    if (!isFiniteNumber(values[offset + component]!))
+      issues.push({ key, field: "values", message: "runtime track values must be finite" });
   }
-  if (type === "quaternion" && Math.hypot(values[offset]!, values[offset + 1]!, values[offset + 2]!, values[offset + 3]!) <= EPSILON) {
+  if (
+    type === "quaternion" &&
+    Math.hypot(values[offset]!, values[offset + 1]!, values[offset + 2]!, values[offset + 3]!) <= EPSILON
+  ) {
     issues.push({ key, field: "values", message: "runtime quaternion values must be normalizable" });
   }
 }
@@ -622,5 +700,7 @@ function trackValidationError(label: string, issues: readonly UserTrackValidatio
 }
 
 function formatIssue(issue: UserTrackValidationIssue): string {
-  return issue.key === undefined ? `${issue.field} ${issue.message}` : `key ${issue.key} ${issue.field} ${issue.message}`;
+  return issue.key === undefined
+    ? `${issue.field} ${issue.message}`
+    : `key ${issue.key} ${issue.field} ${issue.message}`;
 }

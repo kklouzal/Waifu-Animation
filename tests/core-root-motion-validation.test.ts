@@ -1,5 +1,5 @@
+import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationClip,
   WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
   inspectAnimationAsset,
@@ -23,8 +23,15 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     id: "root-motion-walk"
   };
   assert.equal(
-    inspectClipAsset({ id: "root-motion-walk", label: "Root Motion Walk", url: "/root-motion-walk.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT }, rootMotionRotationOnlyClip)
-      .accepted,
+    inspectClipAsset(
+      {
+        id: "root-motion-walk",
+        label: "Root Motion Walk",
+        url: "/root-motion-walk.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT
+      },
+      rootMotionRotationOnlyClip
+    ).accepted,
     false
   );
   assert.equal(
@@ -61,12 +68,21 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     {
       id: "root-motion-stripped-moving-hips",
       duration: 1,
-      tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 0.25]) }]
+      tracks: [
+        {
+          humanBone: "hips",
+          property: "translation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 0, 0, 0.25])
+        }
+      ]
     }
   );
   assert.equal(strippedRootMotionMovingHipsInspection.accepted, false);
   assert.ok(
-    strippedRootMotionMovingHipsInspection.issues.some((issue) => issue.message === "root-motion policy is stripped-to-in-place but root carrier translation still moves"),
+    strippedRootMotionMovingHipsInspection.issues.some(
+      (issue) => issue.message === "root-motion policy is stripped-to-in-place but root carrier translation still moves"
+    ),
     "stripped-to-in-place clips should reject meaningful hips translation motion"
   );
   const noPolicyMovingHipsInspection = inspectClipAsset(
@@ -79,12 +95,21 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     {
       id: "walk-moving-hips",
       duration: 1,
-      tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 0.25]) }]
+      tracks: [
+        {
+          humanBone: "hips",
+          property: "translation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 0, 0, 0.25])
+        }
+      ]
     }
   );
   assert.equal(noPolicyMovingHipsInspection.accepted, false);
   assert.ok(
-    noPolicyMovingHipsInspection.issues.some((issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"),
+    noPolicyMovingHipsInspection.issues.some(
+      (issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"
+    ),
     "moving hips translation should require an explicit root-motion policy even without root-motion naming"
   );
   const noPolicyMovingRootMetadataInspection = inspectClipAsset(
@@ -98,12 +123,21 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
       id: "walk-moving-root",
       duration: 1,
       metadata: {},
-      tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+      tracks: [
+        {
+          joint: "root",
+          property: "translation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0])
+        }
+      ]
     }
   );
   assert.equal(noPolicyMovingRootMetadataInspection.accepted, false);
   assert.ok(
-    noPolicyMovingRootMetadataInspection.issues.some((issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"),
+    noPolicyMovingRootMetadataInspection.issues.some(
+      (issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"
+    ),
     "moving root translation should require an explicit root-motion policy from manifest or clip metadata"
   );
   const nonePolicyMovingRootInspection = inspectClipAsset(
@@ -117,12 +151,21 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     {
       id: "walk-none-moving-root",
       duration: 1,
-      tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+      tracks: [
+        {
+          joint: "root",
+          property: "translation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0])
+        }
+      ]
     }
   );
   assert.equal(nonePolicyMovingRootInspection.accepted, false);
   assert.ok(
-    nonePolicyMovingRootInspection.issues.some((issue) => issue.message === "root-motion policy is none but root carrier translation moves"),
+    nonePolicyMovingRootInspection.issues.some(
+      (issue) => issue.message === "root-motion policy is none but root carrier translation moves"
+    ),
     "policy none should reject moving root carrier translation"
   );
   const playbackWindowInPlaceRootCarrierInspection = inspectClipAsset(
@@ -149,7 +192,9 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
   assert.equal(playbackWindowInPlaceRootCarrierInspection.accepted, true);
   assert.equal(
     playbackWindowInPlaceRootCarrierInspection.issues.some(
-      (issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy" || issue.message === "root-motion policy is none but root carrier translation moves"
+      (issue) =>
+        issue.message === "moving root carrier translation requires source.rootMotion.policy" ||
+        issue.message === "root-motion policy is none but root carrier translation moves"
     ),
     false,
     "root carrier motion outside the playback window should not trigger root-motion policy failures for an in-place segment"
@@ -178,7 +223,9 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
   );
   assert.equal(playbackWindowMovingRootCarrierInspection.accepted, false);
   assert.ok(
-    playbackWindowMovingRootCarrierInspection.issues.some((issue) => issue.message === "root-motion policy is none but root carrier translation moves"),
+    playbackWindowMovingRootCarrierInspection.issues.some(
+      (issue) => issue.message === "root-motion policy is none but root carrier translation moves"
+    ),
     "root carrier motion inside the playback window should still trigger root-motion policy failures"
   );
   const invalidPlaybackWindowRootCarrierInspection = inspectClipAsset(
@@ -192,16 +239,27 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     {
       id: "walk-invalid-playback-root",
       duration: 1,
-      tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+      tracks: [
+        {
+          joint: "root",
+          property: "translation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0])
+        }
+      ]
     }
   );
   assert.equal(invalidPlaybackWindowRootCarrierInspection.accepted, false);
   assert.ok(
-    invalidPlaybackWindowRootCarrierInspection.issues.some((issue) => issue.message === "invalid playback window 0.75..0.25"),
+    invalidPlaybackWindowRootCarrierInspection.issues.some(
+      (issue) => issue.message === "invalid playback window 0.75..0.25"
+    ),
     "invalid playback windows should still be reported"
   );
   assert.equal(
-    invalidPlaybackWindowRootCarrierInspection.issues.some((issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"),
+    invalidPlaybackWindowRootCarrierInspection.issues.some(
+      (issue) => issue.message === "moving root carrier translation requires source.rootMotion.policy"
+    ),
     false,
     "invalid playback windows should not add a second root-motion movement failure"
   );
@@ -217,7 +275,14 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
       {
         id: "idle-stripped-stationary-pelvis",
         duration: 1,
-        tracks: [{ joint: "pelvis", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([1, 0, 2, 1.00001, -0.00001, 2.00001]) }]
+        tracks: [
+          {
+            joint: "pelvis",
+            property: "translation",
+            times: toFloat32Array([0, 1]),
+            values: toFloat32Array([1, 0, 2, 1.00001, -0.00001, 2.00001])
+          }
+        ]
       }
     ).accepted,
     true,
@@ -226,7 +291,14 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
   const preservedRootMotionHeadOnlyClip: AnimationClip = {
     id: "root-motion-head-only",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0.1, 0]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0, 0.1, 0])
+      }
+    ]
   };
   const preservedRootMotionHeadOnlyInspection = inspectClipAsset(
     {
@@ -240,7 +312,9 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
   );
   assert.equal(preservedRootMotionHeadOnlyInspection.accepted, false);
   assert.ok(
-    preservedRootMotionHeadOnlyInspection.issues.some((issue) => issue.message === "root-motion policy is preserved but clip has no root carrier translation track"),
+    preservedRootMotionHeadOnlyInspection.issues.some(
+      (issue) => issue.message === "root-motion policy is preserved but clip has no root carrier translation track"
+    ),
     "preserved root-motion clips should not accept arbitrary non-root translation tracks"
   );
   const preservedIdleHeadOnlyInspection = inspectClipAsset(
@@ -254,18 +328,34 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     {
       id: "idle-head-only",
       duration: 1,
-      tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0.1, 0]) }]
+      tracks: [
+        {
+          humanBone: "head",
+          property: "translation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 0, 0.1, 0])
+        }
+      ]
     }
   );
   assert.equal(preservedIdleHeadOnlyInspection.accepted, false);
   assert.ok(
-    preservedIdleHeadOnlyInspection.issues.some((issue) => issue.message === "root-motion policy is preserved but clip has no root carrier translation track"),
+    preservedIdleHeadOnlyInspection.issues.some(
+      (issue) => issue.message === "root-motion policy is preserved but clip has no root carrier translation track"
+    ),
     "preserved root-motion policy should require a root carrier translation track even without root-motion naming"
   );
   const preservedRootMotionHipsClip: AnimationClip = {
     id: "root-motion-hips",
     duration: 1,
-    tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) }]
+    tracks: [
+      {
+        humanBone: "hips",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0, 0, 1])
+      }
+    ]
   };
   assert.equal(
     inspectClipAsset(
@@ -307,7 +397,14 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
       {
         id: "idle-preserved-hips",
         duration: 1,
-        tracks: [{ humanBone: "hips", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0, 0, 1]) }]
+        tracks: [
+          {
+            humanBone: "hips",
+            property: "translation",
+            times: toFloat32Array([0, 1]),
+            values: toFloat32Array([0, 0, 0, 0, 0, 1])
+          }
+        ]
       }
     ).accepted,
     true,
@@ -325,7 +422,14 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
         id: "walk-clip-metadata-preserved-root",
         duration: 1,
         metadata: { rootMotionPolicy: "preserved" },
-        tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+        tracks: [
+          {
+            joint: "root",
+            property: "translation",
+            times: toFloat32Array([0, 1]),
+            values: toFloat32Array([0, 0, 0, 1, 0, 0])
+          }
+        ]
       }
     ).accepted,
     true,
@@ -344,7 +448,9 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
   assert.equal(invalidRootMotionPolicyInspection.status, "rejected");
   assert.equal(invalidRootMotionPolicyInspection.rootMotionPolicy, "none");
   assert.ok(
-    invalidRootMotionPolicyInspection.issues.some((issue) => issue.message === "root-motion clip must declare source.rootMotion.policy"),
+    invalidRootMotionPolicyInspection.issues.some(
+      (issue) => issue.message === "root-motion clip must declare source.rootMotion.policy"
+    ),
     "asset validation should use the same root-motion policy interpretation as manifest inspection"
   );
   const invalidNonRootMotionPolicyInspection = inspectClipAsset(
@@ -359,12 +465,22 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
   );
   assert.equal(invalidNonRootMotionPolicyInspection.accepted, false);
   assert.ok(
-    invalidNonRootMotionPolicyInspection.issues.some((issue) => issue.message === "has invalid source.rootMotion.policy keep-everything"),
+    invalidNonRootMotionPolicyInspection.issues.some(
+      (issue) => issue.message === "has invalid source.rootMotion.policy keep-everything"
+    ),
     "inspectClipAsset should reject invalid root-motion metadata even when the clip name is not root-motion"
   );
   assert.equal(
     inspectAnimationAsset(
-      { id: "nod", label: "Nod", url: "/nod.waifuanim.bin", format: WAIFU_ANIMATION_BINARY_FORMAT, loop: true, states: ["idle"], source: { category: "idle", posture: "standing" } },
+      {
+        id: "nod",
+        label: "Nod",
+        url: "/nod.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        loop: true,
+        states: ["idle"],
+        source: { category: "idle", posture: "standing" }
+      },
       nodClip,
       skeleton
     ).status,
@@ -396,7 +512,11 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     oppositeQuaternionEndpointClip,
     skeleton
   );
-  assert.equal(oppositeQuaternionEndpointInspection.status, "accepted", "sign-opposite normalized rotation endpoints should remain valid");
+  assert.equal(
+    oppositeQuaternionEndpointInspection.status,
+    "accepted",
+    "sign-opposite normalized rotation endpoints should remain valid"
+  );
   assert.equal(
     oppositeQuaternionEndpointInspection.issues.some((issue) => issue.message.startsWith(loopEndpointWarning)),
     false,
@@ -407,7 +527,14 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     id: "mismatched-translation-endpoints",
     duration: 1,
     loop: true,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 0.25, 0, 0]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0.25, 0, 0])
+      }
+    ]
   };
   const mismatchedTranslationEndpointInspection = inspectAnimationAsset(
     {
@@ -420,13 +547,21 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     mismatchedTranslationEndpointClip,
     skeleton
   );
-  const mismatchedTranslationEndpointIssue = mismatchedTranslationEndpointInspection.issues.find((issue) => issue.message.startsWith(loopEndpointWarning));
-  assert.ok(mismatchedTranslationEndpointIssue, "translation loop endpoint validation should keep raw component behavior");
+  const mismatchedTranslationEndpointIssue = mismatchedTranslationEndpointInspection.issues.find((issue) =>
+    issue.message.startsWith(loopEndpointWarning)
+  );
+  assert.ok(
+    mismatchedTranslationEndpointIssue,
+    "translation loop endpoint validation should keep raw component behavior"
+  );
   assert.equal(mismatchedTranslationEndpointIssue.track, 0);
   assert.equal(mismatchedTranslationEndpointIssue.joint, "head");
   assert.equal(mismatchedTranslationEndpointIssue.property, "translation");
   assert.equal(mismatchedTranslationEndpointIssue.delta, 0.25);
-  assert.ok(mismatchedTranslationEndpointIssue.message.includes("delta 0.2500"), "translation seam warning should include measured delta");
+  assert.ok(
+    mismatchedTranslationEndpointIssue.message.includes("delta 0.2500"),
+    "translation seam warning should include measured delta"
+  );
 
   const trimmedMatchedPlaybackEndpointClip: AnimationClip = {
     id: "trimmed-matched-playback-endpoints",
@@ -503,7 +638,10 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     { ...mismatchedTranslationEndpointClip, id: "inferred-loop-endpoints" },
     skeleton
   ).issues.find((issue) => issue.message.startsWith(loopEndpointWarning));
-  assert.ok(inferredLoopEndpointIssue, "decoded clip.loop should enable loop endpoint validation when manifest loop is omitted");
+  assert.ok(
+    inferredLoopEndpointIssue,
+    "decoded clip.loop should enable loop endpoint validation when manifest loop is omitted"
+  );
   assert.equal(inferredLoopEndpointIssue.track, 0);
   assert.equal(inferredLoopEndpointIssue.joint, "head");
   assert.equal(inferredLoopEndpointIssue.property, "translation");
@@ -519,7 +657,11 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     { ...mismatchedTranslationEndpointClip, id: "manifest-loop-false-endpoints" },
     skeleton
   );
-  assert.equal(manifestLoopFalseEndpointInspection.loop, false, "manifest loop false should override decoded clip.loop in the validation report");
+  assert.equal(
+    manifestLoopFalseEndpointInspection.loop,
+    false,
+    "manifest loop false should override decoded clip.loop in the validation report"
+  );
   assert.equal(
     manifestLoopFalseEndpointInspection.issues.some((issue) => issue.message.startsWith(loopEndpointWarning)),
     false,
@@ -550,17 +692,25 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     mismatchedRotationEndpointClip,
     skeleton
   ).issues.find((issue) => issue.message.startsWith(loopEndpointWarning));
-  assert.ok(mismatchedRotationEndpointIssue, "rotation loop endpoint validation should report mismatched rotation endpoints");
+  assert.ok(
+    mismatchedRotationEndpointIssue,
+    "rotation loop endpoint validation should report mismatched rotation endpoints"
+  );
   assert.equal(mismatchedRotationEndpointIssue.track, 0);
   assert.equal(mismatchedRotationEndpointIssue.joint, "head");
   assert.equal(mismatchedRotationEndpointIssue.property, "rotation");
-  assert.ok((mismatchedRotationEndpointIssue.delta ?? 0) > 0.5, "rotation seam warning should include a meaningful measured delta");
+  assert.ok(
+    (mismatchedRotationEndpointIssue.delta ?? 0) > 0.5,
+    "rotation seam warning should include a meaningful measured delta"
+  );
 
   const malformedLoopEndpointClip: AnimationClip = {
     id: "malformed-loop-endpoints",
     duration: 1,
     loop: true,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0]) }]
+    tracks: [
+      { humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0]) }
+    ]
   };
   const malformedLoopEndpointInspection = inspectAnimationAsset(
     {
@@ -579,7 +729,9 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     "malformed loop endpoint tracks should not crash or emit seam warnings from missing samples"
   );
   assert.ok(
-    malformedLoopEndpointInspection.issues.some((issue) => issue.message === "track value count does not match times and stride"),
+    malformedLoopEndpointInspection.issues.some(
+      (issue) => issue.message === "track value count does not match times and stride"
+    ),
     "malformed loop endpoint tracks should still report structural validation errors"
   );
 }

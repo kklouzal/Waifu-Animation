@@ -1,5 +1,11 @@
 import { type Mat4, multiplyMat4 } from "./math.js";
-import { cloneFiniteMat4, finiteOr, isFiniteMat4, sanitizeNonNegativeInteger, sanitizePositiveInteger } from "./numeric-helpers.js";
+import {
+  cloneFiniteMat4,
+  finiteOr,
+  isFiniteMat4,
+  sanitizeNonNegativeInteger,
+  sanitizePositiveInteger
+} from "./numeric-helpers.js";
 
 export type SkinningNumericArray = ArrayLike<number>;
 export type SkinningMutableArray = Float32Array | number[];
@@ -115,9 +121,18 @@ export function validateSkinningJob(job: SkinningJob): SkinningValidationIssue[]
     issues.push({ field: "weightMode", message: "skinning weightMode must be restored-last or explicit" });
   }
   if (job.jointIndices === undefined && vertexCount > 0) {
-    issues.push({ field: "jointIndices", message: "skinning joint indices are missing; joint 0 fallback will be used" });
+    issues.push({
+      field: "jointIndices",
+      message: "skinning joint indices are missing; joint 0 fallback will be used"
+    });
   } else {
-    validateIndexedBuffer(job.jointIndices, sanitizeNonNegativeInteger(job.jointIndexOffset, 0), sanitizePositiveInteger(job.jointIndexStride, influences), "jointIndices", issues);
+    validateIndexedBuffer(
+      job.jointIndices,
+      sanitizeNonNegativeInteger(job.jointIndexOffset, 0),
+      sanitizePositiveInteger(job.jointIndexStride, influences),
+      "jointIndices",
+      issues
+    );
     validateInfluenceBounds(
       job.jointIndices,
       vertexCount,
@@ -131,9 +146,18 @@ export function validateSkinningJob(job: SkinningJob): SkinningValidationIssue[]
   if (influences > 1 || weightMode === "explicit") {
     const defaultWeightStride = weightMode === "explicit" ? influences : Math.max(0, influences - 1);
     if (job.jointWeights === undefined && vertexCount > 0) {
-      issues.push({ field: "jointWeights", message: "skinning joint weights are missing; zero/restored fallback weights will be used" });
+      issues.push({
+        field: "jointWeights",
+        message: "skinning joint weights are missing; zero/restored fallback weights will be used"
+      });
     }
-    validateIndexedBuffer(job.jointWeights, sanitizeNonNegativeInteger(job.jointWeightOffset, 0), sanitizeNonNegativeInteger(job.jointWeightStride, defaultWeightStride), "jointWeights", issues);
+    validateIndexedBuffer(
+      job.jointWeights,
+      sanitizeNonNegativeInteger(job.jointWeightOffset, 0),
+      sanitizeNonNegativeInteger(job.jointWeightStride, defaultWeightStride),
+      "jointWeights",
+      issues
+    );
     validateInfluenceBounds(
       job.jointWeights,
       vertexCount,
@@ -144,24 +168,48 @@ export function validateSkinningJob(job: SkinningJob): SkinningValidationIssue[]
       issues
     );
   }
-  if (job.jointMatrices === undefined && (job.modelMatrices === undefined || job.inverseBindMatrices === undefined) && vertexCount > 0) {
-    issues.push({ field: "jointMatrices", message: "skinning joint matrices are missing; identity fallback will be used" });
+  if (
+    job.jointMatrices === undefined &&
+    (job.modelMatrices === undefined || job.inverseBindMatrices === undefined) &&
+    vertexCount > 0
+  ) {
+    issues.push({
+      field: "jointMatrices",
+      message: "skinning joint matrices are missing; identity fallback will be used"
+    });
   }
   if (vertexCount > 0 && job.jointMatrices !== undefined && job.jointMatrices.length === 0) {
-    issues.push({ field: "jointMatrices", message: "skinning joint matrix palette is empty; identity fallback will be used" });
+    issues.push({
+      field: "jointMatrices",
+      message: "skinning joint matrix palette is empty; identity fallback will be used"
+    });
   }
   if (vertexCount > 0 && job.modelMatrices !== undefined && job.modelMatrices.length === 0) {
-    issues.push({ field: "modelMatrices", message: "skinning model matrix palette is empty; identity fallback will be used" });
+    issues.push({
+      field: "modelMatrices",
+      message: "skinning model matrix palette is empty; identity fallback will be used"
+    });
   }
   if (vertexCount > 0 && job.inverseBindMatrices !== undefined && job.inverseBindMatrices.length === 0) {
-    issues.push({ field: "inverseBindMatrices", message: "skinning inverse bind palette is empty; identity fallback will be used" });
+    issues.push({
+      field: "inverseBindMatrices",
+      message: "skinning inverse bind palette is empty; identity fallback will be used"
+    });
   }
   validateMatrixArray(job.jointMatrices, "jointMatrices", issues);
   validateMatrixArray(job.modelMatrices, "modelMatrices", issues);
   validateMatrixArray(job.inverseBindMatrices, "inverseBindMatrices", issues);
   validateMatrixArray(job.jointInverseTransposeMatrices, "jointInverseTransposeMatrices", issues);
-  if (job.modelMatrices !== undefined && job.inverseBindMatrices !== undefined && job.inverseBindMatrices.length < job.modelMatrices.length && job.jointRemaps === undefined) {
-    issues.push({ field: "inverseBindMatrices", message: "skinning inverse bind palette is shorter than model matrix palette" });
+  if (
+    job.modelMatrices !== undefined &&
+    job.inverseBindMatrices !== undefined &&
+    job.inverseBindMatrices.length < job.modelMatrices.length &&
+    job.jointRemaps === undefined
+  ) {
+    issues.push({
+      field: "inverseBindMatrices",
+      message: "skinning inverse bind palette is shorter than model matrix palette"
+    });
   }
   return issues;
 }
@@ -171,11 +219,15 @@ export function buildSkinningMatrixPalette(
   inverseBindMatrices: readonly SkinningNumericArray[],
   options: SkinningMatrixPaletteOptions = {}
 ): Mat4[] {
-  const paletteCount = options.jointRemaps ? options.jointRemaps.length : Math.max(modelMatrices.length, inverseBindMatrices.length);
+  const paletteCount = options.jointRemaps
+    ? options.jointRemaps.length
+    : Math.max(modelMatrices.length, inverseBindMatrices.length);
   const out = options.out ?? [];
   out.length = paletteCount;
   for (let index = 0; index < paletteCount; index += 1) {
-    const modelIndex = options.jointRemaps ? sanitizePaletteIndex(options.jointRemaps[index], modelMatrices.length) : index;
+    const modelIndex = options.jointRemaps
+      ? sanitizePaletteIndex(options.jointRemaps[index], modelMatrices.length)
+      : index;
     const model = cloneFiniteMat4(modelMatrices[modelIndex]);
     const inverseBind = cloneFiniteMat4(inverseBindMatrices[index]);
     out[index] = multiplyMat4(model, inverseBind);
@@ -222,7 +274,16 @@ export function skinVertices(job: SkinningJob): SkinningResult {
     for (let influence = 0; influence < influences; influence += 1) {
       const jointSlot = jointIndexOffset + vertex * jointIndexStride + influence;
       const jointIndex = sanitizePaletteIndex(job.jointIndices?.[jointSlot], jointMatrices.length);
-      const weight = readInfluenceWeight(job, vertex, influence, influences, weightMode, jointWeightOffset, jointWeightStride, previousWeightSum);
+      const weight = readInfluenceWeight(
+        job,
+        vertex,
+        influence,
+        influences,
+        weightMode,
+        jointWeightOffset,
+        jointWeightStride,
+        previousWeightSum
+      );
       if (weightMode === "restored-last" && influence < influences - 1) previousWeightSum += weight;
       if (weight === 0) continue;
 
@@ -292,7 +353,12 @@ function readInfluenceWeight(
   return finiteOr(job.jointWeights?.[weightSlot], 0);
 }
 
-function transformPointComponents(matrix: SkinningNumericArray, x: number, y: number, z: number): [number, number, number] {
+function transformPointComponents(
+  matrix: SkinningNumericArray,
+  x: number,
+  y: number,
+  z: number
+): [number, number, number] {
   return [
     finiteOr(matrix[0], 0) * x + finiteOr(matrix[4], 0) * y + finiteOr(matrix[8], 0) * z + finiteOr(matrix[12], 0),
     finiteOr(matrix[1], 0) * x + finiteOr(matrix[5], 0) * y + finiteOr(matrix[9], 0) * z + finiteOr(matrix[13], 0),
@@ -300,7 +366,12 @@ function transformPointComponents(matrix: SkinningNumericArray, x: number, y: nu
   ];
 }
 
-function transformVectorComponents(matrix: SkinningNumericArray, x: number, y: number, z: number): [number, number, number] {
+function transformVectorComponents(
+  matrix: SkinningNumericArray,
+  x: number,
+  y: number,
+  z: number
+): [number, number, number] {
   return [
     finiteOr(matrix[0], 0) * x + finiteOr(matrix[4], 0) * y + finiteOr(matrix[8], 0) * z,
     finiteOr(matrix[1], 0) * x + finiteOr(matrix[5], 0) * y + finiteOr(matrix[9], 0) * z,
@@ -308,7 +379,11 @@ function transformVectorComponents(matrix: SkinningNumericArray, x: number, y: n
   ];
 }
 
-function validateAttributeInput(input: SkinningAttributeInput | undefined, field: string, issues: SkinningValidationIssue[]): void {
+function validateAttributeInput(
+  input: SkinningAttributeInput | undefined,
+  field: string,
+  issues: SkinningValidationIssue[]
+): void {
   if (!input) return;
   if (!input.data || !Number.isInteger(input.data.length) || input.data.length < 0) {
     issues.push({ field, message: `skinning ${field} data must be an array-like numeric buffer` });
@@ -316,7 +391,11 @@ function validateAttributeInput(input: SkinningAttributeInput | undefined, field
   validateOffsetStride(input.offset, input.stride, field, issues);
 }
 
-function validateAttributeOutput(output: SkinningAttributeOutput | undefined, field: string, issues: SkinningValidationIssue[]): void {
+function validateAttributeOutput(
+  output: SkinningAttributeOutput | undefined,
+  field: string,
+  issues: SkinningValidationIssue[]
+): void {
   if (!output) return;
   if (output.data && !Array.isArray(output.data) && !(output.data instanceof Float32Array)) {
     issues.push({ field, message: `skinning ${field} data must be a number array or Float32Array` });
@@ -324,7 +403,12 @@ function validateAttributeOutput(output: SkinningAttributeOutput | undefined, fi
   validateOffsetStride(output.offset, output.stride, field, issues);
 }
 
-function validateAttributeBounds(input: SkinningAttributeInput | undefined, vertexCount: number, field: string, issues: SkinningValidationIssue[]): void {
+function validateAttributeBounds(
+  input: SkinningAttributeInput | undefined,
+  vertexCount: number,
+  field: string,
+  issues: SkinningValidationIssue[]
+): void {
   if (!input || vertexCount <= 0) return;
   const resolved = resolveAttributeInput(input);
   if (inferVec3Count(resolved.data, resolved.offset, resolved.stride) < vertexCount) {
@@ -332,7 +416,12 @@ function validateAttributeBounds(input: SkinningAttributeInput | undefined, vert
   }
 }
 
-function validateOffsetStride(offset: number | undefined, stride: number | undefined, field: string, issues: SkinningValidationIssue[]): void {
+function validateOffsetStride(
+  offset: number | undefined,
+  stride: number | undefined,
+  field: string,
+  issues: SkinningValidationIssue[]
+): void {
   if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) {
     issues.push({ field, message: `skinning ${field} offset must be a non-negative integer` });
   }
@@ -341,9 +430,16 @@ function validateOffsetStride(offset: number | undefined, stride: number | undef
   }
 }
 
-function validateIndexedBuffer(buffer: SkinningNumericArray | undefined, offset: number, stride: number, field: string, issues: SkinningValidationIssue[]): void {
+function validateIndexedBuffer(
+  buffer: SkinningNumericArray | undefined,
+  offset: number,
+  stride: number,
+  field: string,
+  issues: SkinningValidationIssue[]
+): void {
   if (buffer === undefined) return;
-  if (!Number.isInteger(buffer.length) || buffer.length < 0) issues.push({ field, message: `skinning ${field} must be array-like` });
+  if (!Number.isInteger(buffer.length) || buffer.length < 0)
+    issues.push({ field, message: `skinning ${field} must be array-like` });
   if (offset < 0) issues.push({ field, message: `skinning ${field} offset must be non-negative` });
   if (stride < 0) issues.push({ field, message: `skinning ${field} stride must be non-negative` });
 }
@@ -359,10 +455,15 @@ function validateInfluenceBounds(
 ): void {
   if (!buffer || vertexCount <= 0 || requiredPerVertex <= 0) return;
   const requiredLength = offset + (vertexCount - 1) * stride + requiredPerVertex;
-  if (buffer.length < requiredLength) issues.push({ field, message: `skinning ${field} data is shorter than vertexCount influences` });
+  if (buffer.length < requiredLength)
+    issues.push({ field, message: `skinning ${field} data is shorter than vertexCount influences` });
 }
 
-function validateMatrixArray(matrices: readonly SkinningNumericArray[] | undefined, field: string, issues: SkinningValidationIssue[]): void {
+function validateMatrixArray(
+  matrices: readonly SkinningNumericArray[] | undefined,
+  field: string,
+  issues: SkinningValidationIssue[]
+): void {
   if (!matrices) return;
   for (let index = 0; index < matrices.length; index += 1) {
     if (!isFiniteMat4(matrices[index])) {
@@ -391,7 +492,10 @@ function resolveAttributeInput(input: SkinningAttributeInput): Required<Skinning
   };
 }
 
-function resolveAttributeOutput(output: SkinningAttributeOutput | undefined, vertexCount: number): Required<SkinningAttributeOutput> {
+function resolveAttributeOutput(
+  output: SkinningAttributeOutput | undefined,
+  vertexCount: number
+): Required<SkinningAttributeOutput> {
   const offset = sanitizeNonNegativeInteger(output?.offset, 0);
   const stride = Math.max(3, sanitizePositiveInteger(output?.stride, 3));
   const requiredLength = vertexCount <= 0 ? offset : offset + (vertexCount - 1) * stride + 3;

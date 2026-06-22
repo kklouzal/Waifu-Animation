@@ -1,5 +1,5 @@
+import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationClip,
   AnimationRuntime,
   LOCOMOTION_BASE_SOURCE_TRACK_POLICY,
   Object3D,
@@ -42,7 +42,11 @@ import {
 export async function runMotionAttachmentTests(): Promise<void> {
   const sampled = sampleNodPose();
   const models = localToModelPose(skeleton, sampled);
-  const attachmentOffset = composeMat4({ translation: [0.25, 0.5, -0.75], rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4), scale: [1, 2, 1] });
+  const attachmentOffset = composeMat4({
+    translation: [0.25, 0.5, -0.75],
+    rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4),
+    scale: [1, 2, 1]
+  });
   const expectedAttachment = multiplyMat4(models[2]!, attachmentOffset);
   assertMat4NearlyEqual(
     computeAttachmentTransform({ modelPose: models, jointIndex: 2, offset: attachmentOffset }),
@@ -72,14 +76,24 @@ export async function runMotionAttachmentTests(): Promise<void> {
     0,
     "attachment transform should be deterministic for repeated evaluation"
   );
-  const humanoidAttachment = computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "leftUpperArm", offset: { translation: [0, 0.25, 0] } });
+  const humanoidAttachment = computeSkeletonAttachmentTransform({
+    skeleton,
+    modelPose: models,
+    joint: "leftUpperArm",
+    offset: { translation: [0, 0.25, 0] }
+  });
   assertMat4NearlyEqual(
     humanoidAttachment,
     computeAttachmentTransform({ modelPose: models, jointIndex: 3, offset: { translation: [0, 0.25, 0] } }),
     1e-6,
     "attachment transform should resolve humanoid aliases through the skeleton map"
   );
-  const boundHumanoidAttachment = createAttachmentBinding({ skeleton, joint: "leftUpperArm", offset: { translation: [0, 0.25, 0] }, id: "armband" });
+  const boundHumanoidAttachment = createAttachmentBinding({
+    skeleton,
+    joint: "leftUpperArm",
+    offset: { translation: [0, 0.25, 0] },
+    id: "armband"
+  });
   assert.equal(boundHumanoidAttachment.jointIndex, 3, "attachment binding should resolve humanoid aliases once");
   assert.equal(boundHumanoidAttachment.humanoid, "leftUpperArm", "attachment binding should retain humanoid metadata");
   assertMat4NearlyEqual(
@@ -95,7 +109,15 @@ export async function runMotionAttachmentTests(): Promise<void> {
   const rotatedAttachmentModels = localToModelPose(rotatedAttachmentSkeleton, rotatedAttachmentSkeleton.restPose);
   assert.ok(
     vectorNearlyEqual(
-      transformPoint(computeSkeletonAttachmentTransform({ skeleton: rotatedAttachmentSkeleton, modelPose: rotatedAttachmentModels, joint: "rightHand", offset: { translation: [1, 0, 0] } }), [0, 0, 0]),
+      transformPoint(
+        computeSkeletonAttachmentTransform({
+          skeleton: rotatedAttachmentSkeleton,
+          modelPose: rotatedAttachmentModels,
+          joint: "rightHand",
+          offset: { translation: [1, 0, 0] }
+        }),
+        [0, 0, 0]
+      ),
       [0, 1, 0],
       1e-6
     ),
@@ -125,7 +147,7 @@ export async function runMotionAttachmentTests(): Promise<void> {
   );
   const nonFiniteJointModels = [...models];
   nonFiniteJointModels[2] = new Float32Array(models[2]!);
-  nonFiniteJointModels[2]![12] = Number.NaN;
+  nonFiniteJointModels[2][12] = Number.NaN;
   assert.throws(
     () => computeAttachmentTransform({ modelPose: nonFiniteJointModels, jointIndex: 2 }),
     /attachment joint 2 model matrix values must be finite/,
@@ -147,11 +169,13 @@ export async function runMotionAttachmentTests(): Promise<void> {
   });
   assertMat4NearlyEqual(
     sanitizedOffsetAttachment,
-    composeMat4(cloneTransform({
-      translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
-      rotation: [0, Number.NaN, 0, 1],
-      scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
-    })),
+    composeMat4(
+      cloneTransform({
+        translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
+        rotation: [0, Number.NaN, 0, 1],
+        scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
+      })
+    ),
     0,
     "attachment transform offsets should sanitize Partial<Transform> inputs through cloneTransform"
   );
@@ -166,11 +190,13 @@ export async function runMotionAttachmentTests(): Promise<void> {
   });
   assertMat4NearlyEqual(
     sanitizedBoundAttachment.offsetMatrix,
-    composeMat4(cloneTransform({
-      translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
-      rotation: [0, Number.NaN, 0, 1],
-      scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
-    })),
+    composeMat4(
+      cloneTransform({
+        translation: [Number.NaN, 2, Number.POSITIVE_INFINITY],
+        rotation: [0, Number.NaN, 0, 1],
+        scale: [Number.NaN, 3, Number.NEGATIVE_INFINITY]
+      })
+    ),
     0,
     "attachment bindings should sanitize Partial<Transform> offsets once during binding"
   );
@@ -209,8 +235,18 @@ export async function runMotionAttachmentTests(): Promise<void> {
     [2, 3],
     "batch bound attachment evaluation should preserve resolved joint order"
   );
-  assertMat4NearlyEqual(boundAttachmentTransforms[0]!.transform, expectedAttachment, 1e-6, "batch bound attachment should evaluate the first binding");
-  assertMat4NearlyEqual(boundAttachmentTransforms[1]!.transform, humanoidAttachment, 1e-6, "batch bound attachment should evaluate the second binding");
+  assertMat4NearlyEqual(
+    boundAttachmentTransforms[0]!.transform,
+    expectedAttachment,
+    1e-6,
+    "batch bound attachment should evaluate the first binding"
+  );
+  assertMat4NearlyEqual(
+    boundAttachmentTransforms[1]!.transform,
+    humanoidAttachment,
+    1e-6,
+    "batch bound attachment should evaluate the second binding"
+  );
 }
 
 export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
@@ -230,11 +266,23 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
   const locomotionBaseClip = applySourceTrackPolicy(locomotionAuthoredClip, LOCOMOTION_BASE_SOURCE_TRACK_POLICY);
   assert.deepEqual(
     locomotionBaseClip.tracks.map((track) => track.humanBone ?? track.joint),
-    ["hips", "spine", "leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand", "leftUpperLeg", "leftLowerLeg", "rightFoot"],
+    [
+      "hips",
+      "spine",
+      "leftShoulder",
+      "leftUpperArm",
+      "rightLowerArm",
+      "rightHand",
+      "leftUpperLeg",
+      "leftLowerLeg",
+      "rightFoot"
+    ],
     "locomotion base policy should keep authored full-body tracks while stripping finger detail"
   );
   assert.deepEqual(
-    applySourceTrackPolicy(locomotionBaseClip, ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY).tracks.map((track) => `${track.humanBone ?? track.joint}.${track.property}`),
+    applySourceTrackPolicy(locomotionBaseClip, ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY).tracks.map(
+      (track) => `${track.humanBone ?? track.joint}.${track.property}`
+    ),
     [
       "spine.quaternion",
       "leftShoulder.quaternion",
@@ -258,7 +306,9 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
     ]
   };
   assert.deepEqual(
-    applySourceTrackPolicy(rootCarrierSourcePolicyClip, ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY).tracks.map((track) => `${track.humanBone ?? track.joint}.${track.property}`),
+    applySourceTrackPolicy(rootCarrierSourcePolicyClip, ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY).tracks.map(
+      (track) => `${track.humanBone ?? track.joint}.${track.property}`
+    ),
     ["head.quaternion"],
     "source root translation policy should strip root, hips, and pelvis translation carriers"
   );
@@ -266,7 +316,19 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
 
   const locomotionRuntimeRoot = new Object3D();
   const locomotionRuntimeBones = new Map<string, Object3D>();
-  for (const name of ["hips", "spine", "leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand", "leftIndexProximal", "rightThumbDistal", "leftUpperLeg", "leftLowerLeg", "rightFoot"]) {
+  for (const name of [
+    "hips",
+    "spine",
+    "leftShoulder",
+    "leftUpperArm",
+    "rightLowerArm",
+    "rightHand",
+    "leftIndexProximal",
+    "rightThumbDistal",
+    "leftUpperLeg",
+    "leftLowerLeg",
+    "rightFoot"
+  ]) {
     const bone = new Object3D();
     bone.name = name;
     locomotionRuntimeRoot.add(bone);
@@ -277,19 +339,33 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
   });
   assert.deepEqual(
     locomotionThreeClip.tracks.map((track) => track.name.split(".").at(-1)),
-    ["position", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion", "quaternion"],
+    [
+      "position",
+      "quaternion",
+      "quaternion",
+      "quaternion",
+      "quaternion",
+      "quaternion",
+      "quaternion",
+      "quaternion",
+      "quaternion"
+    ],
     "runtime clip creation should consume source-filtered locomotion tracks"
   );
   assert.equal(
     locomotionThreeClip.tracks.some((track) =>
-      ["leftIndexProximal", "rightThumbDistal"].some((name) => track.name.includes(locomotionRuntimeBones.get(name)!.uuid))
+      ["leftIndexProximal", "rightThumbDistal"].some((name) =>
+        track.name.includes(locomotionRuntimeBones.get(name)!.uuid)
+      )
     ),
     false,
     "runtime locomotion clip should not contain authored finger tracks after policy filtering"
   );
   assert.equal(
     locomotionThreeClip.tracks.some((track) =>
-      ["leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand"].some((name) => track.name.includes(locomotionRuntimeBones.get(name)!.uuid))
+      ["leftShoulder", "leftUpperArm", "rightLowerArm", "rightHand"].some((name) =>
+        track.name.includes(locomotionRuntimeBones.get(name)!.uuid)
+      )
     ),
     true,
     "runtime locomotion clip should retain authored shoulder, arm, and hand tracks"
@@ -298,10 +374,23 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
   const locomotionUpperBodyTargets = createThreeLocomotionUpperBodyTargets({ influence: 1.5, phase: 0.25, speed: 20 });
   assert.deepEqual(
     locomotionUpperBodyTargets.map((target) => target.bone),
-    ["leftShoulder", "rightShoulder", "leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm", "leftHand", "rightHand"],
+    [
+      "leftShoulder",
+      "rightShoulder",
+      "leftUpperArm",
+      "rightUpperArm",
+      "leftLowerArm",
+      "rightLowerArm",
+      "leftHand",
+      "rightHand"
+    ],
     "locomotion posture helper should expose a reusable full arm target set"
   );
-  assert.equal(locomotionUpperBodyTargets.find((target) => target.bone === "leftUpperArm")?.influence, 1, "locomotion posture influence should clamp");
+  assert.equal(
+    locomotionUpperBodyTargets.find((target) => target.bone === "leftUpperArm")?.influence,
+    1,
+    "locomotion posture influence should clamp"
+  );
   assert.ok(
     (locomotionUpperBodyTargets.find((target) => target.bone === "leftUpperArm")?.rotation[2] ?? 0) > 1,
     "locomotion posture should roll the left upper arm down from a horizontal source-stripped pose"
@@ -312,7 +401,9 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
   );
   assert.ok(
     (locomotionUpperBodyTargets.find((target) => target.bone === "leftUpperArm")?.rotation[0] ?? 0) >
-      (createThreeLocomotionUpperBodyTargets({ influence: 1, phase: 0.75 }).find((target) => target.bone === "leftUpperArm")?.rotation[0] ?? 0),
+      (createThreeLocomotionUpperBodyTargets({ influence: 1, phase: 0.75 }).find(
+        (target) => target.bone === "leftUpperArm"
+      )?.rotation[0] ?? 0),
     "locomotion posture should phase arm swing"
   );
 
@@ -336,7 +427,11 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
     influence: 1,
     speed: 100
   });
-  assert.equal(locomotionPostureResult.applied, true, "locomotion posture should apply through the same target path as presence");
+  assert.equal(
+    locomotionPostureResult.applied,
+    true,
+    "locomotion posture should apply through the same target path as presence"
+  );
   locomotionPostureRoot.updateMatrixWorld(true);
   const leftPostureRoot = locomotionPostureBones.get("leftUpperArm")!.getWorldPosition(new Vector3());
   const leftPostureJoint = locomotionPostureBones.get("leftLowerArm")!.getWorldPosition(new Vector3());
@@ -345,11 +440,15 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
   const rightPostureJoint = locomotionPostureBones.get("rightLowerArm")!.getWorldPosition(new Vector3());
   const rightPostureUpperDirection = rightPostureJoint.sub(rightPostureRoot).normalize();
   assert.ok(
-    leftPostureUpperDirection.y < -0.6 && Math.abs(leftPostureUpperDirection.x) < 0.25 && rightPostureUpperDirection.y < -0.6 && Math.abs(rightPostureUpperDirection.x) < 0.25,
+    leftPostureUpperDirection.y < -0.6 &&
+      Math.abs(leftPostureUpperDirection.x) < 0.25 &&
+      rightPostureUpperDirection.y < -0.6 &&
+      Math.abs(rightPostureUpperDirection.x) < 0.25,
     "locomotion posture application should keep upper arms close to the torso in model space"
   );
   assert.ok(
-    Math.abs(locomotionPostureBones.get("leftLowerArm")!.quaternion.x) > 0.05 || Math.abs(locomotionPostureBones.get("leftLowerArm")!.quaternion.z) > 0.05,
+    Math.abs(locomotionPostureBones.get("leftLowerArm")!.quaternion.x) > 0.05 ||
+      Math.abs(locomotionPostureBones.get("leftLowerArm")!.quaternion.z) > 0.05,
     "locomotion posture IK should bend the lower arm toward the hand target"
   );
 
@@ -384,7 +483,10 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
     const shoulder = rotatedLocomotionPostureBones.get(`${side}UpperArm`)!.getWorldPosition(new Vector3());
     const elbow = rotatedLocomotionPostureBones.get(`${side}LowerArm`)!.getWorldPosition(new Vector3());
     const hand = rotatedLocomotionPostureBones.get(`${side}Hand`)!.getWorldPosition(new Vector3());
-    assert.ok(signedJointForwardOffset(shoulder, elbow, hand, rotatedForward) > -0.005, "locomotion posture elbows should follow avatar forward on yawed roots");
+    assert.ok(
+      signedJointForwardOffset(shoulder, elbow, hand, rotatedForward) > -0.005,
+      "locomotion posture elbows should follow avatar forward on yawed roots"
+    );
   }
 
   const runtime = new AnimationRuntime(skeleton);
@@ -398,8 +500,11 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
   const runtimeBackwardCompatibleUpdate = new AnimationRuntime(skeleton);
   runtimeBackwardCompatibleUpdate.setLayer("fading", nodClip, { weight: 0.0004, targetWeight: 0, fadeSpeed: 8 });
   runtimeBackwardCompatibleUpdate.update(1);
-  assert.equal(runtimeBackwardCompatibleUpdate.evaluate().activeLayers.length, 0, "update without root-motion collection should keep removing faded layers");
-
+  assert.equal(
+    runtimeBackwardCompatibleUpdate.evaluate().activeLayers.length,
+    0,
+    "update without root-motion collection should keep removing faded layers"
+  );
 }
 
 export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
@@ -452,7 +557,11 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
   assert.equal(corruptedActiveLayer.weight, 1);
   assert.equal(corruptedActiveLayer.targetWeight, 0);
   assert.equal(corruptedActiveLayer.priority, 0);
-  assert.ok(corruptedEvaluation.activeLayers.every((layer) => [layer.time, layer.weight, layer.targetWeight, layer.priority].every(Number.isFinite)));
+  assert.ok(
+    corruptedEvaluation.activeLayers.every((layer) =>
+      [layer.time, layer.weight, layer.targetWeight, layer.priority].every(Number.isFinite)
+    )
+  );
   assertFiniteEvaluation(corruptedEvaluation);
 
   const invalidRuntime = new AnimationRuntime(skeleton);
@@ -460,14 +569,33 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
     id: "invalid-translation-scale",
     duration: 1,
     tracks: [
-      { humanBone: "spine", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([Number.NaN, 0, 0]) },
-      { humanBone: "head", property: "scale", times: toFloat32Array([0]), values: toFloat32Array([1, Number.POSITIVE_INFINITY, 1]) }
+      {
+        humanBone: "spine",
+        property: "translation",
+        times: toFloat32Array([0]),
+        values: toFloat32Array([Number.NaN, 0, 0])
+      },
+      {
+        humanBone: "head",
+        property: "scale",
+        times: toFloat32Array([0]),
+        values: toFloat32Array([1, Number.POSITIVE_INFINITY, 1])
+      }
     ]
   };
-  invalidRuntime.setLayer("invalid-source", invalidTranslationScaleClip, { weight: 1, targetWeight: 1, blendMode: "additive" });
+  invalidRuntime.setLayer("invalid-source", invalidTranslationScaleClip, {
+    weight: 1,
+    targetWeight: 1,
+    blendMode: "additive"
+  });
   assert.equal(invalidRuntime.evaluate().diagnostics, undefined, "runtime diagnostics should stay opt-in");
   const invalidEvaluation = invalidRuntime.evaluate({ diagnostics: true });
-  assert.ok(invalidEvaluation.diagnostics!.some((issue) => issue.stage === "sample" && issue.layerId === "invalid-source" && issue.clipId === "invalid-translation-scale"));
+  assert.ok(
+    invalidEvaluation.diagnostics!.some(
+      (issue) =>
+        issue.stage === "sample" && issue.layerId === "invalid-source" && issue.clipId === "invalid-translation-scale"
+    )
+  );
   assert.ok(
     invalidEvaluation.diagnostics!.some(
       (issue) =>
@@ -510,12 +638,22 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
   const invalidRotationClip: AnimationClip = {
     id: "invalid-rotation",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, Number.NaN, 0, 1]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "quaternion",
+        times: toFloat32Array([0]),
+        values: toFloat32Array([0, Number.NaN, 0, 1])
+      }
+    ]
   };
   invalidRotationRuntime.setLayer("invalid-rotation-source", invalidRotationClip, { weight: 1, targetWeight: 1 });
   const invalidRotationEvaluation = invalidRotationRuntime.evaluate({ diagnostics: true });
   assert.ok(
-    invalidRotationEvaluation.diagnostics!.some((issue) => issue.stage === "sample" && issue.layerId === "invalid-rotation-source" && issue.clipId === "invalid-rotation"),
+    invalidRotationEvaluation.diagnostics!.some(
+      (issue) =>
+        issue.stage === "sample" && issue.layerId === "invalid-rotation-source" && issue.clipId === "invalid-rotation"
+    ),
     "runtime diagnostics should report invalid active rotation source tracks"
   );
 
@@ -523,9 +661,14 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
   const repairedRotationClip: AnimationClip = {
     id: "repaired-runtime-rotation",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 0]) }]
+    tracks: [
+      { humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 0]) }
+    ]
   };
-  repairedRotationRuntime.setLayer("repaired-runtime-rotation-source", repairedRotationClip, { weight: 1, targetWeight: 1 });
+  repairedRotationRuntime.setLayer("repaired-runtime-rotation-source", repairedRotationClip, {
+    weight: 1,
+    targetWeight: 1
+  });
   const repairedRotationEvaluation = repairedRotationRuntime.evaluate({ diagnostics: true });
   assert.ok(
     repairedRotationEvaluation.diagnostics!.some(
@@ -558,7 +701,10 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
       }
     ]
   };
-  repairedSourceRestRuntime.setLayer("repaired-runtime-source-rest-source", repairedSourceRestClip, { weight: 1, targetWeight: 1 });
+  repairedSourceRestRuntime.setLayer("repaired-runtime-source-rest-source", repairedSourceRestClip, {
+    weight: 1,
+    targetWeight: 1
+  });
   const repairedSourceRestEvaluation = repairedSourceRestRuntime.evaluate({ diagnostics: true });
   assert.ok(
     repairedSourceRestEvaluation.diagnostics!.some(

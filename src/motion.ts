@@ -35,13 +35,25 @@ import {
   subVec3
 } from "./math.js";
 import { readPoseTransformOrRest } from "./pose.js";
-import { type HumanoidBoneName, type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
-import { type RawFloat3Track, type RawQuaternionTrack, type UserTrack, buildUserTrack, sampleUserTrack } from "./tracks.js";
+import {
+  type HumanoidBoneNameLike,
+  type Skeleton,
+  isHumanoidBoneName,
+  resolveHumanoidIndex,
+  resolveJointIndex
+} from "./skeleton.js";
+import {
+  type RawFloat3Track,
+  type RawQuaternionTrack,
+  type UserTrack,
+  buildUserTrack,
+  sampleUserTrack
+} from "./tracks.js";
 
 export type MotionCarrier =
   | { jointIndex: number; joint?: never; humanBone?: never }
   | { joint: string; jointIndex?: never; humanBone?: never }
-  | { humanBone: HumanoidBoneName | string; joint?: never; jointIndex?: never };
+  | { humanBone: HumanoidBoneNameLike; joint?: never; jointIndex?: never };
 
 export type MotionSampleOptions = Omit<SampleOptions, "restPose"> & {
   carrier?: MotionCarrier;
@@ -159,7 +171,12 @@ type ResolvedRotationExtraction = {
   loop: boolean;
 };
 
-export function sampleMotionCarrier(skeleton: Skeleton, clip: AnimationClip, timeSeconds: number, options: MotionSampleOptions = {}): MotionSample {
+export function sampleMotionCarrier(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  timeSeconds: number,
+  options: MotionSampleOptions = {}
+): MotionSample {
   const diagnostics = options.diagnostics;
   const jointIndex = resolveMotionCarrierIndex(skeleton, options.carrier, diagnostics);
   const loop = options.loop ?? clip.loop ?? false;
@@ -186,8 +203,20 @@ export function extractRootMotion(
   const sampleOptions = motionSampleOptionsForExtraction(options);
   const translationSettings = resolveTranslationExtraction(options);
   const rotationSettings = resolveRotationExtraction(options);
-  const translationReference = resolveMotionReferenceTransform(skeleton, clip, jointIndex, translationSettings?.reference ?? options.reference ?? "skeleton", sampleOptions);
-  const rotationReference = resolveMotionReferenceTransform(skeleton, clip, jointIndex, rotationSettings?.reference ?? options.reference ?? "skeleton", sampleOptions);
+  const translationReference = resolveMotionReferenceTransform(
+    skeleton,
+    clip,
+    jointIndex,
+    translationSettings?.reference ?? options.reference ?? "skeleton",
+    sampleOptions
+  );
+  const rotationReference = resolveMotionReferenceTransform(
+    skeleton,
+    clip,
+    jointIndex,
+    rotationSettings?.reference ?? options.reference ?? "skeleton",
+    sampleOptions
+  );
 
   const motion: ExtractedRootMotion = {
     duration,
@@ -201,7 +230,11 @@ export function extractRootMotion(
       name: `${clip.id}.${joint || "root"}.motion.position`,
       keyframes: sampleTimes.map((time) => ({
         ratio: motionSampleRatio(time, duration),
-        value: extractMotionTranslation(sampleMotionCarrier(skeleton, clip, time, sampleOptions).transform, translationReference, translationSettings.axes),
+        value: extractMotionTranslation(
+          sampleMotionCarrier(skeleton, clip, time, sampleOptions).transform,
+          translationReference,
+          translationSettings.axes
+        ),
         interpolation: "linear"
       }))
     } satisfies RawFloat3Track);
@@ -213,7 +246,11 @@ export function extractRootMotion(
       name: `${clip.id}.${joint || "root"}.motion.rotation`,
       keyframes: sampleTimes.map((time) => ({
         ratio: motionSampleRatio(time, duration),
-        value: extractMotionRotation(sampleMotionCarrier(skeleton, clip, time, sampleOptions).transform, rotationReference, rotationSettings.mode),
+        value: extractMotionRotation(
+          sampleMotionCarrier(skeleton, clip, time, sampleOptions).transform,
+          rotationReference,
+          rotationSettings.mode
+        ),
         interpolation: "linear"
       }))
     } satisfies RawQuaternionTrack);
@@ -222,16 +259,16 @@ export function extractRootMotion(
   const shouldBake = Boolean(translationSettings?.bake || rotationSettings?.bake);
   const bakedClip = shouldBake
     ? bakeExtractedRootMotionClip(
-      skeleton,
-      clip,
-      jointIndex,
-      translationSettings,
-      rotationSettings,
-      translationReference,
-      rotationReference,
-      motion.rotation,
-      options.bakedClipId
-    )
+        skeleton,
+        clip,
+        jointIndex,
+        translationSettings,
+        rotationSettings,
+        translationReference,
+        rotationReference,
+        motion.rotation,
+        options.bakedClipId
+      )
     : undefined;
 
   if (translationSettings?.loop && motion.position) loopMotionTrack(motion.position);
@@ -262,8 +299,18 @@ export function extractRawRootMotion(
   const duration = finiteMotionDuration(rawAnimation.duration);
   const translationSettings = resolveTranslationExtraction(options);
   const rotationSettings = resolveRotationExtraction(options);
-  const translationReference = resolveRawTranslationReference(skeleton, sourceTrack, jointIndex, translationSettings?.reference ?? options.reference ?? "skeleton");
-  const rotationReference = resolveRawRotationReference(skeleton, sourceTrack, jointIndex, rotationSettings?.reference ?? options.reference ?? "skeleton");
+  const translationReference = resolveRawTranslationReference(
+    skeleton,
+    sourceTrack,
+    jointIndex,
+    translationSettings?.reference ?? options.reference ?? "skeleton"
+  );
+  const rotationReference = resolveRawRotationReference(
+    skeleton,
+    sourceTrack,
+    jointIndex,
+    rotationSettings?.reference ?? options.reference ?? "skeleton"
+  );
   const joint = skeleton.joints[jointIndex]?.name ?? sourceTrack.joint ?? String(sourceTrack.humanBone ?? "");
 
   const motion: ExtractedRootMotion = {
@@ -282,7 +329,11 @@ export function extractRawRootMotion(
   const rawRotationKeys = rotationSettings
     ? sourceTrack.rotations.map((key) => ({
         ratio: motionSampleRatio(key.time, duration),
-        value: extractMotionRotation({ translation: [0, 0, 0], rotation: key.value, scale: [1, 1, 1] }, { translation: [0, 0, 0], rotation: rotationReference, scale: [1, 1, 1] }, rotationSettings.mode),
+        value: extractMotionRotation(
+          { translation: [0, 0, 0], rotation: key.value, scale: [1, 1, 1] },
+          { translation: [0, 0, 0], rotation: rotationReference, scale: [1, 1, 1] },
+          rotationSettings.mode
+        ),
         interpolation: "linear" as const
       }))
     : [];
@@ -332,7 +383,7 @@ export function extractRawRootMotion(
   if (rotationSettings?.bake && (rawRotationBakeTrack || motion.rotation)) {
     for (const key of outputTrack.translations) {
       const ratio = motionSampleRatio(key.time, duration);
-      const motionRotation = sampleUserTrack(rawRotationBakeTrack ?? motion.rotation!, ratio) as Quat;
+      const motionRotation = sampleUserTrack(rawRotationBakeTrack ?? motion.rotation!, ratio);
       key.value = rotateVec3ByQuat(invertQuat(motionRotation), key.value);
     }
   }
@@ -345,7 +396,11 @@ export class MotionExtractor {
     return extractRootMotion(skeleton, clip, options);
   }
 
-  extractRaw(skeleton: Skeleton, rawAnimation: RawAnimation, options: ExtractRawRootMotionOptions = {}): RawRootMotionExtractionResult {
+  extractRaw(
+    skeleton: Skeleton,
+    rawAnimation: RawAnimation,
+    options: ExtractRawRootMotionOptions = {}
+  ): RawRootMotionExtractionResult {
     return extractRawRootMotion(skeleton, rawAnimation, options);
   }
 }
@@ -378,7 +433,11 @@ export function sampleMotionIntervalDelta(
   };
 }
 
-export function sampleMotionTracks(motion: MotionTracks, timeSeconds: number, options: MotionTrackSampleOptions = {}): MotionTrackSample {
+export function sampleMotionTracks(
+  motion: MotionTracks,
+  timeSeconds: number,
+  options: MotionTrackSampleOptions = {}
+): MotionTrackSample {
   const duration = finiteMotionDuration(motion.duration);
   const loop = options.loop ?? motion.loop ?? false;
   const time = sampleMotionTrackTime(duration, timeSeconds, loop);
@@ -410,9 +469,10 @@ export function sampleMotionTracksIntervalDelta(
     return { from, to, delta: sanitizeMotionTransform(carrierTransformDelta(from.transform, to.transform)) };
   }
 
-  const delta = toTime > fromTime
-    ? sampleLoopingMotionTracksIntervalDelta(motion, fromTime, toTime)
-    : invertCarrierDelta(sampleLoopingMotionTracksIntervalDelta(motion, toTime, fromTime));
+  const delta =
+    toTime > fromTime
+      ? sampleLoopingMotionTracksIntervalDelta(motion, fromTime, toTime)
+      : invertCarrierDelta(sampleLoopingMotionTracksIntervalDelta(motion, toTime, fromTime));
   return { from, to, delta: sanitizeMotionTransform(delta) };
 }
 
@@ -556,7 +616,10 @@ export function resolveMotionCarrierIndex(
   if ("jointIndex" in carrier) {
     const index = carrier.jointIndex;
     if (Number.isInteger(index) && index >= 0 && index < skeleton.joints.length) return index;
-    diagnostics?.push({ index, message: `motion carrier joint index ${String(index)} does not map to skeleton; using root` });
+    diagnostics?.push({
+      index,
+      message: `motion carrier joint index ${String(index)} does not map to skeleton; using root`
+    });
     return rootIndex;
   }
 
@@ -566,13 +629,19 @@ export function resolveMotionCarrierIndex(
       const index = resolveHumanoidIndex(skeleton, bone);
       if (index >= 0) return index;
     }
-    diagnostics?.push({ joint: String(bone), message: `motion carrier humanoid bone ${String(bone)} does not map to skeleton; using root` });
+    diagnostics?.push({
+      joint: String(bone),
+      message: `motion carrier humanoid bone ${String(bone)} does not map to skeleton; using root`
+    });
     return rootIndex;
   }
 
   const index = resolveJointIndex(skeleton, carrier.joint);
   if (index >= 0) return index;
-  diagnostics?.push({ joint: carrier.joint, message: `motion carrier joint ${carrier.joint} does not map to skeleton; using root` });
+  diagnostics?.push({
+    joint: carrier.joint,
+    message: `motion carrier joint ${carrier.joint} does not map to skeleton; using root`
+  });
   return rootIndex;
 }
 
@@ -597,7 +666,10 @@ function sampleLoopingIntervalDelta(
 ): Transform {
   const duration = clip.duration;
   let cursor = fromSeconds;
-  let current = sampleMotionCarrier(skeleton, clip, euclideanModulo(cursor, duration), { ...options, loop: false }).transform;
+  let current = sampleMotionCarrier(skeleton, clip, euclideanModulo(cursor, duration), {
+    ...options,
+    loop: false
+  }).transform;
   let accumulated = identityTransform();
 
   while (cursor < toSeconds) {
@@ -649,7 +721,7 @@ function resolveTranslationExtraction(options: ExtractRootMotionOptions): Resolv
 function resolveRotationExtraction(options: ExtractRootMotionOptions): ResolvedRotationExtraction | null {
   if (options.rotation === false) return null;
   const channel = typeof options.rotation === "object" ? options.rotation : {};
-  const mode = options.rotation === "yaw" || options.rotation === "full" ? options.rotation : channel.mode ?? "yaw";
+  const mode = options.rotation === "yaw" || options.rotation === "full" ? options.rotation : (channel.mode ?? "yaw");
   return {
     mode,
     reference: channel.reference ?? options.reference ?? "skeleton",
@@ -720,7 +792,11 @@ function resolveMotionReferenceTransform(
   return cloneTransform(readPoseTransformOrRest(skeleton, options.restPose ?? skeleton.restPose, jointIndex));
 }
 
-function extractMotionTranslation(sample: Transform, reference: Transform, axes: Required<MotionExtractionAxisMask>): Vec3 {
+function extractMotionTranslation(
+  sample: Transform,
+  reference: Transform,
+  axes: Required<MotionExtractionAxisMask>
+): Vec3 {
   const delta = subVec3(sample.translation, reference.translation);
   return [
     axes.x ? finiteSigned(delta[0], 0) : 0,
@@ -747,15 +823,30 @@ function loopMotionTrack<T extends "float3" | "quaternion">(track: UserTrack<T>)
   const firstOffset = 0;
   const lastOffset = (track.ratios.length - 1) * stride;
   if (track.type === "quaternion") {
-    const first: Quat = [track.values[firstOffset]!, track.values[firstOffset + 1]!, track.values[firstOffset + 2]!, track.values[firstOffset + 3]!];
-    const last: Quat = [track.values[lastOffset]!, track.values[lastOffset + 1]!, track.values[lastOffset + 2]!, track.values[lastOffset + 3]!];
+    const first: Quat = [
+      track.values[firstOffset]!,
+      track.values[firstOffset + 1]!,
+      track.values[firstOffset + 2]!,
+      track.values[firstOffset + 3]!
+    ];
+    const last: Quat = [
+      track.values[lastOffset]!,
+      track.values[lastOffset + 1]!,
+      track.values[lastOffset + 2]!,
+      track.values[lastOffset + 3]!
+    ];
     const delta = multiplyQuat(first, invertQuat(last));
     const firstRatio = track.ratios[0] ?? 0;
     const lastRatio = track.ratios[track.ratios.length - 1] ?? 1;
     for (let key = 0; key < track.ratios.length; key += 1) {
       const offset = key * stride;
       const alpha = loopDistributionAlpha(track.ratios[key]!, firstRatio, lastRatio, key, track.ratios.length - 1);
-      const value: Quat = [track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!, track.values[offset + 3]!];
+      const value: Quat = [
+        track.values[offset]!,
+        track.values[offset + 1]!,
+        track.values[offset + 2]!,
+        track.values[offset + 3]!
+      ];
       track.values.set(multiplyQuat(nlerpIdentityToQuat(delta, alpha), value), offset);
     }
     return;
@@ -781,13 +872,19 @@ function resolveRawMotionCarrierTrackIndex(skeleton: Skeleton, rawAnimation: Raw
   for (let index = 0; index < rawAnimation.tracks.length; index += 1) {
     if (resolveRawAnimationTrackJointIndex(skeleton, rawAnimation.tracks[index]!) === jointIndex) return index;
   }
-  if (rawAnimation.tracks.length === skeleton.joints.length && jointIndex >= 0 && jointIndex < rawAnimation.tracks.length) return jointIndex;
+  if (
+    rawAnimation.tracks.length === skeleton.joints.length &&
+    jointIndex >= 0 &&
+    jointIndex < rawAnimation.tracks.length
+  )
+    return jointIndex;
   return -1;
 }
 
 function resolveRawAnimationTrackJointIndex(skeleton: Skeleton, track: RawAnimationJointTrack): number {
   if (track.joint !== undefined) return resolveJointIndex(skeleton, track.joint);
-  if (track.humanBone !== undefined && isHumanoidBoneName(track.humanBone)) return resolveHumanoidIndex(skeleton, track.humanBone);
+  if (track.humanBone !== undefined && isHumanoidBoneName(track.humanBone))
+    return resolveHumanoidIndex(skeleton, track.humanBone);
   return -1;
 }
 
@@ -798,7 +895,8 @@ function resolveRawTranslationReference(
   reference: MotionExtractionReference
 ): Vec3 {
   if (reference === "absolute" || jointIndex < 0) return [0, 0, 0];
-  if (reference === "animation" && track.translations.length > 0) return cloneTransform({ translation: track.translations[0]!.value }).translation;
+  if (reference === "animation" && track.translations.length > 0)
+    return cloneTransform({ translation: track.translations[0]!.value }).translation;
   return cloneTransform(skeleton.restPose[jointIndex]).translation;
 }
 
@@ -823,7 +921,9 @@ function extractRawMotionTranslation(sample: Vec3, reference: Vec3, axes: Requir
 }
 
 function distributeLoopingRawMotionKeyframes(
-  keyframes: Array<{ value: Vec3; ratio: number; interpolation: "linear" }> | Array<{ value: Quat; ratio: number; interpolation: "linear" }>,
+  keyframes:
+    | Array<{ value: Vec3; ratio: number; interpolation: "linear" }>
+    | Array<{ value: Quat; ratio: number; interpolation: "linear" }>,
   type: "float3" | "quaternion"
 ): void {
   if (keyframes.length < 2) return;
@@ -849,22 +949,36 @@ function distributeLoopingRawMotionKeyframes(
   }
 }
 
-function loopDistributionAlpha(ratio: number, firstRatio: number, lastRatio: number, keyIndex: number, lastKeyIndex: number): number {
+function loopDistributionAlpha(
+  ratio: number,
+  firstRatio: number,
+  lastRatio: number,
+  keyIndex: number,
+  lastKeyIndex: number
+): number {
   const span = lastRatio - firstRatio;
-  if (Number.isFinite(ratio) && Number.isFinite(span) && span > EPSILON) return clamp((ratio - firstRatio) / span, 0, 1);
+  if (Number.isFinite(ratio) && Number.isFinite(span) && span > EPSILON)
+    return clamp((ratio - firstRatio) / span, 0, 1);
   return lastKeyIndex > 0 ? keyIndex / lastKeyIndex : 0;
 }
 
 function nlerpIdentityToQuat(delta: Quat, alpha: number): Quat {
   const amount = clamp(alpha, 0, 1);
   const normalized = normalizeQuat(delta);
-  const end = dotQuat([0, 0, 0, 1], normalized) < 0
-    ? [-normalized[0], -normalized[1], -normalized[2], -normalized[3]] as Quat
-    : normalized;
+  const end =
+    dotQuat([0, 0, 0, 1], normalized) < 0
+      ? ([-normalized[0], -normalized[1], -normalized[2], -normalized[3]] as Quat)
+      : normalized;
   return normalizeQuat([end[0] * amount, end[1] * amount, end[2] * amount, 1 + (end[3] - 1) * amount]);
 }
 
-function formatRawMotionIssue(issue: { track?: number; key?: number; joint?: string; property?: string; message: string }): string {
+function formatRawMotionIssue(issue: {
+  track?: number;
+  key?: number;
+  joint?: string;
+  property?: string;
+  message: string;
+}): string {
   const parts = [];
   if (issue.track !== undefined) parts.push(`track ${issue.track}`);
   if (issue.key !== undefined) parts.push(`key ${issue.key}`);
@@ -889,7 +1003,17 @@ function bakeExtractedRootMotionClip(
     ...clip,
     id: bakedClipId ?? `${clip.id}:baked-root-motion`,
     tracks: clip.tracks.map((track) =>
-      bakeCarrierTrack(skeleton, track, jointIndex, translation, rotation, translationReference, rotationReference, motionRotation, clip.duration)
+      bakeCarrierTrack(
+        skeleton,
+        track,
+        jointIndex,
+        translation,
+        rotation,
+        translationReference,
+        rotationReference,
+        motionRotation,
+        clip.duration
+      )
     ),
     ...(clip.metadata ? { metadata: { ...clip.metadata } } : {})
   };
@@ -912,7 +1036,9 @@ function bakeCarrierTrack(
     times: new Float32Array(track.times),
     values: new Float32Array(track.values),
     ...(track.sourceRestQuaternion ? { sourceRestQuaternion: new Float32Array(track.sourceRestQuaternion) } : {}),
-    ...(track.sourceRestChildDirection ? { sourceRestChildDirection: new Float32Array(track.sourceRestChildDirection) } : {})
+    ...(track.sourceRestChildDirection
+      ? { sourceRestChildDirection: new Float32Array(track.sourceRestChildDirection) }
+      : {})
   };
   if (jointIndex < 0 || resolveTrackJointIndex(skeleton, track) !== jointIndex) return copy;
 
@@ -928,9 +1054,13 @@ function bakeCarrierTrack(
     for (let key = 0; key < copy.times.length; key += 1) {
       const offset = key * 3;
       const motionRatio = motionSampleRatio(copy.times[key]!, duration);
-      const rotationValue = sampleUserTrack(motionRotation, motionRatio) as Quat;
+      const rotationValue = sampleUserTrack(motionRotation, motionRatio);
       copy.values.set(
-        rotateVec3ByQuat(invertQuat(rotationValue), [copy.values[offset]!, copy.values[offset + 1]!, copy.values[offset + 2]!]),
+        rotateVec3ByQuat(invertQuat(rotationValue), [
+          copy.values[offset]!,
+          copy.values[offset + 1]!,
+          copy.values[offset + 2]!
+        ]),
         offset
       );
     }
@@ -938,7 +1068,12 @@ function bakeCarrierTrack(
 
   if (property === "rotation" && rotation?.bake) {
     for (let offset = 0; offset + 3 < copy.values.length; offset += 4) {
-      const original = normalizeQuat([copy.values[offset]!, copy.values[offset + 1]!, copy.values[offset + 2]!, copy.values[offset + 3]!]);
+      const original = normalizeQuat([
+        copy.values[offset]!,
+        copy.values[offset + 1]!,
+        copy.values[offset + 2]!,
+        copy.values[offset + 3]!
+      ]);
       const delta = multiplyQuat(invertQuat(rotationReference.rotation), original);
       const extracted = extractRotationDelta(delta, rotation.mode);
       const bakedDelta = multiplyQuat(invertQuat(extracted), delta);
@@ -960,13 +1095,17 @@ function sampleMotionTracksAtLocalTime(motion: MotionTracks, localTime: number):
   const duration = finiteMotionDuration(motion.duration);
   const ratio = motionSampleRatio(sampleMotionTrackTime(duration, localTime, false), duration);
   return sanitizeMotionTransform({
-    translation: motion.position ? sampleUserTrack(motion.position, ratio) as Vec3 : [0, 0, 0],
-    rotation: motion.rotation ? sampleUserTrack(motion.rotation, ratio) as Quat : [0, 0, 0, 1],
+    translation: motion.position ? sampleUserTrack(motion.position, ratio) : [0, 0, 0],
+    rotation: motion.rotation ? sampleUserTrack(motion.rotation, ratio) : [0, 0, 0, 1],
     scale: [1, 1, 1]
   });
 }
 
-function sampleLoopingMotionTracksIntervalDelta(motion: MotionTracks, fromSeconds: number, toSeconds: number): Transform {
+function sampleLoopingMotionTracksIntervalDelta(
+  motion: MotionTracks,
+  fromSeconds: number,
+  toSeconds: number
+): Transform {
   const duration = finiteMotionDuration(motion.duration);
   let remaining = toSeconds - fromSeconds;
   if (duration <= 0 || !Number.isFinite(remaining) || remaining <= EPSILON) return identityTransform();
@@ -993,7 +1132,13 @@ function sampleLoopingMotionTracksIntervalDelta(motion: MotionTracks, fromSecond
     if (fullLoops > 0) {
       accumulated = composeCarrierDelta(
         accumulated,
-        repeatCarrierDelta(carrierTransformDelta(sampleMotionTracksAtLocalTime(motion, 0), sampleMotionTracksAtLocalTime(motion, duration)), fullLoops)
+        repeatCarrierDelta(
+          carrierTransformDelta(
+            sampleMotionTracksAtLocalTime(motion, 0),
+            sampleMotionTracksAtLocalTime(motion, duration)
+          ),
+          fullLoops
+        )
       );
       remaining -= fullLoops * duration;
     }

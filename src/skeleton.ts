@@ -6,7 +6,7 @@ import {
   composeMat4,
   isFiniteTransform,
   multiplyMat4,
-  numericArraysEqual,
+  numericArraysEqual
 } from "./math.js";
 
 export const NO_PARENT = -1;
@@ -71,6 +71,7 @@ export const VRM_HUMANOID_BONES = [
 ] as const;
 
 export type HumanoidBoneName = (typeof VRM_HUMANOID_BONES)[number];
+export type HumanoidBoneNameLike = HumanoidBoneName | (string & {});
 
 const VRM_HUMANOID_BONE_SET = new Set<unknown>(VRM_HUMANOID_BONES);
 
@@ -265,7 +266,9 @@ export function countRawSkeletonJoints(rawSkeleton: RawSkeleton): number {
   return Array.from(iterateRawSkeletonDepthFirst(rawSkeleton)).length;
 }
 
-export function* iterateRawSkeletonDepthFirst(rawSkeleton: RawSkeleton): IterableIterator<RawSkeletonJointTraversalItem> {
+export function* iterateRawSkeletonDepthFirst(
+  rawSkeleton: RawSkeleton
+): IterableIterator<RawSkeletonJointTraversalItem> {
   let order = 0;
   const active = new Set<RawSkeletonJoint>();
   const visited = new Set<RawSkeletonJoint>();
@@ -305,7 +308,9 @@ export function* iterateRawSkeletonDepthFirst(rawSkeleton: RawSkeleton): Iterabl
   }
 }
 
-export function* iterateRawSkeletonBreadthFirst(rawSkeleton: RawSkeleton): IterableIterator<RawSkeletonJointTraversalItem> {
+export function* iterateRawSkeletonBreadthFirst(
+  rawSkeleton: RawSkeleton
+): IterableIterator<RawSkeletonJointTraversalItem> {
   let order = 0;
   const visited = new Set<RawSkeletonJoint>();
 
@@ -317,7 +322,9 @@ export function* iterateRawSkeletonBreadthFirst(rawSkeleton: RawSkeleton): Itera
   ): IterableIterator<RawSkeletonJointTraversalItem> {
     for (let jointIndex = 0; jointIndex < joints.length; jointIndex += 1) {
       const joint = joints[jointIndex]!;
-      const path = parentPath ? `${parentPath}/${rawPathSegment(joint, jointIndex)}` : rawPathSegment(joint, jointIndex);
+      const path = parentPath
+        ? `${parentPath}/${rawPathSegment(joint, jointIndex)}`
+        : rawPathSegment(joint, jointIndex);
       assertRawJointObject(joint, path);
       if (visited.has(joint)) throw new Error(`raw skeleton contains a cycle or shared joint at ${path}`);
       visited.add(joint);
@@ -333,7 +340,9 @@ export function* iterateRawSkeletonBreadthFirst(rawSkeleton: RawSkeleton): Itera
     }
     for (let jointIndex = 0; jointIndex < joints.length; jointIndex += 1) {
       const joint = joints[jointIndex]!;
-      const path = parentPath ? `${parentPath}/${rawPathSegment(joint, jointIndex)}` : rawPathSegment(joint, jointIndex);
+      const path = parentPath
+        ? `${parentPath}/${rawPathSegment(joint, jointIndex)}`
+        : rawPathSegment(joint, jointIndex);
       yield* visitSiblings(readRawChildren(joint, path), joint, depth + 1, path);
     }
   }
@@ -367,7 +376,11 @@ export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValida
       return;
     }
     if (visited.has(joint)) {
-      issues.push({ joint: jointName, path, message: "raw skeleton reuses the same joint object in more than one place" });
+      issues.push({
+        joint: jointName,
+        path,
+        message: "raw skeleton reuses the same joint object in more than one place"
+      });
       return;
     }
 
@@ -376,7 +389,12 @@ export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValida
     const index = jointCount;
     jointCount += 1;
     if (jointCount > OZZ_MAX_JOINTS && !reportedJointLimit) {
-      issues.push({ index, joint: jointName, path, message: `raw skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit` });
+      issues.push({
+        index,
+        joint: jointName,
+        path,
+        message: `raw skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit`
+      });
       reportedJointLimit = true;
     }
 
@@ -385,7 +403,12 @@ export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValida
     } else {
       const existingNameIndex = names.get(joint.name);
       if (existingNameIndex !== undefined) {
-        issues.push({ index, joint: joint.name, path, message: `duplicate raw skeleton joint name also assigned to index ${existingNameIndex}` });
+        issues.push({
+          index,
+          joint: joint.name,
+          path,
+          message: `duplicate raw skeleton joint name also assigned to index ${existingNameIndex}`
+        });
       } else {
         names.set(joint.name, index);
       }
@@ -393,7 +416,12 @@ export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValida
 
     if (joint.humanoid !== undefined) {
       if (!isHumanoidBoneName(joint.humanoid)) {
-        issues.push({ index, joint: joint.name, path, message: `raw skeleton joint has invalid humanoid bone ${String(joint.humanoid)}` });
+        issues.push({
+          index,
+          joint: joint.name,
+          path,
+          message: `raw skeleton joint has invalid humanoid bone ${String(joint.humanoid)}`
+        });
       } else {
         const existingHumanoidIndex = humanoid.get(joint.humanoid);
         if (existingHumanoidIndex !== undefined) {
@@ -483,7 +511,8 @@ function assertRawJointObject(value: unknown, path: string): asserts value is Ra
 
 export function createSkeleton(definitions: JointDefinition[]): Skeleton {
   if (definitions.length === 0) throw new Error("skeleton requires at least one joint");
-  if (definitions.length > OZZ_MAX_JOINTS) throw new Error(`skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit`);
+  if (definitions.length > OZZ_MAX_JOINTS)
+    throw new Error(`skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit`);
 
   const nameToIndex = new Map<string, number>();
   for (const [index, joint] of definitions.entries()) {
@@ -504,7 +533,9 @@ export function createSkeleton(definitions: JointDefinition[]): Skeleton {
       }
       const existingIndex = humanoid.get(joint.humanoid);
       if (existingIndex !== undefined) {
-        throw new Error(`duplicate humanoid bone ${joint.humanoid} on joints ${definitions[existingIndex]!.name} and ${joint.name}`);
+        throw new Error(
+          `duplicate humanoid bone ${joint.humanoid} on joints ${definitions[existingIndex]!.name} and ${joint.name}`
+        );
       }
       humanoid.set(joint.humanoid, index);
     }
@@ -545,10 +576,14 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
   const issues: SkeletonValidationIssue[] = [];
   if (skeleton.joints.length === 0) issues.push({ message: "skeleton has no joints" });
   if (skeleton.joints.length > 1024) issues.push({ message: "skeleton exceeds Ozz-style 1024 joint safety limit" });
-  if (skeleton.parents.length !== skeleton.joints.length) issues.push({ message: "parents length does not match joints" });
-  if (skeleton.restPose.length !== skeleton.joints.length) issues.push({ message: "rest pose length does not match joints" });
-  const nameToIndex = skeleton.nameToIndex instanceof Map ? skeleton.nameToIndex : undefined;
-  const humanoid = skeleton.humanoid instanceof Map ? skeleton.humanoid : undefined;
+  if (skeleton.parents.length !== skeleton.joints.length)
+    issues.push({ message: "parents length does not match joints" });
+  if (skeleton.restPose.length !== skeleton.joints.length)
+    issues.push({ message: "rest pose length does not match joints" });
+  const nameToIndex =
+    skeleton.nameToIndex instanceof Map ? (skeleton.nameToIndex as ReadonlyMap<string, number>) : undefined;
+  const humanoid =
+    skeleton.humanoid instanceof Map ? (skeleton.humanoid as ReadonlyMap<HumanoidBoneName, number>) : undefined;
   if (!nameToIndex) issues.push({ message: "nameToIndex map is invalid" });
   if (!humanoid) issues.push({ message: "humanoid map is invalid" });
   const names = new Map<string, number>();
@@ -559,12 +594,18 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
     if (!hasValidName) issues.push({ index, message: "joint has no name" });
     const existingNameIndex = names.get(joint.name);
     if (hasValidName && existingNameIndex !== undefined) {
-      issues.push({ index, joint: joint.name, message: `duplicate joint name also assigned to index ${existingNameIndex}` });
+      issues.push({
+        index,
+        joint: joint.name,
+        message: `duplicate joint name also assigned to index ${existingNameIndex}`
+      });
     } else if (hasValidName) {
       names.set(joint.name, index);
     }
-    if (!Number.isInteger(joint.parentIndex)) issues.push({ index, joint: joint.name, message: "parent index must be an integer" });
-    if (joint.parentIndex >= index) issues.push({ index, joint: joint.name, message: "parent index must be before child" });
+    if (!Number.isInteger(joint.parentIndex))
+      issues.push({ index, joint: joint.name, message: "parent index must be an integer" });
+    if (joint.parentIndex >= index)
+      issues.push({ index, joint: joint.name, message: "parent index must be before child" });
     if (joint.parentIndex < NO_PARENT) issues.push({ index, joint: joint.name, message: "parent index is invalid" });
     if (!isFiniteTransform(joint.rest)) issues.push({ index, joint: joint.name, message: "rest transform is invalid" });
     if (index < skeleton.parents.length && skeleton.parents[index] !== joint.parentIndex) {
@@ -572,8 +613,10 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
     }
     const restPoseTransform = skeleton.restPose[index];
     if (restPoseTransform) {
-      if (!isFiniteTransform(restPoseTransform)) issues.push({ index, joint: joint.name, message: "rest pose transform is invalid" });
-      if (!transformsEqual(restPoseTransform, joint.rest)) issues.push({ index, joint: joint.name, message: "rest pose entry does not match joint rest" });
+      if (!isFiniteTransform(restPoseTransform))
+        issues.push({ index, joint: joint.name, message: "rest pose transform is invalid" });
+      if (!transformsEqual(restPoseTransform, joint.rest))
+        issues.push({ index, joint: joint.name, message: "rest pose entry does not match joint rest" });
     }
     if (nameToIndex && hasValidName && nameToIndex.get(joint.name) !== index) {
       issues.push({ index, joint: joint.name, message: "nameToIndex entry does not match joint index" });
@@ -594,13 +637,22 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
         humanoidToIndex.set(joint.humanoid, index);
       }
       if (humanoid && humanoid.get(joint.humanoid) !== index) {
-        issues.push({ index, joint: joint.name, message: `humanoid map entry ${joint.humanoid} does not match joint index` });
+        issues.push({
+          index,
+          joint: joint.name,
+          message: `humanoid map entry ${joint.humanoid} does not match joint index`
+        });
       }
     }
   }
   if (nameToIndex) {
     for (const [name, index] of nameToIndex) {
-      if (!Number.isInteger(index) || index < 0 || index >= skeleton.joints.length || skeleton.joints[index]?.name !== name) {
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= skeleton.joints.length ||
+        skeleton.joints[index]?.name !== name
+      ) {
         issues.push({ message: `nameToIndex entry ${name} is stale` });
       }
     }
@@ -611,7 +663,12 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
         issues.push({ message: `humanoid map entry ${String(bone)} has invalid humanoid bone name` });
         continue;
       }
-      if (!Number.isInteger(index) || index < 0 || index >= skeleton.joints.length || skeleton.joints[index]?.humanoid !== bone) {
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= skeleton.joints.length ||
+        skeleton.joints[index]?.humanoid !== bone
+      ) {
         issues.push({ message: `humanoid map entry ${bone} is stale` });
       }
     }
@@ -620,7 +677,10 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
   return issues;
 }
 
-function validateHumanoidHierarchy(skeleton: Skeleton, humanoid: ReadonlyMap<HumanoidBoneName, number>): SkeletonValidationIssue[] {
+function validateHumanoidHierarchy(
+  skeleton: Skeleton,
+  humanoid: ReadonlyMap<HumanoidBoneName, number>
+): SkeletonValidationIssue[] {
   const issues: SkeletonValidationIssue[] = [];
   for (const [childBone, ancestorBone] of VRM_HUMANOID_ANCESTOR_RULES) {
     const childIndex = humanoid.get(childBone);
@@ -628,7 +688,8 @@ function validateHumanoidHierarchy(skeleton: Skeleton, humanoid: ReadonlyMap<Hum
     if (childIndex === undefined || ancestorIndex === undefined) continue;
     const childJoint = skeleton.joints[childIndex];
     const ancestorJoint = skeleton.joints[ancestorIndex];
-    if (!childJoint || !ancestorJoint || childJoint.humanoid !== childBone || ancestorJoint.humanoid !== ancestorBone) continue;
+    if (!childJoint || !ancestorJoint || childJoint.humanoid !== childBone || ancestorJoint.humanoid !== ancestorBone)
+      continue;
     if (!isDescendantJoint(skeleton, childIndex, ancestorIndex)) {
       issues.push({
         index: childIndex,
@@ -645,7 +706,13 @@ function isDescendantJoint(skeleton: Skeleton, childIndex: number, ancestorIndex
   const visited = new Set<number>();
   while (parentIndex !== NO_PARENT) {
     if (parentIndex === ancestorIndex) return true;
-    if (!Number.isInteger(parentIndex) || parentIndex < 0 || parentIndex >= skeleton.joints.length || visited.has(parentIndex)) return false;
+    if (
+      !Number.isInteger(parentIndex) ||
+      parentIndex < 0 ||
+      parentIndex >= skeleton.joints.length ||
+      visited.has(parentIndex)
+    )
+      return false;
     visited.add(parentIndex);
     parentIndex = skeleton.joints[parentIndex]?.parentIndex ?? NO_PARENT;
   }
@@ -653,7 +720,11 @@ function isDescendantJoint(skeleton: Skeleton, childIndex: number, ancestorIndex
 }
 
 function transformsEqual(a: Transform, b: Transform): boolean {
-  return numericArraysEqual(a.translation, b.translation) && numericArraysEqual(a.rotation, b.rotation) && numericArraysEqual(a.scale, b.scale);
+  return (
+    numericArraysEqual(a.translation, b.translation) &&
+    numericArraysEqual(a.rotation, b.rotation) &&
+    numericArraysEqual(a.scale, b.scale)
+  );
 }
 
 export function createRestPose(skeleton: Skeleton): Transform[] {
@@ -673,8 +744,12 @@ export function isLeaf(skeleton: Skeleton, joint: JointReference): boolean {
   return true;
 }
 
-export function* iterateJointsDepthFirst(skeleton: Skeleton, from: JointReference = NO_PARENT): IterableIterator<SkeletonJointTraversalItem> {
-  const startIndex = from === NO_PARENT ? NO_PARENT : resolveRequiredJointIndex(skeleton, from, "depth-first traversal");
+export function* iterateJointsDepthFirst(
+  skeleton: Skeleton,
+  from: JointReference = NO_PARENT
+): IterableIterator<SkeletonJointTraversalItem> {
+  const startIndex =
+    from === NO_PARENT ? NO_PARENT : resolveRequiredJointIndex(skeleton, from, "depth-first traversal");
   const children = collectJointChildren(skeleton);
   const visited = new Set<number>();
 
@@ -763,7 +838,12 @@ export function updateLocalToModelPoseRange(
   return out;
 }
 
-function sanitizeLocalToModelBoundary(value: number | undefined, fallback: number, jointCount: number, label: string): number {
+function sanitizeLocalToModelBoundary(
+  value: number | undefined,
+  fallback: number,
+  jointCount: number,
+  label: string
+): number {
   const resolved = value ?? fallback;
   if (!Number.isInteger(resolved)) throw new Error(`local-to-model ${label} must be an integer`);
   if (resolved === NO_PARENT) return resolved;

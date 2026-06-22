@@ -25,7 +25,7 @@ import {
   subVec3
 } from "./math.js";
 import { finiteMat4Value, isFiniteMat4, mat4Translation as matrixTranslation } from "./numeric-helpers.js";
-import { type HumanoidBoneName, type Skeleton, resolveHumanoidIndex, updateLocalToModelPoseRange } from "./skeleton.js";
+import { type Skeleton, resolveHumanoidIndex, updateLocalToModelPoseRange } from "./skeleton.js";
 
 const MIN_IK_REACH = 1e-5;
 const DEFAULT_IK_SOFTEN = 0.998;
@@ -256,7 +256,10 @@ export function solveAimIk(input: AimIkInput): AimIkResult {
   const targetLength = finiteLength(targetLocal, 0);
   const targetDirection = normalizeVec3(targetLocal, forward);
   const offsetted = computeOffsettedForward(forward, offset, targetLocal);
-  const forwardModel = normalizeVec3(transformAimVectorToModel(joint, forward), rotateVec3ByQuat(joint.rotation, forward));
+  const forwardModel = normalizeVec3(
+    transformAimVectorToModel(joint, forward),
+    rotateVec3ByQuat(joint.rotation, forward)
+  );
   const upModel = normalizeVec3(transformAimVectorToModel(joint, up), rotateVec3ByQuat(joint.rotation, up));
   const targetDirectionModel = resolveAimTargetModelDirection(input, joint, targetDirection, forwardModel);
 
@@ -302,16 +305,31 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const physicalMaxReach = upperLength + lowerLength;
   const rootToTarget = subVec3(safeInput.target, safeInput.root);
   const targetDistance = finiteLength(rootToTarget, 0);
-  const softenedDistance = softenIkDistance(targetDistance, physicalMinReach, physicalMaxReach, safeInput.soften ?? DEFAULT_IK_SOFTEN);
+  const softenedDistance = softenIkDistance(
+    targetDistance,
+    physicalMinReach,
+    physicalMaxReach,
+    safeInput.soften ?? DEFAULT_IK_SOFTEN
+  );
   const hardMaxReach = physicalMaxReach * Math.min(1, finiteNonNegative(safeInput.maxStretch, 1));
   const maxReach = Math.max(solveMinReach, hardMaxReach);
   const clampedDistance = clamp(softenedDistance, solveMinReach, maxReach);
   const physicalReachDistance = clamp(targetDistance, physicalMinReach, physicalMaxReach);
   const physicalClamped = targetDistance < physicalMinReach - 1e-4 || targetDistance > physicalMaxReach + 1e-4;
-  const stretchLimited = targetDistance > MIN_IK_REACH && !physicalClamped && Math.abs(clampedDistance - targetDistance) > 1e-4;
+  const stretchLimited =
+    targetDistance > MIN_IK_REACH && !physicalClamped && Math.abs(clampedDistance - targetDistance) > 1e-4;
   const direction = normalizeVec3(rootToTarget, normalizeVec3(subVec3(safeInput.end, safeInput.root), [0, -1, 0]));
-  const pole = applyIkTwist(bendPlanePole(safeInput.pole ?? subVec3(safeInput.joint, safeInput.root), direction), direction, safeInput.twistAngle);
-  const cosAngle = clamp((upperLength * upperLength + clampedDistance * clampedDistance - lowerLength * lowerLength) / (2 * upperLength * clampedDistance), -1, 1);
+  const pole = applyIkTwist(
+    bendPlanePole(safeInput.pole ?? subVec3(safeInput.joint, safeInput.root), direction),
+    direction,
+    safeInput.twistAngle
+  );
+  const cosAngle = clamp(
+    (upperLength * upperLength + clampedDistance * clampedDistance - lowerLength * lowerLength) /
+      (2 * upperLength * clampedDistance),
+    -1,
+    1
+  );
   const along = cosAngle * upperLength;
   const height = Math.sqrt(Math.max(0, upperLength * upperLength - along * along));
   const solvedJoint = addVec3(addVec3(safeInput.root, scaleVec3(direction, along)), scaleVec3(pole, height));
@@ -335,7 +353,10 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
 function bendPlanePole(pole: Vec3, direction: Vec3): Vec3 {
   const normalizedDirection = normalizeVec3(direction, [0, -1, 0]);
   const normalizedPole = normalizeVec3(pole, [0, 0, 1]);
-  const projected = subVec3(normalizedPole, scaleVec3(normalizedDirection, dotVec3(normalizedPole, normalizedDirection)));
+  const projected = subVec3(
+    normalizedPole,
+    scaleVec3(normalizedDirection, dotVec3(normalizedPole, normalizedDirection))
+  );
   return normalizeVec3(projected, fallbackPerpendicular(normalizedDirection));
 }
 
@@ -381,7 +402,10 @@ export function solveTwoBoneIkModel(input: TwoBoneIkModelInput): TwoBoneIkModelR
   const midAxisModel =
     input.midAxis === undefined
       ? undefined
-      : normalizeVec3(transformLinearVector(midModel, finiteVec3(input.midAxis, [0, 0, 1])), transformLinearVector(midModel, [0, 0, 1]));
+      : normalizeVec3(
+          transformLinearVector(midModel, finiteVec3(input.midAxis, [0, 0, 1])),
+          transformLinearVector(midModel, [0, 0, 1])
+        );
   const solvedPosition = solveTwoBoneIk({
     root,
     joint: mid,
@@ -411,7 +435,10 @@ export function solveTwoBoneIkModel(input: TwoBoneIkModelInput): TwoBoneIkModelR
   };
   const rootLocalCorrection = modelCorrectionToLocalPostCorrectionForRotation(rootModelRotation, solved.rootCorrection);
   const rootCorrectedMidModelRotation = multiplyQuat(solved.rootCorrection, midModelRotation);
-  const midLocalCorrection = modelCorrectionToLocalPostCorrectionForRotation(rootCorrectedMidModelRotation, solved.jointCorrection);
+  const midLocalCorrection = modelCorrectionToLocalPostCorrectionForRotation(
+    rootCorrectedMidModelRotation,
+    solved.jointCorrection
+  );
 
   return {
     ...solved,
@@ -426,7 +453,9 @@ export function modelCorrectionToLocalPostCorrection(jointModel: Mat4, modelCorr
   return modelCorrectionToLocalPostCorrectionForRotation(rotationFromMat4(jointModel), modelCorrection);
 }
 
-export function applyTwoBoneIkLocalCorrections(input: ApplyTwoBoneIkLocalCorrectionsInput): ApplyTwoBoneIkLocalCorrectionsResult {
+export function applyTwoBoneIkLocalCorrections(
+  input: ApplyTwoBoneIkLocalCorrectionsInput
+): ApplyTwoBoneIkLocalCorrectionsResult {
   const rootJoint = requireJointIndex(input.skeleton, input.rootJoint, "rootJoint");
   const midJoint = requireJointIndex(input.skeleton, input.midJoint, "midJoint");
   if (!isJointDescendantOrSelf(input.skeleton, midJoint, rootJoint)) {
@@ -461,12 +490,20 @@ export function applyAimIkChainToPose(input: ApplyAimIkChainInput): ApplyAimIkCh
       joint: jointModel,
       ...(input.target === undefined ? {} : { target: input.target }),
       ...(input.targetDirection === undefined ? {} : { targetDirection: input.targetDirection }),
-      ...(jointConfig.forward === undefined && input.forward === undefined ? {} : { forward: jointConfig.forward ?? input.forward! }),
-      ...(jointConfig.offset === undefined && input.offset === undefined ? {} : { offset: jointConfig.offset ?? input.offset! }),
+      ...(jointConfig.forward === undefined && input.forward === undefined
+        ? {}
+        : { forward: jointConfig.forward ?? input.forward! }),
+      ...(jointConfig.offset === undefined && input.offset === undefined
+        ? {}
+        : { offset: jointConfig.offset ?? input.offset! }),
       ...(jointConfig.up === undefined && input.up === undefined ? {} : { up: jointConfig.up ?? input.up! }),
       ...(jointConfig.pole === undefined && input.pole === undefined ? {} : { pole: jointConfig.pole ?? input.pole! }),
-      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined ? {} : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
-      ...(jointConfig.weight === undefined && input.weight === undefined ? {} : { weight: jointConfig.weight ?? input.weight! })
+      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined
+        ? {}
+        : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
+      ...(jointConfig.weight === undefined && input.weight === undefined
+        ? {}
+        : { weight: jointConfig.weight ?? input.weight! })
     });
     const applied = applyAimIkModelCorrection({
       skeleton: input.skeleton,
@@ -495,9 +532,16 @@ export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput):
     const jointModel = input.modelPose[joint];
     if (!jointModel) throw new Error(`modelPose is missing joint ${joint}`);
 
-    const propagated = previousLocalCorrection && previousJoint >= 0
-      ? propagateAimChainOffset(input.modelPose[previousJoint]!, jointModel, previousForward, previousOffset, previousLocalCorrection)
-      : null;
+    const propagated =
+      previousLocalCorrection && previousJoint >= 0
+        ? propagateAimChainOffset(
+            input.modelPose[previousJoint]!,
+            jointModel,
+            previousForward,
+            previousOffset,
+            previousLocalCorrection
+          )
+        : null;
     const forward = jointConfig.forward ?? propagated?.forward ?? input.forward;
     const offset = jointConfig.offset ?? propagated?.offset ?? input.offset;
     const aim = solveAimIk({
@@ -508,8 +552,12 @@ export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput):
       ...(offset === undefined ? {} : { offset }),
       ...(jointConfig.up === undefined && input.up === undefined ? {} : { up: jointConfig.up ?? input.up! }),
       ...(jointConfig.pole === undefined && input.pole === undefined ? {} : { pole: jointConfig.pole ?? input.pole! }),
-      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined ? {} : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
-      ...(jointConfig.weight === undefined && input.weight === undefined ? {} : { weight: jointConfig.weight ?? input.weight! })
+      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined
+        ? {}
+        : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
+      ...(jointConfig.weight === undefined && input.weight === undefined
+        ? {}
+        : { weight: jointConfig.weight ?? input.weight! })
     });
     const localCorrection = modelCorrectionToLocalPostCorrection(jointModel, aim.jointCorrection);
     multiplyPoseRotation(input.localPose, joint, localCorrection, "joint");
@@ -530,17 +578,23 @@ export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput):
   return { localPose: input.localPose, modelPose: input.modelPose, corrections, updatedFrom, updatedTo };
 }
 
-export function createHumanoidLookAtAimChain(skeleton: Skeleton, options: HumanoidLookAtAimChainOptions = {}): AimIkChainJointInput[] {
+export function createHumanoidLookAtAimChain(
+  skeleton: Skeleton,
+  options: HumanoidLookAtAimChainOptions = {}
+): AimIkChainJointInput[] {
   const bones = options.bones ?? DEFAULT_HUMANOID_LOOK_AT_AIM_CHAIN;
   const chain: AimIkChainJointInput[] = [];
   const chainWeight = sanitizeUnitWeight(options.chainWeight, 1);
   const jointWeight = sanitizeUnitWeight(options.jointWeight, 0.5);
 
   for (const bone of bones) {
-    const joint = resolveHumanoidIndex(skeleton, bone as HumanoidBoneName);
+    const joint = resolveHumanoidIndex(skeleton, bone);
     if (joint < 0) continue;
     const configured = options.weights?.[bone];
-    const weight = configured === undefined ? jointWeight * DEFAULT_HUMANOID_LOOK_AT_WEIGHTS[bone] : sanitizeUnitWeight(configured, DEFAULT_HUMANOID_LOOK_AT_WEIGHTS[bone]);
+    const weight =
+      configured === undefined
+        ? jointWeight * DEFAULT_HUMANOID_LOOK_AT_WEIGHTS[bone]
+        : sanitizeUnitWeight(configured, DEFAULT_HUMANOID_LOOK_AT_WEIGHTS[bone]);
     const item: AimIkChainJointInput = { joint, weight: weight * chainWeight };
     if (options.forward !== undefined) item.forward = options.forward;
     if (options.offset !== undefined) item.offset = options.offset;
@@ -556,7 +610,13 @@ export function createHumanoidLookAtAimChain(skeleton: Skeleton, options: Humano
   return chain;
 }
 
-const DEFAULT_HUMANOID_LOOK_AT_AIM_CHAIN: readonly HumanoidLookAtAimBone[] = ["head", "neck", "upperChest", "chest", "spine"];
+const DEFAULT_HUMANOID_LOOK_AT_AIM_CHAIN: readonly HumanoidLookAtAimBone[] = [
+  "head",
+  "neck",
+  "upperChest",
+  "chest",
+  "spine"
+];
 const DEFAULT_HUMANOID_LOOK_AT_WEIGHTS: Readonly<Record<HumanoidLookAtAimBone, number>> = {
   head: 1,
   neck: 0.72,
@@ -565,9 +625,18 @@ const DEFAULT_HUMANOID_LOOK_AT_WEIGHTS: Readonly<Record<HumanoidLookAtAimBone, n
   spine: 0.2
 };
 
-function propagateAimChainOffset(previousModel: Mat4, jointModel: Mat4, forward: Vec3, offset: Vec3, correction: Quat): { forward: Vec3; offset: Vec3 } {
+function propagateAimChainOffset(
+  previousModel: Mat4,
+  jointModel: Mat4,
+  forward: Vec3,
+  offset: Vec3,
+  correction: Quat
+): { forward: Vec3; offset: Vec3 } {
   const correctedForwardModel = transformLinearVector(previousModel, rotateVec3ByQuat(correction, forward));
-  const correctedOffsetModel = addVec3(matrixTranslation(previousModel), transformLinearVector(previousModel, rotateVec3ByQuat(correction, offset)));
+  const correctedOffsetModel = addVec3(
+    matrixTranslation(previousModel),
+    transformLinearVector(previousModel, rotateVec3ByQuat(correction, offset))
+  );
   return {
     forward: inverseTransformVector(jointModel, correctedForwardModel),
     offset: inverseTransformPoint(jointModel, correctedOffsetModel)
@@ -624,7 +693,8 @@ function sanitizeTwoBoneIkInput(input: TwoBoneIkInput): TwoBoneIkInput {
   const end = finiteVec3(input.end, addVec3(joint, [0, -1, 0]));
   const target = finiteVec3(input.target, end);
   const pole = input.pole === undefined ? undefined : finiteVec3(input.pole, subVec3(joint, root));
-  const midAxis = input.midAxis === undefined ? undefined : normalizeVec3(finiteVec3(input.midAxis, [0, 0, 1]), [0, 0, 1]);
+  const midAxis =
+    input.midAxis === undefined ? undefined : normalizeVec3(finiteVec3(input.midAxis, [0, 0, 1]), [0, 0, 1]);
   return {
     root,
     joint,
@@ -664,7 +734,12 @@ function resolveAimTargetLocal(input: AimIkInput, joint: AimJointSpace, offset: 
   return scaleVec3(normalizeVec3(direction, [1, 0, 0]), Math.max(1, offsetLength + 1));
 }
 
-function resolveAimTargetModelDirection(input: AimIkInput, joint: AimJointSpace, targetLocalDirection: Vec3, fallback: Vec3): Vec3 {
+function resolveAimTargetModelDirection(
+  input: AimIkInput,
+  joint: AimJointSpace,
+  targetLocalDirection: Vec3,
+  fallback: Vec3
+): Vec3 {
   if (input.target !== undefined) {
     const target = finiteVec3(input.target, joint.position);
     return normalizeVec3(subVec3(target, joint.position), fallback);
@@ -677,7 +752,10 @@ function resolveAimTargetModelDirection(input: AimIkInput, joint: AimJointSpace,
 
 function computeOffsettedForward(forward: Vec3, offset: Vec3, targetLocal: Vec3): { reached: boolean; forward: Vec3 } {
   const projectedOffsetLength = dotVec3(forward, offset);
-  const offsetPerpendicularLengthSquared = Math.max(0, dotVec3(offset, offset) - projectedOffsetLength * projectedOffsetLength);
+  const offsetPerpendicularLengthSquared = Math.max(
+    0,
+    dotVec3(offset, offset) - projectedOffsetLength * projectedOffsetLength
+  );
   const targetLengthSquared = dotVec3(targetLocal, targetLocal);
   if (!Number.isFinite(targetLengthSquared) || offsetPerpendicularLengthSquared > targetLengthSquared + 1e-8) {
     return { reached: false, forward };
@@ -718,7 +796,10 @@ function aimResult(
     offsettedForward,
     correctedForward,
     correctedUp,
-    alignmentError: angleBetweenUnit(normalizeVec3(correctedForward, offsettedForward), normalizeVec3(targetDirection, offsettedForward))
+    alignmentError: angleBetweenUnit(
+      normalizeVec3(correctedForward, offsettedForward),
+      normalizeVec3(targetDirection, offsettedForward)
+    )
   };
 }
 
@@ -742,7 +823,8 @@ function applyIkTwist(pole: Vec3, direction: Vec3, twistAngle: number | undefine
 
 function weightQuaternion(rotation: Quat, weight: number): Quat {
   const amount = sanitizeUnitWeight(weight, 1);
-  const fixed = rotation[3] < 0 ? ([-rotation[0], -rotation[1], -rotation[2], -rotation[3]] as Quat) : normalizeQuat(rotation);
+  const fixed =
+    rotation[3] < 0 ? ([-rotation[0], -rotation[1], -rotation[2], -rotation[3]] as Quat) : normalizeQuat(rotation);
   if (amount <= EPSILON) return IDENTITY_QUAT;
   if (amount >= 1) return fixed;
   return normalizeQuat([fixed[0] * amount, fixed[1] * amount, fixed[2] * amount, 1 + (fixed[3] - 1) * amount]);
@@ -780,8 +862,14 @@ function localCorrectionToModel(joint: AimJointSpace, localCorrection: Quat): Qu
 }
 
 function rotationFromMat4(matrix: Mat4): Quat {
-  const xAxis = normalizeVec3([finiteMat4Value(matrix, 0, 1), finiteMat4Value(matrix, 1, 0), finiteMat4Value(matrix, 2, 0)], [1, 0, 0]);
-  const yInput = normalizeVec3([finiteMat4Value(matrix, 4, 0), finiteMat4Value(matrix, 5, 1), finiteMat4Value(matrix, 6, 0)], [0, 1, 0]);
+  const xAxis = normalizeVec3(
+    [finiteMat4Value(matrix, 0, 1), finiteMat4Value(matrix, 1, 0), finiteMat4Value(matrix, 2, 0)],
+    [1, 0, 0]
+  );
+  const yInput = normalizeVec3(
+    [finiteMat4Value(matrix, 4, 0), finiteMat4Value(matrix, 5, 1), finiteMat4Value(matrix, 6, 0)],
+    [0, 1, 0]
+  );
   const zAxis = normalizeVec3(crossVec3(xAxis, yInput), [0, 0, 1]);
   const yAxis = normalizeVec3(crossVec3(zAxis, xAxis), [0, 1, 0]);
   const trace = xAxis[0] + yAxis[1] + zAxis[2];
@@ -806,7 +894,9 @@ function inverseTransformPoint(matrix: Mat4, point: Vec3): Vec3 {
 }
 
 function transformLinearVector(matrix: Mat4, vector: Vec3): Vec3 {
-  const x = vector[0], y = vector[1], z = vector[2];
+  const x = vector[0],
+    y = vector[1],
+    z = vector[2];
   return [
     finiteMat4Value(matrix, 0, 1) * x + finiteMat4Value(matrix, 4, 0) * y + finiteMat4Value(matrix, 8, 0) * z,
     finiteMat4Value(matrix, 1, 0) * x + finiteMat4Value(matrix, 5, 1) * y + finiteMat4Value(matrix, 9, 0) * z,
@@ -815,9 +905,15 @@ function transformLinearVector(matrix: Mat4, vector: Vec3): Vec3 {
 }
 
 function inverseTransformVector(matrix: Mat4, vector: Vec3): Vec3 {
-  const m00 = finiteMat4Value(matrix, 0, 1), m01 = finiteMat4Value(matrix, 4, 0), m02 = finiteMat4Value(matrix, 8, 0);
-  const m10 = finiteMat4Value(matrix, 1, 0), m11 = finiteMat4Value(matrix, 5, 1), m12 = finiteMat4Value(matrix, 9, 0);
-  const m20 = finiteMat4Value(matrix, 2, 0), m21 = finiteMat4Value(matrix, 6, 0), m22 = finiteMat4Value(matrix, 10, 1);
+  const m00 = finiteMat4Value(matrix, 0, 1),
+    m01 = finiteMat4Value(matrix, 4, 0),
+    m02 = finiteMat4Value(matrix, 8, 0);
+  const m10 = finiteMat4Value(matrix, 1, 0),
+    m11 = finiteMat4Value(matrix, 5, 1),
+    m12 = finiteMat4Value(matrix, 9, 0);
+  const m20 = finiteMat4Value(matrix, 2, 0),
+    m21 = finiteMat4Value(matrix, 6, 0),
+    m22 = finiteMat4Value(matrix, 10, 1);
   const c00 = m11 * m22 - m12 * m21;
   const c01 = m02 * m21 - m01 * m22;
   const c02 = m01 * m12 - m02 * m11;

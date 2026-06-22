@@ -8,12 +8,13 @@ import {
 } from "./manifest-clip-helpers.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
+export type AnimationManifestFormat = typeof WAIFU_ANIMATION_BINARY_FORMAT | (string & {});
 
 export type AnimationManifestEntry = {
   id: string;
   label: string;
   url: string;
-  format: typeof WAIFU_ANIMATION_BINARY_FORMAT | string;
+  format: AnimationManifestFormat;
   playback?: {
     start?: number;
     end?: number;
@@ -77,7 +78,8 @@ export function validateManifest(manifest: AnimationManifest): string[] {
   for (const entry of clips) {
     if (!entry.id) issues.push("manifest entry is missing id");
     if (!entry.url) issues.push(`${entry.id || "<unknown>"} is missing url`);
-    if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) issues.push(`${entry.id} has unsupported format ${entry.format}`);
+    if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT)
+      issues.push(`${entry.id} has unsupported format ${entry.format}`);
     if (entry.id) {
       if (ids.has(entry.id)) issues.push(`duplicate clip id ${entry.id}`);
       ids.add(entry.id);
@@ -94,7 +96,12 @@ export function validateManifest(manifest: AnimationManifest): string[] {
   return issues;
 }
 
-export async function loadManifest(url: string, loader: AssetLoader, options: ManifestLoaderOptions = {}, seen = new Set<string>()): Promise<AnimationManifest> {
+export async function loadManifest(
+  url: string,
+  loader: AssetLoader,
+  options: ManifestLoaderOptions = {},
+  seen = new Set<string>()
+): Promise<AnimationManifest> {
   if (seen.has(url)) return { version: 1, clips: [] };
   seen.add(url);
   const manifest = (await loader(url)) as AnimationManifest;
@@ -121,7 +128,9 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
   const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
   const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
-  const movingRootCarrierTrack = playbackWindow ? clip.tracks.find((track) => rootCarrierTranslationTrackHasMotion(track, playbackWindow)) : undefined;
+  const movingRootCarrierTrack = playbackWindow
+    ? clip.tracks.find((track) => rootCarrierTranslationTrackHasMotion(track, playbackWindow))
+    : undefined;
   const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip);
   if (rootMotionPolicyIssue) {
     issues.push({ message: rootMotionPolicyIssue });
@@ -188,7 +197,8 @@ export function isInvalidAssetValidationStatus(value: unknown): boolean {
 
 export function manifestValidationStatusIssue(entry: AnimationManifestEntry): string | null {
   const status = entry.validation?.status;
-  if (status === "rejected" || status === "quarantined") return entry.validation?.reason ?? `manifest marks clip ${status}`;
+  if (status === "rejected" || status === "quarantined")
+    return entry.validation?.reason ?? `manifest marks clip ${status}`;
   if (isInvalidAssetValidationStatus(status)) return `invalid validation status ${String(status)}`;
   return null;
 }
@@ -198,26 +208,31 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
   const sourceRootMotion = entrySource.rootMotion;
   if (sourceRootMotion !== undefined) {
     if (typeof sourceRootMotion === "string") {
-      if (!isRootMotionPolicy(sourceRootMotion)) return `has invalid source.rootMotion policy ${String(sourceRootMotion)}`;
+      if (!isRootMotionPolicy(sourceRootMotion))
+        return `has invalid source.rootMotion policy ${String(sourceRootMotion)}`;
     } else if (typeof sourceRootMotion === "object" && sourceRootMotion !== null && "policy" in sourceRootMotion) {
       const policy = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).policy;
       const provenance = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).provenance;
       if (!isRootMotionPolicy(policy)) return `has invalid source.rootMotion.policy ${String(policy)}`;
-      if (provenance !== undefined && !isRootMotionProvenance(provenance)) return `has invalid source.rootMotion.provenance ${String(provenance)}`;
+      if (provenance !== undefined && !isRootMotionProvenance(provenance))
+        return `has invalid source.rootMotion.provenance ${formatUnknownValue(provenance)}`;
     } else {
       return "has invalid source.rootMotion metadata";
     }
   }
   const sourcePolicy = entrySource.rootMotionPolicy;
-  if (sourcePolicy !== undefined && !isRootMotionPolicy(sourcePolicy)) return `has invalid source.rootMotionPolicy ${String(sourcePolicy)}`;
+  if (sourcePolicy !== undefined && !isRootMotionPolicy(sourcePolicy))
+    return `has invalid source.rootMotionPolicy ${formatUnknownValue(sourcePolicy)}`;
   return null;
 }
 
 function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {
   const clipPolicy = clip.metadata?.rootMotionPolicy;
-  if (clipPolicy !== undefined && !isRootMotionPolicy(clipPolicy)) return `has invalid clip rootMotionPolicy ${String(clipPolicy)}`;
+  if (clipPolicy !== undefined && !isRootMotionPolicy(clipPolicy))
+    return `has invalid clip rootMotionPolicy ${formatUnknownValue(clipPolicy)}`;
   const clipProvenance = clip.metadata?.rootMotionProvenance;
-  if (clipProvenance !== undefined && !isRootMotionProvenance(clipProvenance)) return `has invalid clip rootMotionProvenance ${String(clipProvenance)}`;
+  if (clipProvenance !== undefined && !isRootMotionProvenance(clipProvenance))
+    return `has invalid clip rootMotionProvenance ${formatUnknownValue(clipProvenance)}`;
   return null;
 }
 
@@ -238,8 +253,10 @@ export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: Ani
   const clipMetadata = clip?.metadata ?? {};
   const sourceRootMotion = entrySource.rootMotion;
   if (sourceRootMotion !== undefined) {
-    if (typeof sourceRootMotion === "string") return isRootMotionPolicy(sourceRootMotion) ? { policy: sourceRootMotion, provenance: "unknown" } : null;
-    if (typeof sourceRootMotion !== "object" || sourceRootMotion === null || !("policy" in sourceRootMotion)) return null;
+    if (typeof sourceRootMotion === "string")
+      return isRootMotionPolicy(sourceRootMotion) ? { policy: sourceRootMotion, provenance: "unknown" } : null;
+    if (typeof sourceRootMotion !== "object" || sourceRootMotion === null || !("policy" in sourceRootMotion))
+      return null;
     const metadata = sourceRootMotion as { policy?: unknown; provenance?: unknown };
     if (!isRootMotionPolicy(metadata.policy)) return null;
     if (metadata.provenance !== undefined && !isRootMotionProvenance(metadata.provenance)) return null;
@@ -254,7 +271,9 @@ export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: Ani
   if (isRootMotionPolicy(clipPolicy)) {
     return {
       policy: clipPolicy,
-      provenance: isRootMotionProvenance(clipMetadata.rootMotionProvenance) ? clipMetadata.rootMotionProvenance : "unknown"
+      provenance: isRootMotionProvenance(clipMetadata.rootMotionProvenance)
+        ? clipMetadata.rootMotionProvenance
+        : "unknown"
     };
   }
   return null;
@@ -274,13 +293,28 @@ function isRootMotionProvenance(value: unknown): value is RootMotionProvenance {
   );
 }
 
+function formatUnknownValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  if (typeof value === "symbol") return value.description ? `Symbol(${value.description})` : "Symbol()";
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  try {
+    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
   const clips = readManifestClips(manifest) ?? [];
   const duplicateIds = duplicatedManifestIds(clips);
   return clips.filter((entry) => !manifestRejectionIssue(entry, duplicateIds));
 }
 
-export function rejectedAnimationReport(manifest: AnimationManifest): Array<{ id: string; label?: string; reason: string }> {
+export function rejectedAnimationReport(
+  manifest: AnimationManifest
+): Array<{ id: string; label?: string; reason: string }> {
   const clips = readManifestClips(manifest) ?? [];
   const duplicateIds = duplicatedManifestIds(clips);
   return clips
@@ -290,15 +324,23 @@ export function rejectedAnimationReport(manifest: AnimationManifest): Array<{ id
 }
 
 function manifestRejectionIssue(entry: AnimationManifestEntry, duplicateIds = new Set<string>()): string | null {
-  return manifestStructuralRejectionIssue(entry, duplicateIds) ?? manifestValidationStatusIssue(entry) ?? manifestRootMotionPolicyIssue(entry);
+  return (
+    manifestStructuralRejectionIssue(entry, duplicateIds) ??
+    manifestValidationStatusIssue(entry) ??
+    manifestRootMotionPolicyIssue(entry)
+  );
 }
 
-function manifestStructuralRejectionIssue(entry: AnimationManifestEntry, duplicateIds: ReadonlySet<string>): string | null {
+function manifestStructuralRejectionIssue(
+  entry: AnimationManifestEntry,
+  duplicateIds: ReadonlySet<string>
+): string | null {
   if (!entry.id) return "missing id";
   if (!entry.url) return "missing url";
   if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) return `unsupported format ${String(entry.format)}`;
   if (duplicateIds.has(entry.id)) return `duplicate clip id ${entry.id}`;
-  if (entry.validation?.status === "accepted" && entry.validation.reason) return "accepted but still has rejection reason";
+  if (entry.validation?.status === "accepted" && entry.validation.reason)
+    return "accepted but still has rejection reason";
   return null;
 }
 

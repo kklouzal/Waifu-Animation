@@ -60,12 +60,20 @@ export function normalizePose(pose: readonly Transform[]): Pose {
 export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): PoseValidationIssue[] {
   const issues: PoseValidationIssue[] = [];
   if (pose.length !== skeleton.joints.length) {
-    issues.push({ joint: "<pose>", index: -1, message: `pose length ${pose.length} does not match skeleton ${skeleton.joints.length}` });
+    issues.push({
+      joint: "<pose>",
+      index: -1,
+      message: `pose length ${pose.length} does not match skeleton ${skeleton.joints.length}`
+    });
     return issues;
   }
   for (let index = 0; index < pose.length; index += 1) {
     if (!isFiniteTransform(pose[index]!)) {
-      issues.push({ joint: skeleton.joints[index]!.name, index, message: "transform is not finite or quaternion is invalid" });
+      issues.push({
+        joint: skeleton.joints[index]!.name,
+        index,
+        message: "transform is not finite or quaternion is invalid"
+      });
     }
   }
   return issues;
@@ -76,7 +84,11 @@ export function readPoseTransformOrRest(skeleton: Skeleton, pose: readonly Trans
   return transform && isFiniteTransform(transform) ? transform : skeleton.restPose[joint]!;
 }
 
-export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: Record<string, number> = {}): JointMask {
+export function createJointMask(
+  skeleton: Skeleton,
+  defaultWeight = 0,
+  entries: Record<string, number> = {}
+): JointMask {
   const mask = new Float32Array(skeleton.joints.length);
   mask.fill(finiteNonNegative(defaultWeight, 0));
   for (const [jointName, weight] of Object.entries(entries)) {
@@ -86,7 +98,11 @@ export function createJointMask(skeleton: Skeleton, defaultWeight = 0, entries: 
   return mask;
 }
 
-export function createSubtreeJointMask(skeleton: Skeleton, roots: string | readonly string[], options: SubtreeJointMaskOptions = {}): JointMask {
+export function createSubtreeJointMask(
+  skeleton: Skeleton,
+  roots: string | readonly string[],
+  options: SubtreeJointMaskOptions = {}
+): JointMask {
   const defaultWeight = finiteNonNegative(options.defaultWeight, 0);
   const subtreeWeight = finiteNonNegative(options.weight, 1);
   const mask = new Float32Array(skeleton.joints.length);
@@ -151,7 +167,13 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     if (threshold > 0 && (!hasAnyLayer || accumulated < threshold)) {
       const restWeight = !hasAnyLayer ? 1 : threshold - accumulated;
       if (restWeight > 0) {
-        accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, fallbackTransform, restWeight);
+        accumulateTransform(
+          rotationSums[joint]!,
+          translationSums[joint]!,
+          scaleSums[joint]!,
+          fallbackTransform,
+          restWeight
+        );
         totalWeights[joint] = (totalWeights[joint] ?? 0) + restWeight;
       }
     }
@@ -163,7 +185,11 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     }
     const invTotal = 1 / total;
     output[joint] = normalizeTransform({
-      translation: [translationSums[joint]![0] * invTotal, translationSums[joint]![1] * invTotal, translationSums[joint]![2] * invTotal],
+      translation: [
+        translationSums[joint]![0] * invTotal,
+        translationSums[joint]![1] * invTotal,
+        translationSums[joint]![2] * invTotal
+      ],
       rotation: normalizeQuat(rotationSums[joint]!, fallbackTransform.rotation),
       scale: [scaleSums[joint]![0] * invTotal, scaleSums[joint]![1] * invTotal, scaleSums[joint]![2] * invTotal]
     });
@@ -172,10 +198,20 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
   return output;
 }
 
-function accumulateTransform(rotationSum: Quat, translationSum: [number, number, number], scaleSum: [number, number, number], transform: Transform, weight: number): void {
-  const hasExistingRotation = Math.abs(rotationSum[0]) + Math.abs(rotationSum[1]) + Math.abs(rotationSum[2]) + Math.abs(rotationSum[3]) > 0;
+function accumulateTransform(
+  rotationSum: Quat,
+  translationSum: [number, number, number],
+  scaleSum: [number, number, number],
+  transform: Transform,
+  weight: number
+): void {
+  const hasExistingRotation =
+    Math.abs(rotationSum[0]) + Math.abs(rotationSum[1]) + Math.abs(rotationSum[2]) + Math.abs(rotationSum[3]) > 0;
   const reference = hasExistingRotation ? normalizeQuat(rotationSum, transform.rotation) : transform.rotation;
-  const rotation = dotQuat(reference, transform.rotation) < 0 ? ([-transform.rotation[0], -transform.rotation[1], -transform.rotation[2], -transform.rotation[3]] as Quat) : transform.rotation;
+  const rotation =
+    dotQuat(reference, transform.rotation) < 0
+      ? ([-transform.rotation[0], -transform.rotation[1], -transform.rotation[2], -transform.rotation[3]] as Quat)
+      : transform.rotation;
   translationSum[0] += transform.translation[0] * weight;
   translationSum[1] += transform.translation[1] * weight;
   translationSum[2] += transform.translation[2] * weight;
@@ -193,7 +229,12 @@ export function additiveDeltaPose(restPose: readonly Transform[], samplePose: re
   return restPose.map((rest, index) => transformDelta(rest, samplePose[index] ?? rest));
 }
 
-export function applyAdditivePose(base: readonly Transform[], deltaPose: readonly Transform[], weight: number, mask?: JointMask): Pose {
+export function applyAdditivePose(
+  base: readonly Transform[],
+  deltaPose: readonly Transform[],
+  weight: number,
+  mask?: JointMask
+): Pose {
   if (base.length !== deltaPose.length) throw new Error("additive pose length mismatch");
   const layerWeight = Number.isFinite(weight) ? weight : 0;
   return base.map((transform, index) => {

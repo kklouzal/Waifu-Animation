@@ -1,11 +1,11 @@
+import type { AnimationClip } from "./test-api.js";
+import { assert, decodeAnimationBinary, encodeAnimationBinary, toFloat32Array } from "./test-api.js";
 import {
-  AnimationClip,
-  assert,
-  decodeAnimationBinary,
-  encodeAnimationBinary,
-  toFloat32Array
-} from "./test-api.js";
-import { binaryFloatByteOffsetForTest, createLegacyV1NodBinary, nodClip, quaternionNearlyEqual } from "./test-helpers.js";
+  binaryFloatByteOffsetForTest,
+  createLegacyV1NodBinary,
+  nodClip,
+  quaternionNearlyEqual
+} from "./test-helpers.js";
 
 export async function runCoreBinaryValidationTests(): Promise<void> {
   const duplicateDeclaredChannelClip: AnimationClip = {
@@ -19,7 +19,14 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
   const endpointTrackTimeClip: AnimationClip = {
     id: "endpoint-track-time",
     duration: 1,
-    tracks: [{ humanBone: "head", property: "translation", times: toFloat32Array([0, 1]), values: toFloat32Array([0, 0, 0, 1, 0, 0]) }]
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 1, 0, 0])
+      }
+    ]
   };
 
   const decodedNodClip = decodeAnimationBinary(encodeAnimationBinary(nodClip), "nod");
@@ -71,7 +78,8 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
   new DataView(absentChildDirectionFlagBinary).setUint32(32 + 36, 0, true);
   new DataView(absentChildDirectionFlagBinary).setUint32(32 + 40, 0, true);
   assert.equal(
-    decodeAnimationBinary(absentChildDirectionFlagBinary, "absent-child-direction-flag").tracks[0]!.sourceRestChildDirection,
+    decodeAnimationBinary(absentChildDirectionFlagBinary, "absent-child-direction-flag").tracks[0]!
+      .sourceRestChildDirection,
     undefined,
     "decodeAnimationBinary should honor a false source-rest child direction presence flag"
   );
@@ -85,7 +93,14 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
       encodeAnimationBinary({
         id: "binary-non-finite-values",
         duration: 1,
-        tracks: [{ joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, Number.NaN, 0]) }]
+        tracks: [
+          {
+            joint: "head",
+            property: "translation",
+            times: toFloat32Array([0]),
+            values: toFloat32Array([0, Number.NaN, 0])
+          }
+        ]
       }),
     /animation clip binary-non-finite-values is invalid: track 0 head\.translation track values must be finite/,
     "binary encoding should reject non-finite track values"
@@ -95,7 +110,9 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
       encodeAnimationBinary({
         id: "binary-non-normalized-rotation",
         duration: 1,
-        tracks: [{ joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 2]) }]
+        tracks: [
+          { joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 2]) }
+        ]
       }),
     /animation clip binary-non-normalized-rotation is invalid: track 0 head\.rotation rotation track quaternions must be normalized/,
     "binary encoding should reject non-normalized rotation sample quaternions"
@@ -113,7 +130,11 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     "decodeAnimationBinary should reject unknown target kinds instead of treating them as joint tracks"
   );
   assert.throws(
-    () => decodeAnimationBinary(invalidTargetKindBinary.slice(0, invalidTargetKindBinary.byteLength - 1), "misaligned-floats"),
+    () =>
+      decodeAnimationBinary(
+        invalidTargetKindBinary.slice(0, invalidTargetKindBinary.byteLength - 1),
+        "misaligned-floats"
+      ),
     /animation binary float data is misaligned/,
     "decodeAnimationBinary should reject payloads whose float table is not 4-byte aligned"
   );

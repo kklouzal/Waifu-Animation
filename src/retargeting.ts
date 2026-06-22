@@ -89,9 +89,9 @@ export function retargetQuaternionTrackValues(
   sourceRest: ArrayLike<number> | undefined,
   targetRest: ArrayLike<number>,
   humanBone?: string,
-  sourceBasis?: ArrayLike<number> | null | undefined,
-  sourceRestChildDirection?: ArrayLike<number> | null | undefined,
-  targetRestChildDirection?: ArrayLike<number> | null | undefined
+  sourceBasis?: ArrayLike<number> | null,
+  sourceRestChildDirection?: ArrayLike<number> | null,
+  targetRestChildDirection?: ArrayLike<number> | null
 ): RetargetedQuaternionTrack {
   if (values.length % 4 !== 0) throw new Error("quaternion values must be a multiple of 4");
   const output: number[] = [];
@@ -103,7 +103,17 @@ export function retargetQuaternionTrackValues(
     const rawSample: Quat = [values[i] ?? 0, values[i + 1] ?? 0, values[i + 2] ?? 0, values[i + 3] ?? 1];
     if (isMalformedQuaternionSample(rawSample)) invalidSamples += 1;
     const sample = normalizeQuat(rawSample, srcRest ?? undefined);
-    let retargeted = srcRest ? retargetQuaternionSample(srcRest, dstRest, sample, humanBone, sourceBasis ?? undefined, sourceRestChildDirection ?? undefined, targetRestChildDirection ?? undefined) : sample;
+    let retargeted = srcRest
+      ? retargetQuaternionSample(
+          srcRest,
+          dstRest,
+          sample,
+          humanBone,
+          sourceBasis ?? undefined,
+          sourceRestChildDirection ?? undefined,
+          targetRestChildDirection ?? undefined
+        )
+      : sample;
     if (!retargeted.every(Number.isFinite)) {
       invalidSamples += 1;
       retargeted = previous;
@@ -134,15 +144,29 @@ export function diagnoseRetargetingRestAxes(
     const targetRestQuaternion = cloneNormalizedQuat(joint.rest.rotation);
     const targetChildDirection = childIndex >= 0 ? modelDirection(restModel, jointIndex, childIndex) : undefined;
     const rotationTrack = clip?.tracks.find(
-      (track) => (track.humanBone ?? track.joint) === humanBone && retargetDiagnosticTrackProperty(track.property) === "rotation"
+      (track) =>
+        (track.humanBone ?? track.joint) === humanBone && retargetDiagnosticTrackProperty(track.property) === "rotation"
     );
-    const sourceRestQuaternion = rotationTrack?.sourceRestQuaternion?.length === 4 ? cloneNormalizedQuat(rotationTrack.sourceRestQuaternion) : undefined;
+    const sourceRestQuaternion =
+      rotationTrack?.sourceRestQuaternion?.length === 4
+        ? cloneNormalizedQuat(rotationTrack.sourceRestQuaternion)
+        : undefined;
     const sourceRestChildDirection =
       rotationTrack?.sourceRestChildDirection?.length === 3
-        ? normalizeVec3([rotationTrack.sourceRestChildDirection[0]!, rotationTrack.sourceRestChildDirection[1]!, rotationTrack.sourceRestChildDirection[2]!])
+        ? normalizeVec3([
+            rotationTrack.sourceRestChildDirection[0]!,
+            rotationTrack.sourceRestChildDirection[1]!,
+            rotationTrack.sourceRestChildDirection[2]!
+          ])
         : undefined;
-    const strongestSample = rotationTrack ? strongestQuaternionSample(rotationTrack.values, sourceRestQuaternion ?? targetRestQuaternion) : undefined;
-    const sourceChildDirection = sourceRestChildDirection ?? (sourceRestQuaternion && targetChildDirection ? rotateVec3ByQuat(sourceRestQuaternion, targetChildDirection) : undefined);
+    const strongestSample = rotationTrack
+      ? strongestQuaternionSample(rotationTrack.values, sourceRestQuaternion ?? targetRestQuaternion)
+      : undefined;
+    const sourceChildDirection =
+      sourceRestChildDirection ??
+      (sourceRestQuaternion && targetChildDirection
+        ? rotateVec3ByQuat(sourceRestQuaternion, targetChildDirection)
+        : undefined);
     const retargeted =
       sourceRestQuaternion && strongestSample
         ? retargetQuaternionSample(
@@ -155,9 +179,19 @@ export function diagnoseRetargetingRestAxes(
             targetChildDirection
           )
         : undefined;
-    const retargetedChildDirection = retargeted && childIndex >= 0 ? retargetedModelDirection(skeleton, jointIndex, childIndex, retargeted) : undefined;
+    const retargetedChildDirection =
+      retargeted && childIndex >= 0
+        ? retargetedModelDirection(skeleton, jointIndex, childIndex, retargeted)
+        : undefined;
     const hingePlane = classifyHingePlane(humanBone, targetChildDirection, retargetedChildDirection);
-    const issue = diagnosticIssue(humanBone, childBone, targetChildDirection, sourceRestQuaternion, retargetedChildDirection, hingePlane);
+    const issue = diagnosticIssue(
+      humanBone,
+      childBone,
+      targetChildDirection,
+      sourceRestQuaternion,
+      retargetedChildDirection,
+      hingePlane
+    );
     return [
       {
         humanBone,
@@ -181,11 +215,18 @@ function isMalformedQuaternionSample(value: Quat): boolean {
   return !Number.isFinite(length) || length <= EPSILON;
 }
 
-function modelDirection(modelPose: ReturnType<typeof localToModelPose>, parent: number, child: number): Vec3 | undefined {
+function modelDirection(
+  modelPose: ReturnType<typeof localToModelPose>,
+  parent: number,
+  child: number
+): Vec3 | undefined {
   const parentMatrix = modelPose[parent];
   const childMatrix = modelPose[child];
   if (!parentMatrix || !childMatrix) return undefined;
-  const direction = subVec3([childMatrix[12] ?? 0, childMatrix[13] ?? 0, childMatrix[14] ?? 0], [parentMatrix[12] ?? 0, parentMatrix[13] ?? 0, parentMatrix[14] ?? 0]);
+  const direction = subVec3(
+    [childMatrix[12] ?? 0, childMatrix[13] ?? 0, childMatrix[14] ?? 0],
+    [parentMatrix[12] ?? 0, parentMatrix[13] ?? 0, parentMatrix[14] ?? 0]
+  );
   return lengthVec3(direction) > EPSILON ? normalizeVec3(direction) : undefined;
 }
 
@@ -196,7 +237,10 @@ function strongestQuaternionSample(values: ArrayLike<number>, fallback: Quat): Q
   let strongest = cloneNormalizedQuat(values, rest);
   let strongestAngle = -1;
   for (let offset = 0; offset + 3 < values.length; offset += 4) {
-    const sample = normalizeQuat([values[offset] ?? 0, values[offset + 1] ?? 0, values[offset + 2] ?? 0, values[offset + 3] ?? 1], rest);
+    const sample = normalizeQuat(
+      [values[offset] ?? 0, values[offset + 1] ?? 0, values[offset + 2] ?? 0, values[offset + 3] ?? 1],
+      rest
+    );
     const delta = multiplyQuat(inverseRest, sample);
     const angle = 2 * Math.acos(Math.min(1, Math.abs(delta[3])));
     if (angle > strongestAngle) {
@@ -207,12 +251,23 @@ function strongestQuaternionSample(values: ArrayLike<number>, fallback: Quat): Q
   return strongest;
 }
 
-function retargetedModelDirection(skeleton: Skeleton, jointIndex: number, childIndex: number, rotation: Quat): Vec3 | undefined {
-  const pose = skeleton.restPose.map((transform, index) => (index === jointIndex ? { ...transform, rotation } : transform));
+function retargetedModelDirection(
+  skeleton: Skeleton,
+  jointIndex: number,
+  childIndex: number,
+  rotation: Quat
+): Vec3 | undefined {
+  const pose = skeleton.restPose.map((transform, index) =>
+    index === jointIndex ? { ...transform, rotation } : transform
+  );
   return modelDirection(localToModelPose(skeleton, pose), jointIndex, childIndex);
 }
 
-function classifyHingePlane(humanBone: HumanoidBoneName, restDirection: Vec3 | undefined, movedDirection: Vec3 | undefined): RetargetingHingePlane {
+function classifyHingePlane(
+  humanBone: HumanoidBoneName,
+  restDirection: Vec3 | undefined,
+  movedDirection: Vec3 | undefined
+): RetargetingHingePlane {
   if (!restDirection) return "unsupported";
   if (!movedDirection) return isHingeBone(humanBone) ? "unsupported" : "ambiguous";
   const delta = subVec3(movedDirection, restDirection);
@@ -238,14 +293,21 @@ function diagnosticIssue(
 ): string | undefined {
   if (!childBone || !targetChildDirection) return "missing child direction; hinge plane is unsupported";
   if (!sourceRest) return "missing source rest quaternion; cannot prove source-to-target retargeting";
-  if (isHingeBone(humanBone) && !movedDirection) return "missing representative rotation samples; hinge plane is unsupported";
-  if (isHingeBone(humanBone) && hingePlane !== "sagittal") return `expected sagittal hinge motion but found ${hingePlane}`;
+  if (isHingeBone(humanBone) && !movedDirection)
+    return "missing representative rotation samples; hinge plane is unsupported";
+  if (isHingeBone(humanBone) && hingePlane !== "sagittal")
+    return `expected sagittal hinge motion but found ${hingePlane}`;
   if (hingePlane === "ambiguous") return "representative motion is too small or mixed to identify a hinge plane";
   return undefined;
 }
 
 function isHingeBone(humanBone: HumanoidBoneName): boolean {
-  return humanBone === "leftLowerLeg" || humanBone === "rightLowerLeg" || humanBone === "leftLowerArm" || humanBone === "rightLowerArm";
+  return (
+    humanBone === "leftLowerLeg" ||
+    humanBone === "rightLowerLeg" ||
+    humanBone === "leftLowerArm" ||
+    humanBone === "rightLowerArm"
+  );
 }
 
 function retargetDiagnosticTrackProperty(property: string): "rotation" | "translation" | "scale" | null {

@@ -1,5 +1,5 @@
+import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationClip,
   AnimationRuntime,
   Object3D,
   assert,
@@ -43,7 +43,11 @@ export function runRetargetingTests(): void {
       Math.abs(retargetedZeroSample[3] - targetRestZ[3]) < 1e-5,
     "retargeting should treat non-normalizable source samples as identity source deltas"
   );
-  const retargetedNonUnitSample = retargetQuaternionSample(sourceRestX, targetRestZ, sourceSampleWithLocalDelta.map((component) => component * 2) as [number, number, number, number]);
+  const retargetedNonUnitSample = retargetQuaternionSample(
+    sourceRestX,
+    targetRestZ,
+    sourceSampleWithLocalDelta.map((component) => component * 2) as [number, number, number, number]
+  );
   const retargetedUnitSample = retargetQuaternionSample(sourceRestX, targetRestZ, sourceSampleWithLocalDelta);
   assert.ok(
     Math.abs(retargetedNonUnitSample[0] - retargetedUnitSample[0]) < 1e-5 &&
@@ -76,31 +80,55 @@ export function runRetargetingTests(): void {
     "retargeted quaternion tracks should keep equivalent samples in the shortest hemisphere"
   );
   const retargetedNaNTrack = retargetQuaternionTrackValues([0, Number.NaN, 0, 1], undefined, [0, 0, 0, 1]);
-  assert.equal(retargetedNaNTrack.invalidSamples, 1, "retargeted quaternion tracks should count NaN source samples as invalid");
+  assert.equal(
+    retargetedNaNTrack.invalidSamples,
+    1,
+    "retargeted quaternion tracks should count NaN source samples as invalid"
+  );
   assert.ok(
     quaternionNearlyEqual(retargetedNaNTrack.values, [0, 0, 0, 1], 1e-5),
     "retargeted quaternion tracks should repair NaN source samples to a normalized fallback"
   );
   const retargetedZeroTrack = retargetQuaternionTrackValues([0, 0, 0, 0], undefined, [0, 0, 0, 1]);
-  assert.equal(retargetedZeroTrack.invalidSamples, 1, "retargeted quaternion tracks should count zero source samples as invalid");
+  assert.equal(
+    retargetedZeroTrack.invalidSamples,
+    1,
+    "retargeted quaternion tracks should count zero source samples as invalid"
+  );
   assert.ok(
     quaternionNearlyEqual(retargetedZeroTrack.values, [0, 0, 0, 1], 1e-5),
     "retargeted quaternion tracks should repair zero source samples to a normalized fallback"
   );
   const retargetedZeroTrackWithSourceRest = retargetQuaternionTrackValues([0, 0, 0, 0], sourceRestX, targetRestZ);
-  assert.equal(retargetedZeroTrackWithSourceRest.invalidSamples, 1, "source-rest retargeted tracks should count zero source samples as invalid");
+  assert.equal(
+    retargetedZeroTrackWithSourceRest.invalidSamples,
+    1,
+    "source-rest retargeted tracks should count zero source samples as invalid"
+  );
   assert.ok(
     quaternionNearlyEqual(retargetedZeroTrackWithSourceRest.values, targetRestZ, 1e-5),
     "source-rest retargeted tracks should repair zero source samples to the target rest instead of applying an inverse source-rest delta"
   );
-  const retargetedNaNTrackWithSourceRest = retargetQuaternionTrackValues([Number.NaN, 0, 0, 1], sourceRestX, targetRestZ);
-  assert.equal(retargetedNaNTrackWithSourceRest.invalidSamples, 1, "source-rest retargeted tracks should count non-finite source samples as invalid");
+  const retargetedNaNTrackWithSourceRest = retargetQuaternionTrackValues(
+    [Number.NaN, 0, 0, 1],
+    sourceRestX,
+    targetRestZ
+  );
+  assert.equal(
+    retargetedNaNTrackWithSourceRest.invalidSamples,
+    1,
+    "source-rest retargeted tracks should count non-finite source samples as invalid"
+  );
   assert.ok(
     quaternionNearlyEqual(retargetedNaNTrackWithSourceRest.values, targetRestZ, 1e-5),
     "source-rest retargeted tracks should repair non-finite source samples to the target rest"
   );
   const retargetedNonUnitTrack = retargetQuaternionTrackValues([0, 0, 0, 2], undefined, [0, 0, 0, 1]);
-  assert.equal(retargetedNonUnitTrack.invalidSamples, 0, "retargeted quaternion tracks should accept normalizable non-unit source samples");
+  assert.equal(
+    retargetedNonUnitTrack.invalidSamples,
+    0,
+    "retargeted quaternion tracks should accept normalizable non-unit source samples"
+  );
   assert.ok(
     quaternionNearlyEqual(retargetedNonUnitTrack.values, [0, 0, 0, 1], 1e-5),
     "retargeted quaternion tracks should normalize non-unit source samples without changing their rotation"
@@ -135,7 +163,10 @@ export function runRetargetingTests(): void {
   );
   const explicitSourceBasis = quatFromUnitVectors([0, 0, 1], [1, 0, 0]);
   const explicitBasisDelta = quatFromAxisAngle([0, 0, 1], Math.PI / 5);
-  const explicitBasisExpected = multiplyQuat(multiplyQuat(explicitSourceBasis, explicitBasisDelta), invertQuat(explicitSourceBasis));
+  const explicitBasisExpected = multiplyQuat(
+    multiplyQuat(explicitSourceBasis, explicitBasisDelta),
+    invertQuat(explicitSourceBasis)
+  );
   const explicitBasisWithChildDirections = retargetQuaternionSample(
     [0, 0, 0, 1],
     [0, 0, 0, 1],
@@ -175,20 +206,24 @@ export function runRetargetingTests(): void {
   );
   sampleThreeClipOnce(mismatchedBasisBones.root, mismatchedBasisClip);
   const mismatchedBasisActual = readChildDirection(mismatchedBasisBones.upper, mismatchedBasisBones.lower);
-  const mismatchedBasisExpectedRotation = retargetQuaternionSample(mismatchedBasisSourceRest, [...mismatchedBasisTargetRest], mismatchedBasisSample);
+  const mismatchedBasisExpectedRotation = retargetQuaternionSample(
+    mismatchedBasisSourceRest,
+    [...mismatchedBasisTargetRest],
+    mismatchedBasisSample
+  );
   const mismatchedBasisExpected = rotateVec3ByQuat(mismatchedBasisExpectedRotation, [0, 1, 0]);
   const mismatchedBasisConjugatedPath = rotateVec3ByQuat(
-    multiplyQuat(
-      mismatchedBasisSample,
-      invertQuat(mismatchedBasisSourceRest)
-    ),
+    multiplyQuat(mismatchedBasisSample, invertQuat(mismatchedBasisSourceRest)),
     [0, 1, 0]
   );
   assert.ok(
     !vectorNearlyEqual(mismatchedBasisExpected, mismatchedBasisConjugatedPath, 1e-4),
     "basis fixture should distinguish local delta retargeting from rest-basis conjugation"
   );
-  assert.ok(vectorNearlyEqual(mismatchedBasisActual, mismatchedBasisExpected, 1e-5), "Three retargeting should render child direction from the source local delta");
+  assert.ok(
+    vectorNearlyEqual(mismatchedBasisActual, mismatchedBasisExpected, 1e-5),
+    "Three retargeting should render child direction from the source local delta"
+  );
 
   const invalidSourceRestTrackBones = createSingleLimbBones([0, 0, 0, 1], "leftUpperArm", "leftLowerArm", [0, 1, 0]);
   const invalidSourceRestTrackClip = createThreeAnimationClip(
@@ -211,7 +246,10 @@ export function runRetargetingTests(): void {
     }
   );
   sampleThreeClipOnce(invalidSourceRestTrackBones.root, invalidSourceRestTrackClip);
-  const invalidSourceRestTrackActual = readChildDirection(invalidSourceRestTrackBones.upper, invalidSourceRestTrackBones.lower);
+  const invalidSourceRestTrackActual = readChildDirection(
+    invalidSourceRestTrackBones.upper,
+    invalidSourceRestTrackBones.lower
+  );
   const invalidSourceRestTrackExpected = rotateVec3ByQuat(targetRestZ, [0, 1, 0]);
   assert.ok(
     vectorNearlyEqual(invalidSourceRestTrackActual, invalidSourceRestTrackExpected, 1e-5),
@@ -242,9 +280,17 @@ export function runRetargetingTests(): void {
   );
   sampleThreeClipOnce(motusLegBones.root, motusLegClip);
   const motusLegActual = readChildDirection(motusLegBones.upper, motusLegBones.lower);
-  const motusLegExpectedRotation = retargetQuaternionSample(motusRightUpperLegRest, motusTargetRest, motusRightUpperLegSample, "rightUpperLeg");
+  const motusLegExpectedRotation = retargetQuaternionSample(
+    motusRightUpperLegRest,
+    motusTargetRest,
+    motusRightUpperLegSample,
+    "rightUpperLeg"
+  );
   const motusLegExpected = rotateVec3ByQuat(motusLegExpectedRotation, [0, -1, 0]);
-  assert.ok(vectorNearlyEqual(motusLegActual, motusLegExpected, 1e-5), "right leg should preserve forward local stride instead of twisting inward");
+  assert.ok(
+    vectorNearlyEqual(motusLegActual, motusLegExpected, 1e-5),
+    "right leg should preserve forward local stride instead of twisting inward"
+  );
 
   const realMotusWalkLegSamples: Array<{
     bone: "leftUpperLeg" | "rightUpperLeg" | "leftLowerLeg" | "rightLowerLeg";
@@ -273,8 +319,14 @@ export function runRetargetingTests(): void {
     }
   ];
   for (const fixture of realMotusWalkLegSamples) {
-    const unremappedDirection = rotateVec3ByQuat(retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample), [0, -1, 0]);
-    const retargetedDirection = rotateVec3ByQuat(retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample, fixture.bone), [0, -1, 0]);
+    const unremappedDirection = rotateVec3ByQuat(
+      retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample),
+      [0, -1, 0]
+    );
+    const retargetedDirection = rotateVec3ByQuat(
+      retargetQuaternionSample(fixture.rest, motusTargetRest, fixture.sample, fixture.bone),
+      [0, -1, 0]
+    );
     assert.ok(
       vectorNearlyEqual(retargetedDirection, unremappedDirection, 1e-5),
       `${fixture.bone} retargeting must not apply hidden bone-name axis swizzles`
@@ -302,14 +354,20 @@ export function runRetargetingTests(): void {
           property: "quaternion",
           sourceRestQuaternion: Float32Array.from(mirroredLegSourceRestLeft),
           times: toFloat32Array([0, 1]),
-          values: sanitizeQuaternionTrackValues([...mirroredLegSourceRestLeft, ...multiplyQuat(mirroredLegSourceRestLeft, mirroredLegFlexion)])
+          values: sanitizeQuaternionTrackValues([
+            ...mirroredLegSourceRestLeft,
+            ...multiplyQuat(mirroredLegSourceRestLeft, mirroredLegFlexion)
+          ])
         },
         {
           humanBone: "rightUpperLeg",
           property: "quaternion",
           sourceRestQuaternion: Float32Array.from(mirroredLegSourceRestRight),
           times: toFloat32Array([0, 1]),
-          values: sanitizeQuaternionTrackValues([...mirroredLegSourceRestRight, ...multiplyQuat(mirroredLegSourceRestRight, mirroredLegFlexion)])
+          values: sanitizeQuaternionTrackValues([
+            ...mirroredLegSourceRestRight,
+            ...multiplyQuat(mirroredLegSourceRestRight, mirroredLegFlexion)
+          ])
         }
       ]
     },
@@ -326,19 +384,43 @@ export function runRetargetingTests(): void {
   const mirroredLegActualLeft = readChildDirection(mirroredLegBones.left.upper, mirroredLegBones.left.lower);
   const mirroredLegActualRight = readChildDirection(mirroredLegBones.right.upper, mirroredLegBones.right.lower);
   const mirroredLegExpected = rotateVec3ByQuat(mirroredLegFlexion, [0, -1, 0]);
-  const oldOrderMirroredLeft = rotateVec3ByQuat(multiplyQuat(multiplyQuat(mirroredLegSourceRestLeft, mirroredLegFlexion), invertQuat(mirroredLegSourceRestLeft)), [0, -1, 0]);
-  const oldOrderMirroredRight = rotateVec3ByQuat(multiplyQuat(multiplyQuat(mirroredLegSourceRestRight, mirroredLegFlexion), invertQuat(mirroredLegSourceRestRight)), [0, -1, 0]);
-  assert.ok(Math.abs(oldOrderMirroredLeft[0]!) > 0.65 && Math.abs(oldOrderMirroredRight[0]!) > 0.65, "old retarget order would split mirrored leg flexion laterally across the centerline");
-  assert.ok(mirroredLegActualLeft[2]! < -0.65 && Math.abs(mirroredLegActualLeft[0]!) < 1e-5, "left leg flexion should bend backward instead of inward");
-  assert.ok(vectorNearlyEqual(mirroredLegActualLeft, mirroredLegExpected, 1e-5), "left leg rendered direction should preserve source flexion axis");
-  assert.ok(vectorNearlyEqual(mirroredLegActualRight, mirroredLegExpected, 1e-5), "right leg rendered direction should preserve source flexion axis");
+  const oldOrderMirroredLeft = rotateVec3ByQuat(
+    multiplyQuat(multiplyQuat(mirroredLegSourceRestLeft, mirroredLegFlexion), invertQuat(mirroredLegSourceRestLeft)),
+    [0, -1, 0]
+  );
+  const oldOrderMirroredRight = rotateVec3ByQuat(
+    multiplyQuat(multiplyQuat(mirroredLegSourceRestRight, mirroredLegFlexion), invertQuat(mirroredLegSourceRestRight)),
+    [0, -1, 0]
+  );
+  assert.ok(
+    Math.abs(oldOrderMirroredLeft[0]) > 0.65 && Math.abs(oldOrderMirroredRight[0]) > 0.65,
+    "old retarget order would split mirrored leg flexion laterally across the centerline"
+  );
+  assert.ok(
+    mirroredLegActualLeft[2] < -0.65 && Math.abs(mirroredLegActualLeft[0]) < 1e-5,
+    "left leg flexion should bend backward instead of inward"
+  );
+  assert.ok(
+    vectorNearlyEqual(mirroredLegActualLeft, mirroredLegExpected, 1e-5),
+    "left leg rendered direction should preserve source flexion axis"
+  );
+  assert.ok(
+    vectorNearlyEqual(mirroredLegActualRight, mirroredLegExpected, 1e-5),
+    "right leg rendered direction should preserve source flexion axis"
+  );
 
   const motusLeftLowerLegRest: [number, number, number, number] = [-0.0344, 0.0344, -0.2013, 0.9783];
   const motusLeftLowerLegInwardSample: [number, number, number, number] = [-0.1252, -0.0155, -0.5739, 0.8091];
   const motusRightLowerLegRest: [number, number, number, number] = [-0.0266, -0.0186, -0.5677, 0.8226];
   const motusRightLowerLegInwardSample: [number, number, number, number] = [-0.0164, 0.0277, -0.2138, 0.9763];
-  const motusLeftLowerLegRawDirection = rotateVec3ByQuat(retargetQuaternionSample(motusLeftLowerLegRest, [0, 0, 0, 1], motusLeftLowerLegInwardSample), [0, -1, 0]);
-  const motusRightLowerLegRawDirection = rotateVec3ByQuat(retargetQuaternionSample(motusRightLowerLegRest, [0, 0, 0, 1], motusRightLowerLegInwardSample), [0, -1, 0]);
+  const motusLeftLowerLegRawDirection = rotateVec3ByQuat(
+    retargetQuaternionSample(motusLeftLowerLegRest, [0, 0, 0, 1], motusLeftLowerLegInwardSample),
+    [0, -1, 0]
+  );
+  const motusRightLowerLegRawDirection = rotateVec3ByQuat(
+    retargetQuaternionSample(motusRightLowerLegRest, [0, 0, 0, 1], motusRightLowerLegInwardSample),
+    [0, -1, 0]
+  );
   const motusLeftLowerLegRetargetedDirection = rotateVec3ByQuat(
     retargetQuaternionSample(motusLeftLowerLegRest, [0, 0, 0, 1], motusLeftLowerLegInwardSample, "leftLowerLeg"),
     [0, -1, 0]
@@ -348,7 +430,7 @@ export function runRetargetingTests(): void {
     [0, -1, 0]
   );
   assert.ok(
-    Math.abs(motusLeftLowerLegRawDirection[0]!) > 0.65 && Math.abs(motusRightLowerLegRawDirection[0]!) > 0.65,
+    Math.abs(motusLeftLowerLegRawDirection[0]) > 0.65 && Math.abs(motusRightLowerLegRawDirection[0]) > 0.65,
     "Motus lower-leg fixture keeps documenting the source/target basis incompatibility"
   );
   assert.ok(
@@ -378,12 +460,21 @@ export function runRetargetingTests(): void {
     [0, -1, 0]
   );
   const motusLowerLegCorrectedDirection = rotateVec3ByQuat(
-    retargetQuaternionSample(motusLowerLegSourceRest, [0, 0, 0, 1], motusLowerLegSourceSample, "leftLowerLeg", motusManLimbSourceBasis),
+    retargetQuaternionSample(
+      motusLowerLegSourceRest,
+      [0, 0, 0, 1],
+      motusLowerLegSourceSample,
+      "leftLowerLeg",
+      motusManLimbSourceBasis
+    ),
     [0, -1, 0]
   );
-  assert.ok(Math.abs(motusLowerLegUncorrectedDirection[0]!) > 0.85, "MotusMan lower-leg Z-axis flexion reproduces sideways VRM shin motion without a source-basis correction");
   assert.ok(
-    Math.abs(motusLowerLegCorrectedDirection[0]!) < 1e-5 && motusLowerLegCorrectedDirection[2]! < -0.85,
+    Math.abs(motusLowerLegUncorrectedDirection[0]) > 0.85,
+    "MotusMan lower-leg Z-axis flexion reproduces sideways VRM shin motion without a source-basis correction"
+  );
+  assert.ok(
+    Math.abs(motusLowerLegCorrectedDirection[0]) < 1e-5 && motusLowerLegCorrectedDirection[2] < -0.85,
     "MotusMan lower-leg source-basis correction should turn sideways shin motion into forward/back flexion"
   );
 
@@ -436,7 +527,11 @@ export function runRetargetingTests(): void {
     sourceBasisQuaternion: () => motusManLimbSourceBasis
   });
   assert.ok(
-    vectorNearlyEqual(rotateVec3ByQuat(motusBasisCorePose[0]!.rotation, [0, -1, 0]), motusLowerLegCorrectedDirection, 1e-5),
+    vectorNearlyEqual(
+      rotateVec3ByQuat(motusBasisCorePose[0]!.rotation, [0, -1, 0]),
+      motusLowerLegCorrectedDirection,
+      1e-5
+    ),
     "core pose sampling should apply caller-provided source-basis correction before local-pose retargeting"
   );
   const motusBasisCoreRuntime = new AnimationRuntime(motusBasisCoreSkeleton);
@@ -446,7 +541,11 @@ export function runRetargetingTests(): void {
     sourceBasisQuaternion: () => motusManLimbSourceBasis
   });
   assert.ok(
-    vectorNearlyEqual(rotateVec3ByQuat(motusBasisCoreRuntime.evaluate().localPose[0]!.rotation, [0, -1, 0]), motusLowerLegCorrectedDirection, 1e-5),
+    vectorNearlyEqual(
+      rotateVec3ByQuat(motusBasisCoreRuntime.evaluate().localPose[0]!.rotation, [0, -1, 0]),
+      motusLowerLegCorrectedDirection,
+      1e-5
+    ),
     "AnimationRuntime should pass source-basis correction through to sampled mocap layers"
   );
 
@@ -496,8 +595,14 @@ export function runRetargetingTests(): void {
     left: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestLeft, mirroredLimbDelta), [0, 1, 0]),
     right: rotateVec3ByQuat(multiplyQuat(mirroredLimbTargetRestRight, mirroredLimbDelta), [0, 1, 0])
   };
-  assert.ok(vectorNearlyEqual(mirroredLimbActual.left, mirroredLimbExpected.left, 1e-5), "left limb rendered direction should preserve target-local rotation axis");
-  assert.ok(vectorNearlyEqual(mirroredLimbActual.right, mirroredLimbExpected.right, 1e-5), "right limb rendered direction should preserve target-local rotation axis");
+  assert.ok(
+    vectorNearlyEqual(mirroredLimbActual.left, mirroredLimbExpected.left, 1e-5),
+    "left limb rendered direction should preserve target-local rotation axis"
+  );
+  assert.ok(
+    vectorNearlyEqual(mirroredLimbActual.right, mirroredLimbExpected.right, 1e-5),
+    "right limb rendered direction should preserve target-local rotation axis"
+  );
 
   const authoredRotationBone = createNamedBone("head", normalizeQuat([0.3, 0, 0, 0.953939]));
   const authoredRotationClip = createThreeAnimationClip(
@@ -516,7 +621,11 @@ export function runRetargetingTests(): void {
     { resolveBone: (bone) => (bone === "head" ? authoredRotationBone : null) }
   );
   const authoredTrackValues = Array.from(authoredRotationClip.tracks[0]!.values as ArrayLike<number>);
-  assert.deepEqual(authoredTrackValues.slice(0, 4), [0, 0, 0, 1], "authored target-local rotations must not be pre-multiplied by target rest");
+  assert.deepEqual(
+    authoredTrackValues.slice(0, 4),
+    [0, 0, 0, 1],
+    "authored target-local rotations must not be pre-multiplied by target rest"
+  );
   assert.ok(authoredTrackValues[5]! > 0.19, "authored target-local rotations should preserve sampled components");
 
   const posedDuringAsyncLoadBone = createNamedBone("leftUpperLeg", quatFromAxisAngle([0, 0, 1], Math.PI / 2));
@@ -545,5 +654,4 @@ export function runRetargetingTests(): void {
     [0, 0, 0, 1],
     "explicit target rest should prevent live async-loaded bone poses from being baked into retargeted tracks"
   );
-
 }

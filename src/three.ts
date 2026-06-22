@@ -13,7 +13,25 @@ import {
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
 import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
-import { type Quat, type Vec3, addVec3, clamp, clamp01, dampAlpha, dampValue, euclideanModulo, finiteNonNegative, isFiniteNumber, lengthVec3, normalizeVec3, quatFromUnitVectors, rotateVec3ByQuat, scaleVec3, smoothStep, subVec3 } from "./math.js";
+import {
+  type Quat,
+  type Vec3,
+  addVec3,
+  clamp,
+  clamp01,
+  dampAlpha,
+  dampValue,
+  euclideanModulo,
+  finiteNonNegative,
+  isFiniteNumber,
+  lengthVec3,
+  normalizeVec3,
+  quatFromUnitVectors,
+  rotateVec3ByQuat,
+  scaleVec3,
+  smoothStep,
+  subVec3
+} from "./math.js";
 import { type AnimationManifestEntry, type RootMotionPolicy, readRootMotionPolicy } from "./manifest.js";
 import {
   AUTHORED_BASE_TRACK_POLICY,
@@ -305,13 +323,21 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
       if (invalidSamples > 0) {
         options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, invalidSamples);
       }
-      const threeTrack = new QuaternionKeyframeTrack(`${bone.uuid}.quaternion`, Float32Array.from(sampleWindow.times), Float32Array.from(values));
+      const threeTrack = new QuaternionKeyframeTrack(
+        `${bone.uuid}.quaternion`,
+        Float32Array.from(sampleWindow.times),
+        Float32Array.from(values)
+      );
       trackSourceNames[threeTrack.name] = `${String(boneName)}.quaternion`;
       return [threeTrack];
     }
 
     const targetProperty = property === "translation" ? "position" : "scale";
-    const threeTrack = new VectorKeyframeTrack(`${bone.uuid}.${targetProperty}`, Float32Array.from(sampleWindow.times), Float32Array.from(sampleWindow.values));
+    const threeTrack = new VectorKeyframeTrack(
+      `${bone.uuid}.${targetProperty}`,
+      Float32Array.from(sampleWindow.times),
+      Float32Array.from(sampleWindow.values)
+    );
     trackSourceNames[threeTrack.name] = `${String(boneName)}.${targetProperty}`;
     return [threeTrack];
   });
@@ -348,7 +374,7 @@ export function applyThreeTrackPolicy(clip: ThreeAnimationClip, policy: TrackMas
   const initialTrackCount = clip.tracks.length;
   const initialDuration = Number.isFinite(clip.duration) && clip.duration >= 0 ? clip.duration : null;
   const sourceNames = readThreeTrackSourceNames(clip);
-  clip.tracks = clip.tracks.filter((track) => threeTrackAllowed(track, policy, sourceNames[track.name])) as KeyframeTrack[];
+  clip.tracks = clip.tracks.filter((track) => threeTrackAllowed(track, policy, sourceNames[track.name]));
   writeThreeTrackSourceNames(clip, sourceNames);
   if (clip.tracks.length !== initialTrackCount) {
     clip.resetDuration();
@@ -378,7 +404,11 @@ function writeThreeTrackSourceNames(clip: ThreeAnimationClip, sourceNames: Recor
 
 function threeTrackAllowed(track: KeyframeTrack, policy: TrackMaskPolicy, sourceName: string | undefined): boolean {
   const names = sourceName && sourceName !== track.name ? [track.name, sourceName] : [track.name];
-  if (policy.include && policy.include.length > 0 && !policy.include.some((rule) => names.some((name) => trackNameMatchesRule(name, rule)))) {
+  if (
+    policy.include &&
+    policy.include.length > 0 &&
+    !policy.include.some((rule) => names.some((name) => trackNameMatchesRule(name, rule)))
+  ) {
     return false;
   }
   if (policy.exclude?.some((rule) => names.some((name) => trackNameMatchesRule(name, rule)))) {
@@ -413,7 +443,8 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
   mixer: AnimationMixer,
   animationClip: ThreeAnimationClip
 ): ThreeRuntimeClip<TEntry>[] {
-  if (shouldStripRuntimeRootTranslation(entry, animationClip)) applyThreeTrackPolicy(animationClip, ROOT_TRANSLATION_EXCLUDE_POLICY);
+  if (shouldStripRuntimeRootTranslation(entry, animationClip))
+    applyThreeTrackPolicy(animationClip, ROOT_TRANSLATION_EXCLUDE_POLICY);
   if (entry.loop === false) {
     applyThreeTrackPolicy(animationClip, OVERLAY_UPPER_BODY_TRACK_POLICY);
     animationClip.name = `${entry.id}:overlay`;
@@ -424,7 +455,10 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
   animationClip.name = `${entry.id}:base:a`;
   const secondClip = animationClip.clone();
   secondClip.name = `${entry.id}:base:b`;
-  return [createThreeRuntimeClip(entry, mixer, animationClip, "base", 0), createThreeRuntimeClip(entry, mixer, secondClip, "base", 1)];
+  return [
+    createThreeRuntimeClip(entry, mixer, animationClip, "base", 0),
+    createThreeRuntimeClip(entry, mixer, secondClip, "base", 1)
+  ];
 }
 
 function readAnimationClipRootMotionPolicy(clip: AnimationClip): RootMotionPolicy | null {
@@ -432,7 +466,10 @@ function readAnimationClipRootMotionPolicy(clip: AnimationClip): RootMotionPolic
   return isRootMotionPolicy(policy) ? policy : null;
 }
 
-function readThreeRuntimeRootMotionPolicy(entry: AnimationManifestEntry, animationClip: ThreeAnimationClip): RootMotionPolicy | null {
+function readThreeRuntimeRootMotionPolicy(
+  entry: AnimationManifestEntry,
+  animationClip: ThreeAnimationClip
+): RootMotionPolicy | null {
   const entryPolicy = readRootMotionPolicy(entry);
   if (entryPolicy) return entryPolicy;
   const clipPolicy = animationClip.userData[THREE_ROOT_MOTION_POLICY_USER_DATA];
@@ -462,7 +499,8 @@ export function configureThreeRuntimeAction(action: AnimationAction): AnimationA
 export function calculateThreeRuntimeStartTime(duration: number, options: ThreeRuntimeStartTimeOptions = {}): number {
   const safeDuration = sanitizeThreeRuntimeTime(duration);
   if (safeDuration <= 0) return 0;
-  if (typeof options.startTime === "number") return euclideanModulo(sanitizeThreeRuntimeTime(options.startTime), safeDuration);
+  if (typeof options.startTime === "number")
+    return euclideanModulo(sanitizeThreeRuntimeTime(options.startTime), safeDuration);
 
   const matchFrom = options.matchPhaseFrom;
   const sourceDuration = sanitizeThreeRuntimeTime(matchFrom?.duration ?? 0);
@@ -497,14 +535,19 @@ export function prepareThreeRuntimeAction<TEntry extends AnimationManifestEntry>
   return startTime;
 }
 
-export function calculateThreeBaseLoopSeamWindow(duration: number, options: ThreeBaseLoopSeamWindowOptions = {}): number {
+export function calculateThreeBaseLoopSeamWindow(
+  duration: number,
+  options: ThreeBaseLoopSeamWindowOptions = {}
+): number {
   const safeDuration = sanitizeThreeRuntimeTime(duration);
   const minimum = finiteNonNegative(options.min, 0.32);
   const maximum = Math.max(minimum, finiteNonNegative(options.max, 0.72));
   return clamp(safeDuration * finiteNonNegative(options.fraction ?? 0.18, 0.18), minimum, maximum);
 }
 
-export function calculateThreeBaseLoopTransitionWeights(options: ThreeBaseLoopTransitionOptions): ThreeBaseLoopTransitionWeights {
+export function calculateThreeBaseLoopTransitionWeights(
+  options: ThreeBaseLoopTransitionOptions
+): ThreeBaseLoopTransitionWeights {
   const duration = Math.max(0.001, sanitizeThreeRuntimeTime(options.duration));
   const progress = smoothStep(0, 1, sanitizeThreeRuntimeTime(options.elapsed) / duration);
   const fromWeight = sanitizeThreeRuntimeWeight(options.fromWeight ?? 0) * (1 - progress);
@@ -522,11 +565,7 @@ export function calculateThreeOverlayFade(options: ThreeOverlayFadeOptions): Thr
   const time = sanitizeThreeRuntimeTime(options.time);
   const minWindow = finiteNonNegative(options.minWindow, 0.18);
   const maxWindow = Math.max(minWindow, finiteNonNegative(options.maxWindow, 0.42));
-  const fadeOutWindow = clamp(
-    duration * finiteNonNegative(options.windowFraction ?? 0.22, 0.22),
-    minWindow,
-    maxWindow
-  );
+  const fadeOutWindow = clamp(duration * finiteNonNegative(options.windowFraction ?? 0.22, 0.22), minWindow, maxWindow);
   const completionEpsilon = finiteNonNegative(options.completionEpsilon ?? 0.02, 0.02);
   const fadingOut = time >= Math.max(0, duration - fadeOutWindow);
   const complete = time >= Math.max(0, duration - completionEpsilon);
@@ -577,7 +616,9 @@ export function readActiveThreeRuntimeClipSnapshots<TEntry extends AnimationMani
 ): ThreeRuntimeClipSnapshot<TEntry>[] {
   const minimumWeight = sanitizeThreeRuntimeWeight(options.minimumWeight ?? 0.001);
   return clips.flatMap((clip) => {
-    const loop = options.loopForClip?.(clip) ?? (clip.lane === "base" ? "seamed-once" : clip.lane === "debug" ? options.debugLoop : "once");
+    const loop =
+      options.loopForClip?.(clip) ??
+      (clip.lane === "base" ? "seamed-once" : clip.lane === "debug" ? options.debugLoop : "once");
     const snapshot = readThreeRuntimeClipSnapshot(clip, loop === undefined ? {} : { loop });
     return snapshot.scheduled || snapshot.weight > minimumWeight ? [snapshot] : [];
   });
@@ -624,7 +665,9 @@ function sanitizeThreeRuntimeSwing(value: number | undefined, phase: number): nu
 }
 
 function dampedInfluenceAmount(influence: number, speed: number, deltaSeconds: number | undefined): number {
-  return clamp01(influence * (deltaSeconds === undefined ? 1 : dampAlpha(speed, sanitizeThreeRuntimeTime(deltaSeconds))));
+  return clamp01(
+    influence * (deltaSeconds === undefined ? 1 : dampAlpha(speed, sanitizeThreeRuntimeTime(deltaSeconds)))
+  );
 }
 
 export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): ThreePresenceApplyResult {
@@ -653,7 +696,9 @@ export function applyThreePresenceTargets(options: ThreePresenceApplyOptions): T
   return { applied: targets.some((target) => target.applied), targets, issues };
 }
 
-export function createThreeLocomotionUpperBodyTargets(options: ThreeLocomotionUpperBodyTargetsOptions = {}): ThreePresenceBoneTarget[] {
+export function createThreeLocomotionUpperBodyTargets(
+  options: ThreeLocomotionUpperBodyTargetsOptions = {}
+): ThreePresenceBoneTarget[] {
   const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
   if (influence <= 0) return [];
   const phase = sanitizeThreeRuntimePhase(options.phase ?? 0);
@@ -674,23 +719,49 @@ export function createThreeLocomotionUpperBodyTargets(options: ThreeLocomotionUp
   ];
 }
 
-function createThreeLocomotionSideTargets(side: ThreeLocomotionArmSide, swing: number, influence: number, speed: number): ThreePresenceBoneTarget[] {
+function createThreeLocomotionSideTargets(
+  side: ThreeLocomotionArmSide,
+  swing: number,
+  influence: number,
+  speed: number
+): ThreePresenceBoneTarget[] {
   const sign = side === "left" ? 1 : -1;
   const sideSwing = sign * swing;
   return [
-    { bone: `${side}Shoulder`, rotation: [0.015, -sign * 0.018, sign * (0.026 + sideSwing * 0.018)], influence: influence * 0.72, speed },
-    { bone: `${side}UpperArm`, rotation: [0.26 + sideSwing * 0.24, sign * (0.055 + sideSwing * 0.04), sign * (1.64 + sideSwing * 0.065)], influence, speed: speed * 1.4 },
+    {
+      bone: `${side}Shoulder`,
+      rotation: [0.015, -sign * 0.018, sign * (0.026 + sideSwing * 0.018)],
+      influence: influence * 0.72,
+      speed
+    },
+    {
+      bone: `${side}UpperArm`,
+      rotation: [0.26 + sideSwing * 0.24, sign * (0.055 + sideSwing * 0.04), sign * (1.64 + sideSwing * 0.065)],
+      influence,
+      speed: speed * 1.4
+    },
     {
       bone: `${side}LowerArm`,
-      rotation: [1.55 + Math.max(0, -sideSwing) * 0.3, sign * (0.42 + sideSwing * 0.065), sign * (-1.18 - Math.max(0, sideSwing) * 0.22)],
+      rotation: [
+        1.55 + Math.max(0, -sideSwing) * 0.3,
+        sign * (0.42 + sideSwing * 0.065),
+        sign * (-1.18 - Math.max(0, sideSwing) * 0.22)
+      ],
       influence,
       speed: speed * 1.15
     },
-    { bone: `${side}Hand`, rotation: [0.16, sign * 0.08, sign * (-0.2 + sideSwing * 0.035)], influence: influence * 0.82, speed }
+    {
+      bone: `${side}Hand`,
+      rotation: [0.16, sign * 0.08, sign * (-0.2 + sideSwing * 0.035)],
+      influence: influence * 0.82,
+      speed
+    }
   ];
 }
 
-export function applyThreeLocomotionUpperBodyPosture(options: ThreeLocomotionUpperBodyPostureOptions): ThreePresenceApplyResult {
+export function applyThreeLocomotionUpperBodyPosture(
+  options: ThreeLocomotionUpperBodyPostureOptions
+): ThreePresenceApplyResult {
   const targetOptions: ThreeLocomotionUpperBodyTargetsOptions = {};
   if (options.influence !== undefined) targetOptions.influence = options.influence;
   if (options.phase !== undefined) targetOptions.phase = options.phase;
@@ -705,7 +776,8 @@ export function applyThreeLocomotionUpperBodyPosture(options: ThreeLocomotionUpp
   const result = applyThreePresenceTargets(applyOptions);
   const arms = applyThreeLocomotionArmTargets(options);
   return {
-    applied: result.applied || arms.some((arm) => arm.appliedUpperArmDirection || arm.appliedUpperArm || arm.appliedLowerArm),
+    applied:
+      result.applied || arms.some((arm) => arm.appliedUpperArmDirection || arm.appliedUpperArm || arm.appliedLowerArm),
     targets: [
       ...result.targets,
       ...arms.flatMap((arm) => [
@@ -734,8 +806,20 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
   const amount = dampedInfluenceAmount(influence, speed * 1.25, options.deltaSeconds);
   if (amount <= 0) {
     return [
-      { side: "left", appliedUpperArmDirection: false, appliedUpperArm: false, appliedLowerArm: false, skippedReason: "zero-influence" },
-      { side: "right", appliedUpperArmDirection: false, appliedUpperArm: false, appliedLowerArm: false, skippedReason: "zero-influence" }
+      {
+        side: "left",
+        appliedUpperArmDirection: false,
+        appliedUpperArm: false,
+        appliedLowerArm: false,
+        skippedReason: "zero-influence"
+      },
+      {
+        side: "right",
+        appliedUpperArmDirection: false,
+        appliedUpperArm: false,
+        appliedLowerArm: false,
+        skippedReason: "zero-influence"
+      }
     ];
   }
 
@@ -752,7 +836,13 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const lower = options.resolveBone(`${side}LowerArm`);
     const hand = options.resolveBone(`${side}Hand`);
     if (!upper || !lower || !hand) {
-      return { side, appliedUpperArmDirection: false, appliedUpperArm: false, appliedLowerArm: false, skippedReason: "missing-arm-bone" };
+      return {
+        side,
+        appliedUpperArmDirection: false,
+        appliedUpperArm: false,
+        appliedLowerArm: false,
+        skippedReason: "missing-arm-bone"
+      };
     }
 
     upper.parent?.updateMatrixWorld(true);
@@ -763,19 +853,26 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const root = objectWorldVec3(upper);
     const joint = objectWorldVec3(lower);
     const end = objectWorldVec3(hand);
-    const hip = hips ? objectWorldVec3(hips) : [root[0], root[1] - 0.52, root[2]] satisfies Vec3;
+    const hip = hips ? objectWorldVec3(hips) : ([root[0], root[1] - 0.52, root[2]] satisfies Vec3);
     const upperLength = lengthVec3(subVec3(joint, root));
     const lowerLength = lengthVec3(subVec3(end, joint));
     const armLength = Math.max(0.25, upperLength + lowerLength);
     const sideSwing = side === "left" ? swing : -swing;
     const bodyForward = objectWorldHorizontalDirection(hips ?? upper.parent, [0, 0, -1], [0, 0, -1]);
-    const sideOut = horizontalDirectionFrom(root, hip, scaleVec3(objectWorldHorizontalDirection(hips ?? upper.parent, [1, 0, 0], [1, 0, 0]), sign));
+    const sideOut = horizontalDirectionFrom(
+      root,
+      hip,
+      scaleVec3(objectWorldHorizontalDirection(hips ?? upper.parent, [1, 0, 0], [1, 0, 0]), sign)
+    );
     const phaseForward = sideSwing * Math.min(0.07, armLength * 0.14);
     const desiredUpperDirection = normalizeVec3(
       addVec3(addVec3(scaleVec3(sideOut, 0.02), [0, -0.982, 0]), scaleVec3(bodyForward, 0.12 + phaseForward * 0.55)),
       [0, -1, 0]
     );
-    const upperCorrection = quatFromUnitVectors(normalizeVec3(subVec3(joint, root), desiredUpperDirection), desiredUpperDirection);
+    const upperCorrection = quatFromUnitVectors(
+      normalizeVec3(subVec3(joint, root), desiredUpperDirection),
+      desiredUpperDirection
+    );
     const appliedUpperArmDirection = applyWorldQuaternionCorrection(upper, upperCorrection, amount);
     upper.updateMatrixWorld(true);
     lower.updateMatrixWorld(true);
@@ -785,7 +882,10 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const correctedEnd = objectWorldVec3(hand);
     const desiredJoint = addVec3(correctedRoot, scaleVec3(desiredUpperDirection, upperLength));
     const handTarget = addVec3(
-      addVec3([hip[0], correctedRoot[1] - armLength * 0.72, hip[2]], scaleVec3(sideOut, Math.min(0.038, shoulderWidth * 0.08))),
+      addVec3(
+        [hip[0], correctedRoot[1] - armLength * 0.72, hip[2]],
+        scaleVec3(sideOut, Math.min(0.038, shoulderWidth * 0.08))
+      ),
       scaleVec3(bodyForward, 0.045 + phaseForward)
     );
     const pole = normalizeVec3(subVec3(desiredJoint, correctedRoot), desiredUpperDirection);
@@ -805,7 +905,10 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
     const appliedLowerArm = applyWorldQuaternionCorrection(lower, ik.jointCorrection, amount);
     upper.updateMatrixWorld(true);
     lower.updateMatrixWorld(true);
-    const finalUpperDirectionCorrection = quatFromUnitVectors(normalizeVec3(subVec3(objectWorldVec3(lower), objectWorldVec3(upper)), desiredUpperDirection), desiredUpperDirection);
+    const finalUpperDirectionCorrection = quatFromUnitVectors(
+      normalizeVec3(subVec3(objectWorldVec3(lower), objectWorldVec3(upper)), desiredUpperDirection),
+      desiredUpperDirection
+    );
     const appliedFinalUpperArmDirection = applyWorldQuaternionCorrection(upper, finalUpperDirectionCorrection, amount);
     upper.updateMatrixWorld(true);
     lower.updateMatrixWorld(true);
@@ -814,7 +917,10 @@ function applyThreeLocomotionArmTargets(options: ThreeLocomotionUpperBodyPosture
       addVec3(addVec3(scaleVec3(sideOut, -0.24), [0, -0.88, 0]), scaleVec3(bodyForward, -0.18 + phaseForward * 0.45)),
       [0, -1, 0]
     );
-    const finalLowerDirectionCorrection = quatFromUnitVectors(normalizeVec3(subVec3(objectWorldVec3(hand), objectWorldVec3(lower)), desiredLowerDirection), desiredLowerDirection);
+    const finalLowerDirectionCorrection = quatFromUnitVectors(
+      normalizeVec3(subVec3(objectWorldVec3(hand), objectWorldVec3(lower)), desiredLowerDirection),
+      desiredLowerDirection
+    );
     const appliedFinalLowerArmDirection = applyWorldQuaternionCorrection(lower, finalLowerDirectionCorrection, amount);
     return {
       side,
@@ -840,7 +946,10 @@ export function clearThreeFootPlantOffsets(options: ThreeFootPlantClearOptions):
   return { cleared, issues };
 }
 
-export function applyThreeFootPlantResult(result: FootPlantResult, options: ThreeFootPlantApplyOptions): ThreeFootPlantApplyResult {
+export function applyThreeFootPlantResult(
+  result: FootPlantResult,
+  options: ThreeFootPlantApplyOptions
+): ThreeFootPlantApplyResult {
   const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
   const speed = finiteNonNegative(options.speed ?? 32, 32);
   const amount = dampedInfluenceAmount(influence, speed, options.deltaSeconds);
@@ -900,7 +1009,13 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
       const knee = options.resolveBone(binding.knee);
       const ankle = binding.ankle ? options.resolveBone(binding.ankle) : null;
       if (leg.ik) {
-        const ik = resolveFootPlantIkForAppliedPose(leg, hip, knee, ankle, shouldResolveFootPlantIkFromAppliedPose(result.pelvisOffset, amount, pelvisApplied));
+        const ik = resolveFootPlantIkForAppliedPose(
+          leg,
+          hip,
+          knee,
+          ankle,
+          shouldResolveFootPlantIkFromAppliedPose(result.pelvisOffset, amount, pelvisApplied)
+        );
         if (hip) {
           applied.appliedHip = applyWorldQuaternionCorrection(hip, ik.rootCorrection, legAmount);
         } else {
@@ -919,7 +1034,12 @@ export function applyThreeFootPlantResult(result: FootPlantResult, options: Thre
     if (binding.ankle && binding.alignAnkleToGround !== false) {
       const ankle = options.resolveBone(binding.ankle);
       if (ankle) {
-        applied.appliedAnkle = applyAnkleGroundAlignment(ankle, leg.groundNormal, binding.ankleLocalUp ?? [0, 1, 0], legAmount);
+        applied.appliedAnkle = applyAnkleGroundAlignment(
+          ankle,
+          leg.groundNormal,
+          binding.ankleLocalUp ?? [0, 1, 0],
+          legAmount
+        );
       } else {
         issues.push(`${binding.id}: missing ankle bone ${binding.ankle}`);
       }
@@ -956,7 +1076,11 @@ function resolveFootPlantIkForAppliedPose(
   });
 }
 
-function resolveThreeRuntimePlaybackWindow(clip: AnimationClip, playback: AnimationManifestEntry["playback"] | undefined, minimumDuration: number): { start: number; end: number } {
+function resolveThreeRuntimePlaybackWindow(
+  clip: AnimationClip,
+  playback: AnimationManifestEntry["playback"] | undefined,
+  minimumDuration: number
+): { start: number; end: number } {
   const duration = sanitizeThreeRuntimeTime(clip.duration);
   const minDuration = finiteNonNegative(minimumDuration, 0.1);
   const start = clamp(playback?.start ?? 0, 0, duration);
@@ -1002,7 +1126,12 @@ function clearPreviousFootPlantPelvisOffset(bone: Object3D): boolean {
 
 function worldOffsetToLocal(bone: Object3D, offset: Vec3, amount: number): Vec3 {
   tmpWorldDirection.set(offset[0] * amount, offset[1] * amount, offset[2] * amount);
-  if (!Number.isFinite(tmpWorldDirection.x) || !Number.isFinite(tmpWorldDirection.y) || !Number.isFinite(tmpWorldDirection.z)) return [0, 0, 0];
+  if (
+    !Number.isFinite(tmpWorldDirection.x) ||
+    !Number.isFinite(tmpWorldDirection.y) ||
+    !Number.isFinite(tmpWorldDirection.z)
+  )
+    return [0, 0, 0];
   const parent = bone.parent;
   if (parent) {
     parent.getWorldPosition(tmpLocalDirection);
@@ -1019,11 +1148,18 @@ function objectWorldVec3(object: Object3D): Vec3 {
   return [tmpWorldDirection.x, tmpWorldDirection.y, tmpWorldDirection.z];
 }
 
-function objectWorldHorizontalDirection(object: Object3D | null | undefined, localDirection: Vec3, fallback: Vec3): Vec3 {
+function objectWorldHorizontalDirection(
+  object: Object3D | null | undefined,
+  localDirection: Vec3,
+  fallback: Vec3
+): Vec3 {
   if (!object) return normalizeVec3([fallback[0], 0, fallback[2]], fallback);
   object.updateMatrixWorld(true);
   object.getWorldQuaternion(tmpCurrentWorld);
-  const direction = rotateVec3ByQuat([tmpCurrentWorld.x, tmpCurrentWorld.y, tmpCurrentWorld.z, tmpCurrentWorld.w], localDirection);
+  const direction = rotateVec3ByQuat(
+    [tmpCurrentWorld.x, tmpCurrentWorld.y, tmpCurrentWorld.z, tmpCurrentWorld.w],
+    localDirection
+  );
   return normalizeVec3([direction[0], 0, direction[2]], fallback);
 }
 
@@ -1031,7 +1167,10 @@ function horizontalDirectionFrom(from: Vec3, to: Vec3, fallback: Vec3): Vec3 {
   return normalizeVec3([from[0] - to[0], 0, from[2] - to[2]], fallback);
 }
 
-function estimateShoulderWidth(leftUpper: Object3D | null | undefined, rightUpper: Object3D | null | undefined): number {
+function estimateShoulderWidth(
+  leftUpper: Object3D | null | undefined,
+  rightUpper: Object3D | null | undefined
+): number {
   if (!leftUpper || !rightUpper) return 0.42;
   leftUpper.updateMatrixWorld(true);
   rightUpper.updateMatrixWorld(true);
@@ -1057,7 +1196,10 @@ function applyAnkleGroundAlignment(bone: Object3D, groundNormal: Vec3, localUp: 
   if (influence <= 0 || lengthVec3(normal) <= 1e-7) return false;
   bone.updateMatrixWorld(true);
   bone.getWorldQuaternion(tmpCurrentWorld);
-  const worldUp = rotateVec3ByQuat([tmpCurrentWorld.x, tmpCurrentWorld.y, tmpCurrentWorld.z, tmpCurrentWorld.w], normalizeVec3(localUp, [0, 1, 0]));
+  const worldUp = rotateVec3ByQuat(
+    [tmpCurrentWorld.x, tmpCurrentWorld.y, tmpCurrentWorld.z, tmpCurrentWorld.w],
+    normalizeVec3(localUp, [0, 1, 0])
+  );
   const correction = quatFromUnitVectors(worldUp, normal, [0, 0, 1]);
   tmpLocalDirection.set(correction[0], correction[1], correction[2]);
   if (tmpLocalDirection.lengthSq() <= 1e-12) return false;
@@ -1079,10 +1221,21 @@ function applyWorldQuaternionDelta(bone: Object3D, deltaWorld: Quaternion, influ
   return true;
 }
 
-function applyLocalEulerTarget(bone: Object3D, euler: Vec3, influence: number, deltaSeconds: number, speed: number): boolean {
+function applyLocalEulerTarget(
+  bone: Object3D,
+  euler: Vec3,
+  influence: number,
+  deltaSeconds: number,
+  speed: number
+): boolean {
   if (influence <= 0 || !euler.every(isFiniteNumber)) return false;
   tmpTargetWorld.setFromEuler(tmpEuler.set(euler[0], euler[1], euler[2], "XYZ")).normalize();
-  if (!Number.isFinite(tmpTargetWorld.x) || !Number.isFinite(tmpTargetWorld.y) || !Number.isFinite(tmpTargetWorld.z) || !Number.isFinite(tmpTargetWorld.w)) {
+  if (
+    !Number.isFinite(tmpTargetWorld.x) ||
+    !Number.isFinite(tmpTargetWorld.y) ||
+    !Number.isFinite(tmpTargetWorld.z) ||
+    !Number.isFinite(tmpTargetWorld.w)
+  ) {
     return false;
   }
   const alpha = dampedInfluenceAmount(influence, speed, deltaSeconds);

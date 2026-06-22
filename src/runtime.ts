@@ -1,5 +1,26 @@
-import { type Mat4, type Quat, type Transform, type Vec3, EPSILON, clamp01, dampAlpha, dotQuat, finiteNonNegative, finiteSigned, identityTransform, lerpTransform, normalizeQuat } from "./math.js";
-import { type AnimationClip, type ClipValidationIssue, type SampleRepairDiagnostic, resolveTrackJointIndex, sampleClipToPose, validateClip } from "./clip.js";
+import {
+  type Mat4,
+  type Quat,
+  type Transform,
+  type Vec3,
+  EPSILON,
+  clamp01,
+  dampAlpha,
+  dotQuat,
+  finiteNonNegative,
+  finiteSigned,
+  identityTransform,
+  lerpTransform,
+  normalizeQuat
+} from "./math.js";
+import {
+  type AnimationClip,
+  type ClipValidationIssue,
+  type SampleRepairDiagnostic,
+  resolveTrackJointIndex,
+  sampleClipToPose,
+  validateClip
+} from "./clip.js";
 import { type MotionCarrier, sampleMotionIntervalDelta } from "./motion.js";
 import {
   type JointMask,
@@ -147,7 +168,8 @@ export function synchronizeLocomotionPlayback(
   layers: readonly LocomotionBlendLayerInput[],
   options: LocomotionPlaybackSyncOptions = {}
 ): LocomotionPlaybackSynchronization {
-  const weights = options.blendRatio === undefined ? null : computeLocomotionBlendWeights(options.blendRatio, layers.length);
+  const weights =
+    options.blendRatio === undefined ? null : computeLocomotionBlendWeights(options.blendRatio, layers.length);
   const phase = clamp01(Number.isFinite(options.phase) ? options.phase! : 0);
   const durations = layers.map(readLocomotionLayerDuration);
   const rawWeights = layers.map((layer, index) => finiteNonNegative(weights?.[index] ?? layer.weight, 0));
@@ -226,14 +248,20 @@ export class AnimationRuntime {
       id,
       clip,
       time: finiteNonNegative(resetTime ? options.time : (options.time ?? existing?.time), 0),
-      weight: resetTime ? sanitizeLayerWeight(blendMode, options.weight, 0) : sanitizeLayerWeight(blendMode, existing?.weight ?? options.weight, 0),
+      weight: resetTime
+        ? sanitizeLayerWeight(blendMode, options.weight, 0)
+        : sanitizeLayerWeight(blendMode, existing?.weight ?? options.weight, 0),
       targetWeight,
       fadeSpeed,
       speed: finiteNonNegative(options.speed ?? existing?.speed, 1),
       priority,
       loop: options.loop ?? clip.loop ?? existing?.loop ?? false,
       blendMode,
-      ...(options.motionCarrier ? { motionCarrier: options.motionCarrier } : existing?.motionCarrier ? { motionCarrier: existing.motionCarrier } : {}),
+      ...(options.motionCarrier
+        ? { motionCarrier: options.motionCarrier }
+        : existing?.motionCarrier
+          ? { motionCarrier: existing.motionCarrier }
+          : {}),
       ...(options.mask ? { mask: options.mask } : existing?.mask ? { mask: existing.mask } : {}),
       ...(options.sourceBasisQuaternion
         ? { sourceBasisQuaternion: options.sourceBasisQuaternion }
@@ -286,7 +314,12 @@ export class AnimationRuntime {
       const alpha = dampAlpha(layer.fadeSpeed, delta);
       layer.weight += (layer.targetWeight - layer.weight) * alpha;
       const toWeight = layer.weight;
-      if (options.collectRootMotion && layer.blendMode === "override" && (fromWeight > 0.0001 || toWeight > 0.0001) && delta > 0) {
+      if (
+        options.collectRootMotion &&
+        layer.blendMode === "override" &&
+        (fromWeight > 0.0001 || toWeight > 0.0001) &&
+        delta > 0
+      ) {
         const sampleOptions = {
           ...(layer.motionCarrier ? { carrier: layer.motionCarrier } : {}),
           loop: layer.loop,
@@ -306,11 +339,13 @@ export class AnimationRuntime {
       layer.time = finalizeLayerTime(layer, advancedTime);
       if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) this.layers.delete(layer.id);
     }
-    return options.collectRootMotion ? blendRootMotionIntervals(intervals, this.blendThreshold) : { rootMotionDelta: identityTransform(), rootMotionLayers: [] };
+    return options.collectRootMotion
+      ? blendRootMotionIntervals(intervals, this.blendThreshold)
+      : { rootMotionDelta: identityTransform(), rootMotionLayers: [] };
   }
 
   evaluate(options: RuntimeEvaluateOptions = {}): RuntimeEvaluation {
-    const diagnostics = options.diagnostics ? [] as RuntimeEvaluationDiagnostic[] : undefined;
+    const diagnostics = options.diagnostics ? ([] as RuntimeEvaluationDiagnostic[]) : undefined;
     const active = Array.from(this.layers.values())
       .map((layer) => sanitizeLayerState(layer))
       .filter((layer) => isLayerActive(layer))
@@ -319,7 +354,7 @@ export class AnimationRuntime {
     const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];
     const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
     for (const layer of active) {
-      const sampleDiagnostics = diagnostics ? [] as SampleRepairDiagnostic[] : undefined;
+      const sampleDiagnostics = diagnostics ? ([] as SampleRepairDiagnostic[]) : undefined;
       if (diagnostics) pushClipDiagnostics(diagnostics, validateClip(layer.clip, this.skeleton), layer, this.skeleton);
       const sampleOptions = sampleDiagnostics
         ? {
@@ -344,8 +379,15 @@ export class AnimationRuntime {
           clipId: layer.clip.id
         });
       }
-      if (layer.blendMode === "additive") additiveLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
-      else overrideLayers.push({ priority: layer.priority, pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
+      if (layer.blendMode === "additive")
+        additiveLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
+      else
+        overrideLayers.push({
+          priority: layer.priority,
+          pose: sampled,
+          weight: layer.weight,
+          ...(layer.mask ? { mask: layer.mask } : {})
+        });
     }
 
     let localPose = clonePose(this.restPose);
@@ -440,7 +482,9 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
   let rootMotionDelta = identityTransform();
   const rootMotionLayers: RuntimeRootMotionLayerDelta[] = [];
   const active = intervals
-    .filter((interval) => interval.layer.blendMode === "override" && readRootMotionIntervalEffectiveWeight(interval) > 0.0001)
+    .filter(
+      (interval) => interval.layer.blendMode === "override" && readRootMotionIntervalEffectiveWeight(interval) > 0.0001
+    )
     .sort((a, b) => a.layer.priority - b.layer.priority || a.layer.id.localeCompare(b.layer.id));
 
   for (let index = 0; index < active.length; ) {
@@ -472,9 +516,8 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
       });
     }
     const groupDelta = blendRootMotionGroup(group, totalWeight);
-    rootMotionDelta = totalWeight < threshold
-      ? lerpTransform(rootMotionDelta, groupDelta, totalWeight / threshold)
-      : groupDelta;
+    rootMotionDelta =
+      totalWeight < threshold ? lerpTransform(rootMotionDelta, groupDelta, totalWeight / threshold) : groupDelta;
   }
 
   return { rootMotionDelta, rootMotionLayers };
@@ -529,17 +572,32 @@ function pushPoseDiagnostics(
   }
 }
 
-function pushClipDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues: ClipValidationIssue[], layer: AnimationLayer, skeleton: Skeleton): void {
+function pushClipDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: ClipValidationIssue[],
+  layer: AnimationLayer,
+  skeleton: Skeleton
+): void {
   for (const issue of issues) {
     const track = issue.track !== undefined ? layer.clip.tracks[issue.track] : undefined;
     const index = track ? resolveTrackJointIndex(skeleton, track) : -1;
-    diagnostics.push(createSampleDiagnostic(layer, issue, issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>", index, { includeProperty: true }));
+    diagnostics.push(
+      createSampleDiagnostic(layer, issue, issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>", index, {
+        includeProperty: true
+      })
+    );
   }
 }
 
-function pushSampleRepairDiagnostics(diagnostics: RuntimeEvaluationDiagnostic[], issues: SampleRepairDiagnostic[], layer: AnimationLayer): void {
+function pushSampleRepairDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: SampleRepairDiagnostic[],
+  layer: AnimationLayer
+): void {
   for (const issue of issues) {
-    diagnostics.push(createSampleDiagnostic(layer, issue, issue.joint ?? "<clip>", issue.index ?? -1, { includeSample: true }));
+    diagnostics.push(
+      createSampleDiagnostic(layer, issue, issue.joint ?? "<clip>", issue.index ?? -1, { includeSample: true })
+    );
   }
 }
 
