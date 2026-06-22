@@ -731,6 +731,70 @@ export function runIkFootPlantTests(): void {
     "zero max ankle correction should leave the ankle target unchanged"
   );
   assert.deepEqual(zeroMaxAnkleCorrectionPlant.pelvisOffset, [0, 0, 0]);
+  const moderateSlopeFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.1, 0],
+        ground: { point: [0, 0, 0], normal: [0.5, Math.sqrt(0.75), 0] }
+      },
+      {
+        id: "right",
+        hip: [0.2, 1, 0],
+        knee: [0.2, 0.5, 0],
+        ankle: [0.2, 0.1, 0],
+        ground: { point: [0.2, 0, 0], normal: [0, 1, 0] }
+      }
+    ],
+    { footHeight: 0.08, maxGroundSlopeAngle: Math.PI / 4 }
+  );
+  assert.equal(moderateSlopeFootPlant.plantedCount, 2, "flat and moderate contacts should pass the slope gate");
+  assert.equal(moderateSlopeFootPlant.legs[0]!.skippedReason, undefined);
+  const steepSlopeFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.1, 0],
+        ground: { point: [0, 0, 0], normal: [Math.sqrt(0.75), 0.5, 0] }
+      }
+    ],
+    { footHeight: 0.08, maxGroundSlopeAngle: Math.PI / 4 }
+  );
+  assert.equal(steepSlopeFootPlant.plantedCount, 0);
+  assert.equal(steepSlopeFootPlant.legs[0]!.planted, false);
+  assert.equal(steepSlopeFootPlant.legs[0]!.skippedReason, "ground-slope-too-steep");
+  assert.deepEqual(steepSlopeFootPlant.legs[0]!.targetAnkle, [0, 0.1, 0]);
+  assert.deepEqual(steepSlopeFootPlant.legs[0]!.groundPoint, [0, 0, 0]);
+  assert.ok(
+    steepSlopeFootPlant.legs[0]!.targetAnkle.every(Number.isFinite) &&
+      steepSlopeFootPlant.legs[0]!.groundNormal.every(Number.isFinite),
+    "slope-rejected foot plant results should stay finite"
+  );
+  assert.ok(
+    steepSlopeFootPlant.issues.includes("left: ground slope too steep"),
+    "slope-rejected foot plant results should expose a clear issue"
+  );
+  const nonFiniteSlopeThresholdFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.1, 0],
+        ground: { point: [0, 0, 0], normal: [1, 0, 0] }
+      }
+    ],
+    { footHeight: 0.08, maxGroundSlopeAngle: Number.NaN }
+  );
+  assert.equal(
+    nonFiniteSlopeThresholdFootPlant.plantedCount,
+    1,
+    "non-finite slope thresholds should preserve default no-gate foot-plant behavior"
+  );
   const boundaryReachPlant = solveFootPlant(
     [
       {
@@ -864,6 +928,23 @@ export function runIkFootPlantTests(): void {
     ozzFootIk.legs.every((leg) => leg.ankleAim?.jointCorrection.every(Number.isFinite)),
     "Ozz-style foot IK wrapper should include finite ankle aim corrections for planted feet"
   );
+  const steepOzzFootIk = solveOzzFootIk({
+    skeleton: ozzFootIkSkeleton,
+    modelPose: ozzFootIkModels,
+    contacts: {
+      left: { point: [-0.12, 0, 0], normal: [1, 0, 0] },
+      right: { point: [0.12, 0, 0], normal: [0, 1, 0] }
+    },
+    maxGroundSlopeAngle: Math.PI / 4
+  });
+  assert.equal(
+    steepOzzFootIk.plantedCount,
+    1,
+    "Ozz-style foot IK wrapper should pass the ground slope gate through to foot-plant planning"
+  );
+  assert.equal(steepOzzFootIk.legs[0]!.skippedReason, "ground-slope-too-steep");
+  assert.equal(steepOzzFootIk.legs[0]!.ankleAim, undefined);
+  assert.ok(steepOzzFootIk.issues.includes("left: ground slope too steep"));
   const suppressedContactRays: string[] = [];
   const suppressedContactOzzFootIk = solveOzzFootIk({
     skeleton: ozzFootIkSkeleton,

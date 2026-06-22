@@ -16,7 +16,7 @@
 - `importer-config`: app-agnostic Ozz-style offline import planning for additive references, raw motion extraction, optimization, user tracks, baked camera joints, and rigid instances.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.
-- `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
+- `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, optional ground-slope rejection, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: rotation/translation/scale pose delta metrics, invalid pose reports, and deterministic input checks.
 - `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, base/overlay/debug runtime clip construction for Three `AnimationMixer`, and sanitized app-facing runtime clip snapshots/influence diagnostics.

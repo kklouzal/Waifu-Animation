@@ -50,6 +50,7 @@ export type FootPlantOptions = {
   maxPelvisOffset?: number;
   maxAnkleCorrection?: number;
   maxStretch?: number;
+  maxGroundSlopeAngle?: number;
 };
 
 export type FootPlantLegResult = {
@@ -153,6 +154,8 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   const pelvisCompensation = clamp01(options.pelvisCompensation ?? 1);
   const maxPelvisOffset = finiteNonNegative(options.maxPelvisOffset, 0.35);
   const maxAnkleCorrection = finiteNonNegative(options.maxAnkleCorrection, 0.5);
+  const minGroundNormalDot = resolveMinGroundNormalDot(options.maxGroundSlopeAngle);
+  const up = scaleVec3(down, -1);
   const legs: FootPlantLegResult[] = [];
   const issues: string[] = [];
   const sanitizedInput = input.map(sanitizeFootPlantLegInput);
@@ -162,19 +165,13 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   for (const leg of sanitizedInput) {
     const groundNormal = normalizeVec3(leg.ground?.normal ?? [0, 1, 0], [0, 1, 0]);
     if (!leg.ground) {
-      legs.push({
-        id: leg.id,
-        planted: false,
-        clamped: false,
-        initialAnkle: leg.ankle,
-        targetAnkle: leg.ankle,
-        ankleOffset: [0, 0, 0],
-        correctionDistance: 0,
-        groundNormal,
-        targetReach: 1,
-        skippedReason: "missing-ground-contact"
-      });
+      legs.push(createSkippedFootPlantLegResult(leg, groundNormal, "missing-ground-contact"));
       issues.push(`${leg.id}: missing ground contact`);
+      continue;
+    }
+    if (minGroundNormalDot !== undefined && dotVec3(groundNormal, up) < minGroundNormalDot) {
+      legs.push(createSkippedFootPlantLegResult(leg, groundNormal, "ground-slope-too-steep", leg.ground.point));
+      issues.push(`${leg.id}: ground slope too steep`);
       continue;
     }
 
@@ -443,6 +440,32 @@ function sanitizeGroundContact(input: GroundContact, pointFallback: Vec3): Groun
     ...(input.normal === undefined ? {} : { normal: finiteVec3(input.normal, [0, 1, 0]) }),
     ...(input.rayStart === undefined ? {} : { rayStart: finiteVec3(input.rayStart, addVec3(point, [0, 0.5, 0])) })
   };
+}
+
+function createSkippedFootPlantLegResult(
+  leg: FootPlantLegInput,
+  groundNormal: Vec3,
+  skippedReason: string,
+  groundPoint?: Vec3
+): FootPlantLegResult {
+  return {
+    id: leg.id,
+    planted: false,
+    clamped: false,
+    initialAnkle: leg.ankle,
+    targetAnkle: leg.ankle,
+    ankleOffset: [0, 0, 0],
+    correctionDistance: 0,
+    groundNormal,
+    targetReach: 1,
+    skippedReason,
+    ...(groundPoint === undefined ? {} : { groundPoint })
+  };
+}
+
+function resolveMinGroundNormalDot(maxGroundSlopeAngle: number | undefined): number | undefined {
+  if (maxGroundSlopeAngle === undefined || !Number.isFinite(maxGroundSlopeAngle)) return undefined;
+  return Math.cos(Math.min(Math.PI, Math.max(0, maxGroundSlopeAngle)));
 }
 
 function transformLinearVector(matrix: Mat4, vector: Vec3): Vec3 {

@@ -28,7 +28,7 @@ Current coverage includes:
 - deterministic presence planning for cues, gaze targets, non-skeletal look-at outputs, and bounded procedural bone targets exposed as reusable library data;
 - two-bone IK solve sanity, including diagonal target projection onto the upper-bone sphere;
 - normalized two-bone IK correction quaternions;
-- foot-plant planning for flat-ground contacts, missing-contact degradation, ankle correction clamping, pelvis compensation, finite leg IK output, and reusable Three.js application/cleanup of pelvis plus leg correction quaternions with sanitized timing;
+- foot-plant planning for flat/moderate-ground contacts, optional too-steep ground-slope rejection, missing-contact degradation, ankle correction clamping, pelvis compensation, finite leg IK output, and reusable Three.js application/cleanup of pelvis plus leg correction quaternions with sanitized timing;
 - viseme stack limiting with hostile input sanitization;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger/timing sanity;
 - pose delta metrics across rotation, translation, and scale, including sign-equivalent/non-unit quaternion handling and max joint attribution.
