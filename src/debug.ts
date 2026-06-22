@@ -32,10 +32,11 @@ export type PoseDiscontinuityFrame = {
 export type PoseDiscontinuityThresholds = {
   angularVelocityRadiansPerSecond?: number;
   translationVelocityUnitsPerSecond?: number;
+  scaleVelocityUnitsPerSecond?: number;
 };
 
 export type PoseDiscontinuityIssue = {
-  kind: "angular-velocity-spike" | "translation-velocity-spike" | "invalid-interval";
+  kind: "angular-velocity-spike" | "translation-velocity-spike" | "scale-velocity-spike" | "invalid-interval";
   intervalIndex: number;
   fromTimeSeconds: number;
   toTimeSeconds: number;
@@ -179,8 +180,10 @@ export function poseDiscontinuityMetric(
 
   const angularVelocityMetric = finishVelocityAccumulator(angularVelocity, skeleton);
   const translationVelocityMetric = finishVelocityAccumulator(translationVelocity, skeleton);
+  const scaleVelocityMetric = finishVelocityAccumulator(scaleVelocity, skeleton);
   const angularThreshold = thresholds.angularVelocityRadiansPerSecond;
   const translationThreshold = thresholds.translationVelocityUnitsPerSecond;
+  const scaleThreshold = thresholds.scaleVelocityUnitsPerSecond;
   if (
     angularThreshold !== undefined &&
     Number.isFinite(angularThreshold) &&
@@ -207,11 +210,19 @@ export function poseDiscontinuityMetric(
       )
     );
   }
+  if (
+    scaleThreshold !== undefined &&
+    Number.isFinite(scaleThreshold) &&
+    scaleThreshold >= 0 &&
+    scaleVelocityMetric.max > scaleThreshold
+  ) {
+    issues.push(createThresholdIssue("scale-velocity-spike", scaleVelocityMetric, scaleThreshold, frames, skeleton));
+  }
 
   return {
     angularVelocityRadiansPerSecond: angularVelocityMetric,
     translationVelocityUnitsPerSecond: translationVelocityMetric,
-    scaleVelocityUnitsPerSecond: finishVelocityAccumulator(scaleVelocity, skeleton),
+    scaleVelocityUnitsPerSecond: scaleVelocityMetric,
     frames: frames.length,
     intervals: Math.max(0, frames.length - 1),
     validIntervals,

@@ -249,11 +249,15 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
       { timeSeconds: 1, pose: frameC }
     ],
     skeleton,
-    { angularVelocityRadiansPerSecond: 0.5, translationVelocityUnitsPerSecond: 1.5 }
+    {
+      angularVelocityRadiansPerSecond: 0.5,
+      translationVelocityUnitsPerSecond: 1.5,
+      scaleVelocityUnitsPerSecond: 0.75
+    }
   );
   assert.deepEqual(
     thresholdDiscontinuity.issues.map((issue) => issue.kind),
-    ["angular-velocity-spike", "translation-velocity-spike"]
+    ["angular-velocity-spike", "translation-velocity-spike", "scale-velocity-spike"]
   );
   assert.equal(thresholdDiscontinuity.issues[0]!.jointName, "leftUpperArm");
   assert.equal(thresholdDiscontinuity.issues[0]!.value, thresholdDiscontinuity.angularVelocityRadiansPerSecond.max);
@@ -261,6 +265,29 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
   assert.equal(thresholdDiscontinuity.issues[1]!.jointName, "spine");
   assert.equal(thresholdDiscontinuity.issues[1]!.value, 2);
   assert.equal(thresholdDiscontinuity.issues[1]!.threshold, 1.5);
+  assert.equal(thresholdDiscontinuity.issues[2]!.jointName, "head");
+  assert.equal(thresholdDiscontinuity.issues[2]!.jointIndex, 2);
+  assert.equal(thresholdDiscontinuity.issues[2]!.value, 1);
+  assert.equal(thresholdDiscontinuity.issues[2]!.threshold, 0.75);
+
+  const hostileThresholdDiscontinuity = poseDiscontinuityMetric(
+    [
+      { timeSeconds: 0, pose: frameA },
+      { timeSeconds: 0.5, pose: frameB },
+      { timeSeconds: 1, pose: frameC }
+    ],
+    skeleton,
+    {
+      angularVelocityRadiansPerSecond: Number.NaN,
+      translationVelocityUnitsPerSecond: -1,
+      scaleVelocityUnitsPerSecond: Number.NEGATIVE_INFINITY
+    }
+  );
+  assert.deepEqual(
+    hostileThresholdDiscontinuity.issues.map((issue) => issue.kind),
+    [],
+    "non-finite and negative pose discontinuity thresholds should be ignored"
+  );
 }
 
 function assertFiniteMetricOutput(value: unknown): void {
