@@ -21,6 +21,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "check:tests": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --noUnusedLocals --noUnusedParameters --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck tests/run-tests.ts",
+    "ci": "npm run check && npm run check:tests && npm test && npm run build && npm pack --dry-run --json",
     "test": "tsx tests/run-tests.ts",
     "prepack": "npm run build"
   },
