@@ -1,4 +1,11 @@
-import { AnimationRuntime, assert, clonePose, poseDeltaMetric, poseRotationMetric } from "./test-api.js";
+import {
+  AnimationRuntime,
+  assert,
+  clonePose,
+  poseDeltaMetric,
+  poseDiscontinuityMetric,
+  poseRotationMetric
+} from "./test-api.js";
 import { nodClip, skeleton } from "./test-helpers.js";
 
 export function createAnimationMetricsEvaluation(): ReturnType<AnimationRuntime["evaluate"]> {
@@ -146,4 +153,126 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
     true,
     "short scale tuples should not poison scale RMS"
   );
+
+  const frameA = clonePose(skeleton.restPose);
+  const frameB = clonePose(skeleton.restPose);
+  const frameC = clonePose(skeleton.restPose);
+  frameB[1]!.translation = [0, 0.5, 0];
+  frameC[1]!.translation = [0, 1.5, 0];
+  frameC[2]!.scale = [1, 1.5, 1];
+  frameC[3]!.rotation = [0, Math.sin(0.25), 0, Math.cos(0.25)];
+  const discontinuity = poseDiscontinuityMetric(
+    [
+      { timeSeconds: 0, pose: frameA },
+      { timeSeconds: 0.5, pose: frameB },
+      { timeSeconds: 1, pose: frameC }
+    ],
+    skeleton
+  );
+  assert.equal(discontinuity.frames, 3);
+  assert.equal(discontinuity.intervals, 2);
+  assert.equal(discontinuity.validIntervals, 2);
+  assert.equal(discontinuity.translationVelocityUnitsPerSecond.max, 2);
+  assert.equal(discontinuity.translationVelocityUnitsPerSecond.maxIntervalIndex, 1);
+  assert.equal(discontinuity.translationVelocityUnitsPerSecond.maxJointIndex, 1);
+  assert.equal(discontinuity.translationVelocityUnitsPerSecond.maxJoint, "spine");
+  assert.equal(discontinuity.scaleVelocityUnitsPerSecond.max, 1);
+  assert.equal(discontinuity.scaleVelocityUnitsPerSecond.maxJoint, "head");
+  assert.ok(
+    discontinuity.angularVelocityRadiansPerSecond.max > 0.99 && discontinuity.angularVelocityRadiansPerSecond.max < 1.01
+  );
+  assert.equal(discontinuity.angularVelocityRadiansPerSecond.maxJoint, "leftUpperArm");
+  assert.ok(discontinuity.translationVelocityUnitsPerSecond.rms > 0);
+  assertFiniteMetricOutput(discontinuity);
+
+  const signFrameA = clonePose(skeleton.restPose);
+  const signFrameB = clonePose(skeleton.restPose);
+  signFrameB[2]!.rotation = signFrameB[2]!.rotation.map((component) => -component) as [number, number, number, number];
+  const signDiscontinuity = poseDiscontinuityMetric(
+    [
+      { timeSeconds: 0, pose: signFrameA },
+      { timeSeconds: 1, pose: signFrameB }
+    ],
+    skeleton
+  );
+  assert.equal(
+    signDiscontinuity.angularVelocityRadiansPerSecond.max,
+    0,
+    "pose discontinuity metrics should treat sign-opposite quaternions as equivalent rotations"
+  );
+
+  const invalidFrameA = clonePose(skeleton.restPose);
+  const invalidFrameB = clonePose(skeleton.restPose);
+  invalidFrameA[0]!.rotation = [Number.NaN, 0, 0, 1];
+  invalidFrameB[1]!.rotation = [0, 0, 0, 0];
+  invalidFrameA[2]!.translation = [Number.POSITIVE_INFINITY, 0, 0];
+  invalidFrameB[3]!.translation = [0, 1] as unknown as [number, number, number];
+  invalidFrameA[0]!.scale = [1, Number.NaN, 1];
+  invalidFrameB[1]!.scale = [1] as unknown as [number, number, number];
+  invalidFrameB[1]!.translation = [0, 0.25, 0];
+  const invalidDiscontinuity = poseDiscontinuityMetric(
+    [
+      { timeSeconds: 0, pose: invalidFrameA },
+      { timeSeconds: 0.25, pose: invalidFrameB }
+    ],
+    skeleton
+  );
+  assert.equal(invalidDiscontinuity.angularVelocityRadiansPerSecond.invalidSamples, 2);
+  assert.equal(invalidDiscontinuity.translationVelocityUnitsPerSecond.invalidSamples, 2);
+  assert.equal(invalidDiscontinuity.scaleVelocityUnitsPerSecond.invalidSamples, 2);
+  assert.equal(invalidDiscontinuity.translationVelocityUnitsPerSecond.max, 1);
+  assert.equal(invalidDiscontinuity.translationVelocityUnitsPerSecond.maxJoint, "spine");
+  assertFiniteMetricOutput(invalidDiscontinuity);
+
+  const invalidTimeDiscontinuity = poseDiscontinuityMetric(
+    [
+      { timeSeconds: 0, pose: frameA },
+      { timeSeconds: 0, pose: frameB },
+      { timeSeconds: -1, pose: frameC },
+      { timeSeconds: Number.POSITIVE_INFINITY, pose: frameC },
+      { timeSeconds: 1, pose: frameC }
+    ],
+    skeleton
+  );
+  assert.equal(invalidTimeDiscontinuity.validIntervals, 0);
+  assert.equal(invalidTimeDiscontinuity.invalidIntervals, 4);
+  assert.deepEqual(
+    invalidTimeDiscontinuity.issues.map((issue) => issue.kind),
+    ["invalid-interval", "invalid-interval", "invalid-interval", "invalid-interval"]
+  );
+  assert.equal(invalidTimeDiscontinuity.translationVelocityUnitsPerSecond.max, 0);
+
+  const thresholdDiscontinuity = poseDiscontinuityMetric(
+    [
+      { timeSeconds: 0, pose: frameA },
+      { timeSeconds: 0.5, pose: frameB },
+      { timeSeconds: 1, pose: frameC }
+    ],
+    skeleton,
+    { angularVelocityRadiansPerSecond: 0.5, translationVelocityUnitsPerSecond: 1.5 }
+  );
+  assert.deepEqual(
+    thresholdDiscontinuity.issues.map((issue) => issue.kind),
+    ["angular-velocity-spike", "translation-velocity-spike"]
+  );
+  assert.equal(thresholdDiscontinuity.issues[0]!.jointName, "leftUpperArm");
+  assert.equal(thresholdDiscontinuity.issues[0]!.value, thresholdDiscontinuity.angularVelocityRadiansPerSecond.max);
+  assert.equal(thresholdDiscontinuity.issues[0]!.threshold, 0.5);
+  assert.equal(thresholdDiscontinuity.issues[1]!.jointName, "spine");
+  assert.equal(thresholdDiscontinuity.issues[1]!.value, 2);
+  assert.equal(thresholdDiscontinuity.issues[1]!.threshold, 1.5);
+}
+
+function assertFiniteMetricOutput(value: unknown): void {
+  if (typeof value === "number") {
+    assert.equal(Number.isFinite(value), true, "metric output should not contain NaN or Infinity");
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) assertFiniteMetricOutput(item);
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) assertFiniteMetricOutput(item);
+  }
 }

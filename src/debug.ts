@@ -24,6 +24,47 @@ export type PoseDeltaMetric = {
   samples: number;
 };
 
+export type PoseDiscontinuityFrame = {
+  timeSeconds: number;
+  pose: readonly Transform[];
+};
+
+export type PoseDiscontinuityThresholds = {
+  angularVelocityRadiansPerSecond?: number;
+  translationVelocityUnitsPerSecond?: number;
+};
+
+export type PoseDiscontinuityIssue = {
+  kind: "angular-velocity-spike" | "translation-velocity-spike" | "invalid-interval";
+  intervalIndex: number;
+  fromTimeSeconds: number;
+  toTimeSeconds: number;
+  jointIndex?: number;
+  jointName?: string;
+  value?: number;
+  threshold?: number;
+};
+
+export type PoseVelocityComponentMetric = {
+  rms: number;
+  max: number;
+  maxIntervalIndex?: number;
+  maxJointIndex?: number;
+  maxJoint?: string;
+  invalidSamples?: number;
+};
+
+export type PoseDiscontinuityMetric = {
+  angularVelocityRadiansPerSecond: PoseVelocityComponentMetric;
+  translationVelocityUnitsPerSecond: PoseVelocityComponentMetric;
+  scaleVelocityUnitsPerSecond: PoseVelocityComponentMetric;
+  frames: number;
+  intervals: number;
+  validIntervals: number;
+  invalidIntervals?: number;
+  issues: PoseDiscontinuityIssue[];
+};
+
 export function poseRotationMetric(a: readonly Transform[], b: readonly Transform[]): PoseMetric {
   const length = Math.min(a.length, b.length);
   let sum = 0;
@@ -78,6 +119,107 @@ export function invalidPoseReport(skeleton: Skeleton, pose: readonly Transform[]
   return validatePose(skeleton, pose);
 }
 
+export function poseDiscontinuityMetric(
+  frames: readonly PoseDiscontinuityFrame[],
+  skeleton?: Skeleton,
+  thresholds: PoseDiscontinuityThresholds = {}
+): PoseDiscontinuityMetric {
+  const angularVelocity = createVelocityAccumulator();
+  const translationVelocity = createVelocityAccumulator();
+  const scaleVelocity = createVelocityAccumulator();
+  const issues: PoseDiscontinuityIssue[] = [];
+  let validIntervals = 0;
+  let invalidIntervals = 0;
+
+  for (let intervalIndex = 0; intervalIndex < frames.length - 1; intervalIndex += 1) {
+    const previous = frames[intervalIndex]!;
+    const next = frames[intervalIndex + 1]!;
+    const deltaSeconds = next.timeSeconds - previous.timeSeconds;
+    if (
+      !Number.isFinite(previous.timeSeconds) ||
+      !Number.isFinite(next.timeSeconds) ||
+      !Number.isFinite(deltaSeconds) ||
+      deltaSeconds <= 0
+    ) {
+      invalidIntervals += 1;
+      issues.push({
+        kind: "invalid-interval",
+        intervalIndex,
+        fromTimeSeconds: previous.timeSeconds,
+        toTimeSeconds: next.timeSeconds
+      });
+      continue;
+    }
+
+    validIntervals += 1;
+    const length = Math.min(previous.pose.length, next.pose.length);
+    for (let jointIndex = 0; jointIndex < length; jointIndex += 1) {
+      const previousTransform = previous.pose[jointIndex]!;
+      const nextTransform = next.pose[jointIndex]!;
+      pushVelocitySample(
+        angularVelocity,
+        velocity(rotationDelta(previousTransform, nextTransform), deltaSeconds),
+        intervalIndex,
+        jointIndex
+      );
+      pushVelocitySample(
+        translationVelocity,
+        velocity(vec3Delta(previousTransform.translation, nextTransform.translation), deltaSeconds),
+        intervalIndex,
+        jointIndex
+      );
+      pushVelocitySample(
+        scaleVelocity,
+        velocity(vec3Delta(previousTransform.scale, nextTransform.scale), deltaSeconds),
+        intervalIndex,
+        jointIndex
+      );
+    }
+  }
+
+  const angularVelocityMetric = finishVelocityAccumulator(angularVelocity, skeleton);
+  const translationVelocityMetric = finishVelocityAccumulator(translationVelocity, skeleton);
+  const angularThreshold = thresholds.angularVelocityRadiansPerSecond;
+  const translationThreshold = thresholds.translationVelocityUnitsPerSecond;
+  if (
+    angularThreshold !== undefined &&
+    Number.isFinite(angularThreshold) &&
+    angularThreshold >= 0 &&
+    angularVelocityMetric.max > angularThreshold
+  ) {
+    issues.push(
+      createThresholdIssue("angular-velocity-spike", angularVelocityMetric, angularThreshold, frames, skeleton)
+    );
+  }
+  if (
+    translationThreshold !== undefined &&
+    Number.isFinite(translationThreshold) &&
+    translationThreshold >= 0 &&
+    translationVelocityMetric.max > translationThreshold
+  ) {
+    issues.push(
+      createThresholdIssue(
+        "translation-velocity-spike",
+        translationVelocityMetric,
+        translationThreshold,
+        frames,
+        skeleton
+      )
+    );
+  }
+
+  return {
+    angularVelocityRadiansPerSecond: angularVelocityMetric,
+    translationVelocityUnitsPerSecond: translationVelocityMetric,
+    scaleVelocityUnitsPerSecond: finishVelocityAccumulator(scaleVelocity, skeleton),
+    frames: frames.length,
+    intervals: Math.max(0, frames.length - 1),
+    validIntervals,
+    ...(invalidIntervals > 0 ? { invalidIntervals } : {}),
+    issues
+  };
+}
+
 type MetricAccumulator = {
   sum: number;
   max: number;
@@ -86,7 +228,20 @@ type MetricAccumulator = {
   invalidSamples: number;
 };
 
+type VelocityAccumulator = {
+  sum: number;
+  max: number;
+  maxIntervalIndex?: number;
+  maxJointIndex?: number;
+  validSamples: number;
+  invalidSamples: number;
+};
+
 function createMetricAccumulator(): MetricAccumulator {
+  return { sum: 0, max: 0, validSamples: 0, invalidSamples: 0 };
+}
+
+function createVelocityAccumulator(): VelocityAccumulator {
   return { sum: 0, max: 0, validSamples: 0, invalidSamples: 0 };
 }
 
@@ -112,6 +267,68 @@ function finishMetricAccumulator(metric: MetricAccumulator, skeleton: Skeleton |
     ...(maxJoint !== undefined ? { maxJoint } : {}),
     ...(metric.invalidSamples > 0 ? { invalidSamples: metric.invalidSamples } : {})
   };
+}
+
+function pushVelocitySample(
+  metric: VelocityAccumulator,
+  sample: number | undefined,
+  intervalIndex: number,
+  jointIndex: number
+): void {
+  if (sample === undefined || !Number.isFinite(sample)) {
+    metric.invalidSamples += 1;
+    return;
+  }
+  metric.sum += sample * sample;
+  metric.validSamples += 1;
+  if (sample > metric.max) {
+    metric.max = sample;
+    metric.maxIntervalIndex = intervalIndex;
+    metric.maxJointIndex = jointIndex;
+  }
+}
+
+function finishVelocityAccumulator(
+  metric: VelocityAccumulator,
+  skeleton: Skeleton | undefined
+): PoseVelocityComponentMetric {
+  const maxJoint = metric.maxJointIndex !== undefined ? skeleton?.joints[metric.maxJointIndex]?.name : undefined;
+  return {
+    rms: metric.validSamples > 0 ? Math.sqrt(metric.sum / metric.validSamples) : 0,
+    max: metric.max,
+    ...(metric.maxIntervalIndex !== undefined ? { maxIntervalIndex: metric.maxIntervalIndex } : {}),
+    ...(metric.maxJointIndex !== undefined ? { maxJointIndex: metric.maxJointIndex } : {}),
+    ...(maxJoint !== undefined ? { maxJoint } : {}),
+    ...(metric.invalidSamples > 0 ? { invalidSamples: metric.invalidSamples } : {})
+  };
+}
+
+function createThresholdIssue(
+  kind: PoseDiscontinuityIssue["kind"],
+  metric: PoseVelocityComponentMetric,
+  threshold: number,
+  frames: readonly PoseDiscontinuityFrame[],
+  skeleton: Skeleton | undefined
+): PoseDiscontinuityIssue {
+  const intervalIndex = metric.maxIntervalIndex ?? 0;
+  const jointIndex = metric.maxJointIndex;
+  const jointName = jointIndex !== undefined ? skeleton?.joints[jointIndex]?.name : undefined;
+  return {
+    kind,
+    intervalIndex,
+    fromTimeSeconds: frames[intervalIndex]?.timeSeconds ?? 0,
+    toTimeSeconds: frames[intervalIndex + 1]?.timeSeconds ?? 0,
+    ...(jointIndex !== undefined ? { jointIndex } : {}),
+    ...(jointName !== undefined ? { jointName } : {}),
+    value: metric.max,
+    threshold
+  };
+}
+
+function velocity(delta: number | undefined, deltaSeconds: number): number | undefined {
+  if (delta === undefined || !Number.isFinite(delta) || !Number.isFinite(deltaSeconds) || deltaSeconds <= 0)
+    return undefined;
+  return delta / deltaSeconds;
 }
 
 function rotationDelta(a: Transform, b: Transform): number | undefined {

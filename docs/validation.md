@@ -32,6 +32,7 @@ Current coverage includes:
 - viseme stack limiting with hostile input sanitization;
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger/timing sanity;
 - pose delta metrics across rotation, translation, and scale, including sign-equivalent/non-unit quaternion handling and max joint attribution.
+- `poseDiscontinuityMetric()` for deterministic runtime/video validation of timestamped local-pose frames, reporting per-interval angular velocity in radians/sec plus translation and scale velocity in distance units/sec with optional spike thresholds.
 
 ## Runtime Evaluation Diagnostics
 
