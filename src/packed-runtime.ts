@@ -20,15 +20,14 @@ import {
 } from "./skeleton.js";
 import type {
   AnimationClip,
-  AnimationClipStats,
-  AnimationTrackStats,
   ClipValidationIssue,
   NormalizedTrackProperty,
   SampleOptions,
   SampleRatioOptions,
   SampleRepairDiagnostic,
   TrackProperty
-} from "./clip.js";
+} from "./clip-types.js";
+import type { AnimationClipStats, AnimationTrackStats } from "./clip-sampling.js";
 import {
   ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE,
   SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE,

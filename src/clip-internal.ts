@@ -1,68 +1,26 @@
-import {
-  type Quat,
-  type Transform,
-  type Vec3,
-  EPSILON,
-  ONE_VEC3,
-  cloneNormalizedQuat,
-  cloneQuat,
-  cloneVec3,
-  clamp
-} from "./math.js";
+import { type Quat, type Vec3, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneVec3, clamp } from "./math.js";
 import { retargetQuaternionSample } from "./retargeting.js";
-import {
-  type HumanoidBoneNameLike,
-  type Skeleton,
-  isHumanoidBoneName,
-  resolveHumanoidIndex,
-  resolveJointIndex
-} from "./skeleton.js";
+import type {
+  AnimationClip,
+  AnimationTrack,
+  ClipValidationIssue,
+  NormalizedTrackProperty,
+  SampleOptions,
+  SampleRepairDiagnostic,
+  TrackProperty
+} from "./clip-types.js";
+import { type Skeleton, isHumanoidBoneName, resolveHumanoidIndex, resolveJointIndex } from "./skeleton.js";
 
-export type TrackProperty = "translation" | "rotation" | "scale" | "position" | "quaternion";
-export type NormalizedTrackProperty = "translation" | "rotation" | "scale";
-
-export type AnimationTrack = {
-  joint?: string;
-  humanBone?: HumanoidBoneNameLike;
-  property: TrackProperty;
-  times: Float32Array;
-  values: Float32Array;
-  sourceRestQuaternion?: Float32Array;
-  sourceRestChildDirection?: Float32Array;
-};
-
-export type AnimationClip = {
-  id: string;
-  name?: string;
-  duration: number;
-  loop?: boolean;
-  tracks: AnimationTrack[];
-  metadata?: Record<string, unknown>;
-};
-
-export type ClipValidationIssue = {
-  track?: number;
-  joint?: string;
-  index?: number;
-  property?: string;
-  message: string;
-};
-
-export type SampleRepairDiagnostic = ClipValidationIssue & {
-  sample?: number;
-};
-
-export type SampleOptions = {
-  loop?: boolean;
-  restPose?: readonly Transform[];
-  diagnostics?: SampleRepairDiagnostic[];
-  sourceBasisQuaternion?: (humanBone: string, jointIndex: number) => ArrayLike<number> | null | undefined;
-  targetRestChildDirection?: (humanBone: string, jointIndex: number) => ArrayLike<number> | null | undefined;
-  /** Skip structurally unsupported external channels after validation has reported them. */
-  skipUnsupportedTracks?: boolean;
-};
-
-export type SampleRatioOptions = Omit<SampleOptions, "loop">;
+export type {
+  AnimationClip,
+  AnimationTrack,
+  ClipValidationIssue,
+  NormalizedTrackProperty,
+  SampleOptions,
+  SampleRatioOptions,
+  SampleRepairDiagnostic,
+  TrackProperty
+} from "./clip-types.js";
 
 export const SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;
 export const ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE = 1e-6;

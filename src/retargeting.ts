@@ -12,7 +12,7 @@ import {
   rotateVec3ByQuat,
   subVec3
 } from "./math.js";
-import { type AnimationClip } from "./clip.js";
+import type { AnimationClip } from "./clip-types.js";
 import { type HumanoidBoneName, type Skeleton, localToModelPose, resolveHumanoidIndex } from "./skeleton.js";
 
 export { isHumanoidBoneName } from "./skeleton.js";

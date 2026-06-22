@@ -1,6 +1,6 @@
-import type { Mat4, Vec3 } from "./math.js";
-
 export type NumericArray = ArrayLike<number>;
+type Mat4 = Float32Array;
+type Vec3 = [number, number, number];
 
 type FiniteMat4Options = {
   requireIntegerLength?: boolean;

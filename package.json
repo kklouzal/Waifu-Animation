@@ -28,9 +28,11 @@
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "pack:dry-run": "npm pack --dry-run --json",
     "package:lint": "publint --strict",
-    "quality": "npm run lint && npm run format:check && npm run knip && npm run package:lint && npm run audit",
+    "quality": "npm run lint && npm run format:check && npm run knip && npm run package:lint && npm run audit && npm run coverage && npm run cycles",
     "test": "tsx tests/run-tests.ts",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "coverage": "c8 --check-coverage --statements 90 --branches 70 --functions 90 --lines 90 tsx tests/run-tests.ts",
+    "cycles": "madge --circular --extensions ts --ts-config tsconfig.json src tests"
   },
   "keywords": [
     "animation",
@@ -47,8 +49,10 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.10.2",
     "@types/three": "^0.181.0",
+    "c8": "^11.0.0",
     "eslint": "^10.5.0",
     "knip": "^6.17.1",
+    "madge": "^8.0.0",
     "prettier": "^3.8.4",
     "publint": "^0.3.21",
     "tsx": "^4.20.6",
