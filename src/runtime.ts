@@ -1,17 +1,13 @@
 import {
   type Mat4,
-  type Quat,
   type Transform,
-  type Vec3,
   EPSILON,
   clamp01,
   dampAlpha,
-  dotQuat,
   finiteNonNegative,
   finiteSigned,
   identityTransform,
-  lerpTransform,
-  normalizeQuat
+  lerpTransform
 } from "./math.js";
 import {
   type AnimationClip,
@@ -21,7 +17,7 @@ import {
   sampleClipToPose,
   validateClip
 } from "./clip.js";
-import { type MotionCarrier, sampleMotionIntervalDelta } from "./motion.js";
+import { type MotionCarrier, blendMotionDeltas, sampleMotionIntervalDelta } from "./motion.js";
 import {
   type JointMask,
   type Pose,
@@ -524,42 +520,12 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
 }
 
 function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: number): Transform {
-  const translation: Vec3 = [0, 0, 0];
-  const scale: Vec3 = [0, 0, 0];
-  const rotationSum: Quat = [0, 0, 0, 0];
-  let firstRotation: Quat | undefined;
-
-  for (const item of group) {
-    const normalizedWeight = readRootMotionIntervalEffectiveWeight(item) / totalWeight;
-    if (normalizedWeight <= 0) continue;
-
-    const delta = item.interval.delta;
-    translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
-    translation[1] += finiteSigned(delta.translation[1], 0) * normalizedWeight;
-    translation[2] += finiteSigned(delta.translation[2], 0) * normalizedWeight;
-    scale[0] += finiteSigned(delta.scale[0], 1) * normalizedWeight;
-    scale[1] += finiteSigned(delta.scale[1], 1) * normalizedWeight;
-    scale[2] += finiteSigned(delta.scale[2], 1) * normalizedWeight;
-
-    let rotation = normalizeQuat(delta.rotation);
-    const reference = dotQuat(rotationSum, rotationSum) > EPSILON ? rotationSum : firstRotation;
-    if (reference) {
-      if (dotQuat(reference, rotation) < 0) rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
-    } else if (dotQuat([0, 0, 0, 1], rotation) < 0) {
-      rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
-    }
-    firstRotation ??= rotation;
-    rotationSum[0] += rotation[0] * normalizedWeight;
-    rotationSum[1] += rotation[1] * normalizedWeight;
-    rotationSum[2] += rotation[2] * normalizedWeight;
-    rotationSum[3] += rotation[3] * normalizedWeight;
-  }
-
-  return {
-    translation,
-    rotation: normalizeQuat(rotationSum),
-    scale
-  };
+  return blendMotionDeltas(
+    group.map((item) => ({
+      delta: item.interval.delta,
+      weight: readRootMotionIntervalEffectiveWeight(item) / totalWeight
+    }))
+  );
 }
 
 function pushPoseDiagnostics(

@@ -12,7 +12,8 @@
     }
   },
   "files": [
-    "dist",
+    "dist/**/*.d.ts",
+    "dist/**/*.js",
     "README.md",
     "LICENSE",
     "docs"

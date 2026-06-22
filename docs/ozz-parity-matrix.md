@@ -1,6 +1,6 @@
 # Ozz Capability Parity Matrix
 
-This matrix compares `Waifu-Animation` against the local Ozz Animation reference checkout at `/Warehouse/_reference/ozz-animation`. It is meant to drive coding slices, not to copy Ozz implementation details.
+This matrix compares `Waifu-Animation` against an Ozz Animation reference checkout such as `<ozz-reference-checkout>`. It is meant to drive coding slices, not to copy Ozz implementation details.
 
 Ozz is MIT licensed. `Waifu-Animation` may reimplement compatible concepts and public behavior, but should not blindly copy Ozz C++ implementation code, memory layout, or SDK integration.
 

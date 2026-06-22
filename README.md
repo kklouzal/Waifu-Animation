@@ -1,6 +1,6 @@
 # Waifu-Animation
 
-`Waifu-Animation` is a standalone TypeScript animation runtime for humanoid and VRM avatar projects. It is the reusable animation foundation for `/Warehouse/Waifu`. The core pose pipeline is browser-agnostic and renderer-agnostic, with a small optional Three.js adapter for the current Waifu browser renderer.
+`Waifu-Animation` is a standalone TypeScript animation runtime for humanoid and VRM avatar projects. It is a reusable animation foundation for Waifu-style avatar applications. The core pose pipeline is browser-agnostic and renderer-agnostic, with a small optional Three.js adapter for browser renderers.
 
 The architecture follows the Ozz Animation runtime model where it is useful for a TypeScript/VRM runtime:
 
@@ -15,7 +15,7 @@ This project does not embed Ozz C++ source. It mirrors Ozz concepts and math bou
 See also:
 
 - `docs/architecture.md` for module boundaries, frame order, and the Waifu integration contract.
-- `docs/validation.md` for package gates, Waifu visual gates, artifact paths, and current limitations.
+- `docs/validation.md` for package gates, Waifu visual gates, artifact examples, and current limitations.
 - `docs/ozz-reference.md` for Ozz attribution and intentional differences.
 
 ## Install

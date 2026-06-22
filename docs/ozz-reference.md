@@ -1,9 +1,9 @@
 # Ozz Reference Notes
 
-Reference checkout used during initial design:
+Reference used during initial design:
 
 - Repository: `https://github.com/guillaumeblanc/ozz-animation`
-- Local path: `/Warehouse/_reference/ozz-animation`
+- Reference checkout: `<ozz-reference-checkout>`
 - Observed commit: `6cbdc790123aa4731d82e255df187b3a8a808256`
 - License: MIT, copyright Guillaume Blanc
 

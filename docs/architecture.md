@@ -56,7 +56,7 @@ Ozz's C++ implementation and SIMD memory layout are not copied. Runtime animatio
 
 ## Waifu Integration Contract
 
-`/Warehouse/Waifu` owns app-specific behavior:
+A consuming Waifu app checkout, such as `<waifu-app-repo>`, owns app-specific behavior:
 
 - VRM loading and Three.js scene setup.
 - WebGL rendering, UI controls, debug panels, and screenshots/video capture.

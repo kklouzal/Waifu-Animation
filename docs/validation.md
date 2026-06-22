@@ -2,7 +2,7 @@
 
 ## Package Gates
 
-Run these in `/Warehouse/Waifu-Animation`:
+Run these from this repository root, shown as `<waifu-animation-repo>`:
 
 ```bash
 npm run check
@@ -41,26 +41,26 @@ Current coverage includes:
 
 ## Waifu Integration Gates
 
-Run these in `/Warehouse/Waifu` after building both repositories and starting the Waifu server:
+Run these from the consuming Waifu app checkout, shown as `<waifu-app-repo>`, after building both repositories and starting the app server. Set `WAIFU_RENDER_URL` to that app server URL.
 
 ```bash
 npm run test:animation
 npm run check
 npm run build
-PORT=18100 HOST=127.0.0.1 npm start
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_RENDER_SCREENSHOT=cache/waifu-animation-integration/pass-4/render-check.png npm run render:check
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_ANIMATION_RUNTIME_OUT_DIR=cache/waifu-animation-integration/pass-4/animations npm run visual:animations
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-integration/pass-4/actions npm run visual:actions
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISEME_OUT_DIR=cache/waifu-animation-integration/pass-4/visemes npm run visual:visemes
+PORT="<app-port>" HOST="<app-bind-host>" npm start
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_RENDER_SCREENSHOT=cache/waifu-animation-integration/pass-4/render-check.png npm run render:check
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_ANIMATION_RUNTIME_OUT_DIR=cache/waifu-animation-integration/pass-4/animations npm run visual:animations
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-integration/pass-4/actions npm run visual:actions
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_VISEME_OUT_DIR=cache/waifu-animation-integration/pass-4/visemes npm run visual:visemes
 ```
 
 Important operational note: the Waifu production server should be restarted after `npm run build`. The current static server can serve a fresh `index.html` that references a newly hashed bundle before the running static route sees that new asset.
 
 ## Current Evidence
 
-Final integration artifacts from the initial package integration are under:
+Final integration artifacts from the initial package integration were under the consuming app cache:
 
-`/Warehouse/Waifu/cache/waifu-animation-integration/pass-4`
+`<waifu-app-repo>/cache/waifu-animation-integration/pass-4`
 
 Pass-4 results:
 
@@ -72,26 +72,26 @@ Pass-4 results:
 
 Targeted facial-runtime validation after moving facial/blink composition into `Waifu-Animation`:
 
-- Artifact directory: `/Warehouse/Waifu/cache/waifu-animation-foundation/2026-06-08/facial-runtime/visemes`
-- Command: `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISEME_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/facial-runtime/visemes npm run visual:visemes`
+- Artifact directory: `<waifu-app-repo>/cache/waifu-animation-foundation/2026-06-08/facial-runtime/visemes`
+- Command: `WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_VISEME_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/facial-runtime/visemes npm run visual:visemes`
 - Result: passed with recorded WebM, zero bad logs, mouth max `0.285`, target max `0.340`, eight mouth/target changes, and all five viseme channels active.
 
 Targeted presence-planner validation after moving deterministic cue/gaze/body target planning into `Waifu-Animation`:
 
-- Artifact directory: `/Warehouse/Waifu/cache/waifu-animation-foundation/2026-06-08/presence-planner/actions`
-- Command: `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/presence-planner/actions npm run visual:actions`
+- Artifact directory: `<waifu-app-repo>/cache/waifu-animation-foundation/2026-06-08/presence-planner/actions`
+- Command: `WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/presence-planner/actions npm run visual:actions`
 - Result: passed with nine captures, recorded WebM, zero bad logs, zero motion issues, and bounded pose deltas from `0.0097` to `0.0352` across idle, speaking, thinking, emphasize, wave, listening, and shrug states.
 
 Historical targeted rendered foot-plant application validation after adding the reusable Three.js application hook:
 
-- Artifact directory: `/Warehouse/Waifu/cache/waifu-animation-foundation/2026-06-08/foot-plant-apply/animations`
+- Artifact directory: `<waifu-app-repo>/cache/waifu-animation-foundation/2026-06-08/foot-plant-apply/animations`
 - Command: package/Waifu visual gate using the then-available foot-plant application flag.
 - Result: passed with recorded WebM, final screenshot, 564 manifest clips, 555 unique clip assets, zero asset/runtime issues, and rendered foot-plant application telemetry for walk, jog, and stand-to-walk representatives. Each locomotion representative produced six planted samples, six active applied samples, six pelvis samples, and twelve leg/ankle correction samples. Max correction remained within the 0.22 m clamp (`0.182` max); minimum target reach remained at or above `0.974`. This remains evidence for the reusable package hook, not current Waifu skeletal application policy.
 
 Final broad visual validation after the foot-plant hook:
 
-- `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/final-actions npm run visual:actions`: passed with nine captures, recorded WebM, zero bad logs, zero motion issues, and pose deltas from `0.0082` to `0.0299`.
-- `WAIFU_RENDER_URL=http://127.0.0.1:18100/ WAIFU_VISEME_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/final-visemes npm run visual:visemes`: passed with recorded WebM, zero bad logs, mouth max `0.255`, target max `0.277`, seven mouth/target changes, and all five viseme channels active.
+- `WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/final-actions npm run visual:actions`: passed with nine captures, recorded WebM, zero bad logs, zero motion issues, and pose deltas from `0.0082` to `0.0299`.
+- `WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" WAIFU_VISEME_OUT_DIR=cache/waifu-animation-foundation/2026-06-08/final-visemes npm run visual:visemes`: passed with recorded WebM, zero bad logs, mouth max `0.255`, target max `0.277`, seven mouth/target changes, and all five viseme channels active.
 
 ## Active Manifest Status
 
@@ -122,38 +122,38 @@ Changes validated in this pass:
 Commands run:
 
 ```bash
-# /Warehouse/Waifu-Animation
+# <waifu-animation-repo>
 npm run check
 npm test
 npm run build
 
-# /Warehouse/Waifu
+# <waifu-app-repo>
 npm run check
 npm run test:animation
 npm run build
-PORT=18100 npm run start
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+PORT="<app-port>" npm run start
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" \
   WAIFU_RENDER_SCREENSHOT=cache/waifu-animation-final-hardening/render-check-current.png \
   npm run render:check
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" \
   WAIFU_VISUAL_OUT_DIR=cache/waifu-animation-final-hardening/actions-current \
   npm run visual:actions
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" \
   WAIFU_ANIMATION_RUNTIME_OUT_DIR=cache/waifu-animation-final-hardening/animations-current \
   npm run visual:animations
-WAIFU_RENDER_URL=http://127.0.0.1:18100/ \
+WAIFU_RENDER_URL="http://<waifu-app-host>:<app-port>/" \
   WAIFU_VISEME_OUT_DIR=cache/waifu-animation-final-hardening/visemes-current \
   npm run visual:visemes
 ```
 
 Artifacts:
 
-- Render screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/render-check-current.png`
-- Action contact sheet: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/actions-current/contact.png`
-- Action video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/actions-current/page@17b0a07f739b0792e76caeae4ca55cf9.webm`
-- Animation video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/animations-current/page@16fd40741149087b1cccc1f070e86d7f.webm`
-- Viseme video: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/visemes-current/page@360eea484cd5223c37d2f88b89c35951.webm`
-- Viseme final screenshot: `/Warehouse/Waifu/cache/waifu-animation-final-hardening/visemes-current/final.png`
+- Render screenshot: `<waifu-app-repo>/cache/waifu-animation-final-hardening/render-check-current.png`
+- Action contact sheet: `<waifu-app-repo>/cache/waifu-animation-final-hardening/actions-current/contact.png`
+- Action video: `<waifu-app-repo>/cache/waifu-animation-final-hardening/actions-current/page@17b0a07f739b0792e76caeae4ca55cf9.webm`
+- Animation video: `<waifu-app-repo>/cache/waifu-animation-final-hardening/animations-current/page@16fd40741149087b1cccc1f070e86d7f.webm`
+- Viseme video: `<waifu-app-repo>/cache/waifu-animation-final-hardening/visemes-current/page@360eea484cd5223c37d2f88b89c35951.webm`
+- Viseme final screenshot: `<waifu-app-repo>/cache/waifu-animation-final-hardening/visemes-current/final.png`
 
 Results:
 
@@ -164,4 +164,4 @@ Results:
 - Animation runtime gate passed: 564 manifest clips, 555 unique assets, and no asset/runtime issues. Historical runs also validated the reusable foot-plant application hook, but current Waifu skeletal policy is authored clips only.
 - Viseme gate passed: 90 samples, video recorded, no bad logs, mouth max `0.321`, target max `0.34`, all five viseme channels active.
 
-Note: an initial visual run accidentally targeted the already-running port `8080` server from an older deployment. The final evidence above targets the fresh `PORT=18100` server serving the rebuilt client bundle.
+Note: an initial visual run accidentally targeted an already-running app server from an older deployment. The final evidence above targets a fresh app server serving the rebuilt client bundle.
