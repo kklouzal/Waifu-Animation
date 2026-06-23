@@ -5,6 +5,7 @@ import {
   encodeAnimationBinary,
   inspectAnimationAsset,
   inspectClipAsset,
+  readRequiredAnimationCoverage,
   readRootMotionMetadata,
   readRootMotionProvenance,
   rejectedAnimationReport,
@@ -69,6 +70,20 @@ export async function runCoreManifestValidationTests(): Promise<void> {
         url: "/invalid-root-motion-provenance.waifuanim.bin",
         format: WAIFU_ANIMATION_BINARY_FORMAT,
         source: { rootMotion: { policy: "stripped-to-in-place", provenance: "converted" } }
+      },
+      {
+        id: "invalid-required-human-bone",
+        label: "Invalid Required Human Bone",
+        url: "/invalid-required-human-bone.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { requiredHumanBones: ["leftToes", "tail"] }
+      },
+      {
+        id: "invalid-required-joint",
+        label: "Invalid Required Joint",
+        url: "/invalid-required-joint.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { requiredJoints: ["hips", ""] }
       }
     ]
   } as unknown as AnimationManifest;
@@ -102,6 +117,16 @@ export async function runCoreManifestValidationTests(): Promise<void> {
       "invalid-root-motion-provenance has invalid source.rootMotion.provenance converted"
     ),
     "validateManifest should report invalid source.rootMotion.provenance values from runtime JSON"
+  );
+  assert.ok(
+    malformedValidationStatusIssues.includes(
+      "invalid-required-human-bone has invalid source.requiredHumanBones entry tail"
+    ),
+    "validateManifest should report invalid source.requiredHumanBones values from runtime JSON"
+  );
+  assert.ok(
+    malformedValidationStatusIssues.includes("invalid-required-joint has invalid source.requiredJoints entry "),
+    "validateManifest should report invalid source.requiredJoints values from runtime JSON"
   );
   assert.deepEqual(
     validateManifest({ version: 1 } as unknown as AnimationManifest),
@@ -141,9 +166,28 @@ export async function runCoreManifestValidationTests(): Promise<void> {
       ["invalid-root-motion-policy", "has invalid source.rootMotion.policy keep-everything"],
       ["invalid-root-motion-shape", "has invalid source.rootMotion metadata"],
       ["invalid-root-motion-policy-alias", "has invalid source.rootMotionPolicy keep-everything"],
-      ["invalid-root-motion-provenance", "has invalid source.rootMotion.provenance converted"]
+      ["invalid-root-motion-provenance", "has invalid source.rootMotion.provenance converted"],
+      ["invalid-required-human-bone", "has invalid source.requiredHumanBones entry tail"],
+      ["invalid-required-joint", "has invalid source.requiredJoints entry "]
     ],
     "rejectedAnimationReport should surface malformed validation status through the existing rejected logging path"
+  );
+  const explicitCoverageEntry = {
+    id: "explicit-coverage",
+    label: "Explicit Coverage",
+    url: "/explicit-coverage.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { requiredHumanBones: ["head", "hips", "head"], requiredJoints: ["leftUpperArm", "hips"] }
+  };
+  assert.deepEqual(
+    readRequiredAnimationCoverage(explicitCoverageEntry),
+    { requiredHumanBones: ["head", "hips"], requiredJoints: ["hips", "leftUpperArm"] },
+    "required animation coverage metadata should be deduplicated and sorted for deterministic validation"
+  );
+  assert.deepEqual(
+    validateManifest({ version: 1, clips: [explicitCoverageEntry] }),
+    [],
+    "valid required coverage metadata should pass manifest validation"
   );
   const convertedStrippedRootMotionEntry = {
     id: "root-motion-converted-stripped",
@@ -276,6 +320,41 @@ export async function runCoreManifestValidationTests(): Promise<void> {
   assert.equal(quarantinedAssetValidationReport.entries[0]!.status, "quarantined");
   assert.equal(quarantinedAssetValidationReport.entries[0]!.accepted, false);
 
+  const requiredCoverageInspection = inspectAnimationAsset(explicitCoverageEntry, nodClip, skeleton);
+  assert.equal(requiredCoverageInspection.status, "rejected");
+  assert.deepEqual(requiredCoverageInspection.jointCoverage, ["head"]);
+  assert.ok(
+    requiredCoverageInspection.issues.some(
+      (issue) =>
+        issue.severity === "error" &&
+        issue.joint === "hips" &&
+        issue.message === "required humanoid bone hips is not covered by resolved target skeleton tracks"
+    ),
+    "inspectAnimationAsset should reject clips that miss explicitly required humanoid bones"
+  );
+  assert.ok(
+    requiredCoverageInspection.issues.some(
+      (issue) =>
+        issue.severity === "error" &&
+        issue.joint === "leftUpperArm" &&
+        issue.message === "required joint leftUpperArm is not covered by resolved target skeleton tracks"
+    ),
+    "inspectAnimationAsset should reject clips that miss explicitly required joints"
+  );
+  const requiredCoverageReport = await validateAnimationManifestAssets(
+    { version: 1, clips: [explicitCoverageEntry] },
+    async () => encodeAnimationBinary(nodClip),
+    { skeleton }
+  );
+  assert.equal(requiredCoverageReport.accepted, 0);
+  assert.equal(requiredCoverageReport.rejected, 1);
+  assert.ok(
+    requiredCoverageReport.entries[0]!.issues.some(
+      (issue) => issue.message === "required humanoid bone hips is not covered by resolved target skeleton tracks"
+    ),
+    "asset validation reports should include explicit required coverage errors"
+  );
+
   const unsupportedFormatAssetEntry = {
     id: "unsupported-format-asset",
     label: "Unsupported Format Asset",
@@ -365,6 +444,13 @@ export async function runCoreManifestValidationTests(): Promise<void> {
         invalidValidationStatusManifestEntry,
         invalidRootMotionMetadataAssetEntry,
         {
+          id: "invalid-required-coverage-metadata-asset",
+          label: "Invalid Required Coverage Metadata Asset",
+          url: "/invalid-required-coverage-metadata-asset.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { requiredHumanBones: ["head", "tail"] }
+        },
+        {
           id: "valid-metadata-asset",
           label: "Valid Metadata Asset",
           url: "/valid-metadata-asset.waifuanim.bin",
@@ -384,7 +470,7 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     "asset report validation should not fetch entries rejected by manifest metadata validation"
   );
   assert.equal(metadataRejectedAssetReport.accepted, 1);
-  assert.equal(metadataRejectedAssetReport.rejected, 2);
+  assert.equal(metadataRejectedAssetReport.rejected, 3);
   assert.ok(
     metadataRejectedAssetReport.entries[0]!.issues.some(
       (issue) => issue.message === "invalid validation status acceptted"
@@ -393,6 +479,11 @@ export async function runCoreManifestValidationTests(): Promise<void> {
   assert.ok(
     metadataRejectedAssetReport.entries[1]!.issues.some(
       (issue) => issue.message === "has invalid source.rootMotion.policy keep-everything"
+    )
+  );
+  assert.ok(
+    metadataRejectedAssetReport.entries[2]!.issues.some(
+      (issue) => issue.message === "has invalid source.requiredHumanBones entry tail"
     )
   );
 }

@@ -100,6 +100,8 @@ The active Waifu manifest expands to 564 entries: 9 curated paid clips plus 555 
 
 Root-motion manifest metadata is intentionally split between policy and provenance. `source.rootMotion.policy` says how consumers should treat the runtime clip (`none`, `preserved`, or `stripped-to-in-place`). Optional `source.rootMotion.provenance` records how the root-carrier translation reached that state (`not-authored`, `preserved-in-clip`, `stripped-during-conversion`, or `requires-runtime-stripping`). Legacy manifests that only set `{ "policy": "stripped-to-in-place" }` remain readable and report `rootMotionProvenance: "unknown"`; asset reports also include root-carrier translation track counts so consumers can distinguish current binary state from missing provenance.
 
+Manifest entries can opt into required resolved joint coverage with `source.requiredHumanBones` and `source.requiredJoints`. These arrays are validation policy only: if present, `inspectAnimationAsset` and `validateAnimationManifestAssets` reject decoded clips whose target-skeleton `jointCoverage` does not include every declared humanoid bone or named joint. No category-level requirements are inferred when these fields are omitted.
+
 The generated Mocap Online library currently records explicit root-motion policy metadata but not conversion provenance:
 
 - 223 generated `root-motion-*` entries are marked `source.rootMotion.policy: "stripped-to-in-place"`.

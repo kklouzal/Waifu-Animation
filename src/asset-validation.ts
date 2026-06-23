@@ -14,7 +14,9 @@ import {
   type AssetValidationStatus,
   inspectClipAsset,
   isInvalidAssetValidationStatus,
+  manifestRequiredCoverageIssue,
   manifestRootMotionPolicyIssue,
+  readRequiredAnimationCoverage,
   readRootMotionPolicy,
   readRootMotionProvenance
 } from "./manifest.js";
@@ -25,7 +27,7 @@ import {
   rootCarrierTranslationTrackHasMotion
 } from "./manifest-clip-helpers.js";
 import { cloneNormalizedQuat, dotQuat } from "./math.js";
-import { type Skeleton } from "./skeleton.js";
+import { type Skeleton, resolveJointIndex } from "./skeleton.js";
 
 export type AnimationAssetValidationIssue = {
   id: string;
@@ -181,6 +183,7 @@ function inspectSemanticAsset(
 ): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
   const effectiveLoop = entry.loop ?? clip.loop;
+  const coverage = jointCoverage(clip, skeleton);
   if (clip.tracks.length === 0)
     issues.push({ id: entry.id, severity: "error", message: "clip has no animation tracks" });
   if (effectiveLoop && clip.duration < 0.25) {
@@ -195,10 +198,11 @@ function inspectSemanticAsset(
   }
   if (effectiveLoop) issues.push(...inspectLoopEndpointMismatches(entry, clip, skeleton));
   if (skeleton) {
-    const mapped = jointCoverage(clip, skeleton).length;
+    const mapped = coverage.length;
     if (mapped === 0)
       issues.push({ id: entry.id, severity: "error", message: "clip has no tracks that map to target skeleton" });
   }
+  issues.push(...inspectRequiredCoverage(entry, coverage, skeleton));
   return issues;
 }
 
@@ -285,6 +289,47 @@ function jointCoverage(clip: AnimationClip, skeleton?: Skeleton): string[] {
   return Array.from(joints).sort();
 }
 
+function inspectRequiredCoverage(
+  entry: AnimationManifestEntry,
+  coverage: readonly string[],
+  skeleton?: Skeleton
+): AnimationAssetValidationIssue[] {
+  if (manifestRequiredCoverageIssue(entry)) return [];
+  const required = readRequiredAnimationCoverage(entry);
+  const issues: AnimationAssetValidationIssue[] = [];
+  if (required.requiredHumanBones.length === 0 && required.requiredJoints.length === 0) return issues;
+  const covered = new Set(coverage);
+  for (const bone of required.requiredHumanBones) {
+    if (covered.has(bone)) continue;
+    issues.push({
+      id: entry.id,
+      severity: "error",
+      joint: bone,
+      message: `required humanoid bone ${bone} is not covered by resolved target skeleton tracks`
+    });
+  }
+  for (const joint of required.requiredJoints) {
+    const coverageName = resolveRequiredJointCoverageName(joint, skeleton);
+    if (coverageName && covered.has(coverageName)) continue;
+    issues.push({
+      id: entry.id,
+      severity: "error",
+      joint,
+      message: `required joint ${joint} is not covered by resolved target skeleton tracks`
+    });
+  }
+  return issues;
+}
+
+function resolveRequiredJointCoverageName(joint: string, skeleton?: Skeleton): string | null {
+  if (!skeleton) return joint;
+  const directIndex = skeleton.nameToIndex.get(joint);
+  if (directIndex !== undefined) return skeleton.joints[directIndex]!.humanoid ?? skeleton.joints[directIndex]!.name;
+  const resolvedIndex = resolveJointIndex(skeleton, joint);
+  if (resolvedIndex >= 0) return skeleton.joints[resolvedIndex]!.humanoid ?? skeleton.joints[resolvedIndex]!.name;
+  return null;
+}
+
 function toAssetIssue(id: string, issue: ClipValidationIssue): AnimationAssetValidationIssue {
   return {
     id,
@@ -336,6 +381,8 @@ function inspectManifestEntryStructure(entry: AnimationManifestEntry): Animation
   }
   const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry);
   if (rootMotionPolicyIssue) issues.push({ id, severity: "error", message: rootMotionPolicyIssue });
+  const requiredCoverageIssue = manifestRequiredCoverageIssue(entry);
+  if (requiredCoverageIssue) issues.push({ id, severity: "error", message: requiredCoverageIssue });
   return issues;
 }
 

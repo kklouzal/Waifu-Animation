@@ -6,6 +6,7 @@ import {
   resolveManifestPlaybackWindow,
   rootCarrierTranslationTrackHasMotion
 } from "./manifest-clip-helpers.js";
+import { type HumanoidBoneName, isHumanoidBoneName } from "./skeleton.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
 export type AnimationManifestFormat = typeof WAIFU_ANIMATION_BINARY_FORMAT | (string & {});
@@ -62,6 +63,10 @@ export type RootMotionMetadata = {
   policy: RootMotionPolicy;
   provenance: RootMotionProvenance;
 };
+export type RequiredAnimationCoverage = {
+  requiredHumanBones: HumanoidBoneName[];
+  requiredJoints: string[];
+};
 
 export type AssetLoader = (url: string) => Promise<unknown>;
 
@@ -92,6 +97,8 @@ export function validateManifest(manifest: AnimationManifest): string[] {
     }
     const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry);
     if (rootMotionPolicyIssue) issues.push(`${entry.id || "<unknown>"} ${rootMotionPolicyIssue}`);
+    const coverageIssue = manifestRequiredCoverageIssue(entry);
+    if (coverageIssue) issues.push(`${entry.id || "<unknown>"} ${coverageIssue}`);
   }
   return issues;
 }
@@ -226,6 +233,43 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
   return null;
 }
 
+export function manifestRequiredCoverageIssue(entry: AnimationManifestEntry): string | null {
+  const source = entry.source ?? {};
+  if (source.requiredHumanBones !== undefined) {
+    const bones = source.requiredHumanBones;
+    if (!Array.isArray(bones)) return "has invalid source.requiredHumanBones metadata";
+    for (const bone of bones) {
+      if (!isHumanoidBoneName(bone)) return `has invalid source.requiredHumanBones entry ${formatUnknownValue(bone)}`;
+    }
+  }
+  if (source.requiredJoints !== undefined) {
+    const joints = source.requiredJoints;
+    if (!Array.isArray(joints)) return "has invalid source.requiredJoints metadata";
+    for (const joint of joints) {
+      if (typeof joint !== "string" || joint.length === 0)
+        return `has invalid source.requiredJoints entry ${formatUnknownValue(joint)}`;
+    }
+  }
+  return null;
+}
+
+export function readRequiredAnimationCoverage(entry: AnimationManifestEntry): RequiredAnimationCoverage {
+  if (manifestRequiredCoverageIssue(entry)) return { requiredHumanBones: [], requiredJoints: [] };
+  const source = entry.source ?? {};
+  return {
+    requiredHumanBones: Array.isArray(source.requiredHumanBones)
+      ? Array.from(new Set(source.requiredHumanBones.filter(isHumanoidBoneName))).sort()
+      : [],
+    requiredJoints: Array.isArray(source.requiredJoints)
+      ? Array.from(
+          new Set(
+            source.requiredJoints.filter((joint): joint is string => typeof joint === "string" && joint.length > 0)
+          )
+        ).sort()
+      : []
+  };
+}
+
 function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {
   const clipPolicy = clip.metadata?.rootMotionPolicy;
   if (clipPolicy !== undefined && !isRootMotionPolicy(clipPolicy))
@@ -327,7 +371,8 @@ function manifestRejectionIssue(entry: AnimationManifestEntry, duplicateIds = ne
   return (
     manifestStructuralRejectionIssue(entry, duplicateIds) ??
     manifestValidationStatusIssue(entry) ??
-    manifestRootMotionPolicyIssue(entry)
+    manifestRootMotionPolicyIssue(entry) ??
+    manifestRequiredCoverageIssue(entry)
   );
 }
 
