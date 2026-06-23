@@ -231,7 +231,7 @@ export function updateFootPlantStabilizer(
     const planted = (hasUsableContact || inGrace) && influence > 1e-5;
     const groundContact = blockedContact
       ? undefined
-      : observedGroundContact ?? (inGrace ? previous.groundContact : undefined);
+      : (observedGroundContact ?? (inGrace ? previous.groundContact : undefined));
     const stateEntry: FootPlantStabilizerLegState = {
       id,
       influence,
@@ -261,9 +261,7 @@ export function createFootPlantStabilizerObservations(result: FootPlantResult): 
     planted: leg.planted,
     ...(leg.planted || leg.skippedReason !== "missing-ground-contact" ? { active: leg.planted } : {}),
     contactConfidence: leg.planted ? 1 : 0,
-    ...(leg.planted && leg.groundPoint
-      ? { groundContact: { point: leg.groundPoint, normal: leg.groundNormal } }
-      : {}),
+    ...(leg.planted && leg.groundPoint ? { groundContact: { point: leg.groundPoint, normal: leg.groundNormal } } : {}),
     ...(leg.skippedReason === undefined ? {} : { skippedReason: leg.skippedReason })
   }));
 }
