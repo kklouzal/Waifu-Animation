@@ -408,6 +408,11 @@ export async function runMotionRootMotionTests(): Promise<void> {
     Math.abs(synchronizedLocomotion.synchronizedDuration - 0.75) < 1e-6,
     "locomotion speed sync should use weighted clip durations as the shared cycle"
   );
+  assert.equal(
+    synchronizedLocomotion.activeWeight,
+    1,
+    "locomotion speed sync should accumulate each active blend weight once"
+  );
   assert.deepEqual(
     synchronizedLocomotion.layers.map((layer) => layer.weight),
     [0.5, 0.5, 0],
@@ -426,10 +431,33 @@ export async function runMotionRootMotionTests(): Promise<void> {
       Math.abs(synchronizedLocomotion.layers[1]!.time - 0.25) < 1e-6,
     "synchronized locomotion should report per-clip local times at the shared phase"
   );
+  const equallyWeightedLocomotion = synchronizeLocomotionPlayback([
+    { id: "walk", duration: 2, weight: 1 },
+    { id: "run", duration: 4, weight: 1 }
+  ]);
+  assert.equal(
+    equallyWeightedLocomotion.activeWeight,
+    2,
+    "two active locomotion layers should contribute two units of active weight"
+  );
+  assert.ok(
+    Math.abs(equallyWeightedLocomotion.synchronizedDuration - 3) < 1e-6,
+    "two equally weighted locomotion layers should synchronize to their average duration"
+  );
+  assert.deepEqual(
+    equallyWeightedLocomotion.layers.map((layer) => layer.normalizedWeight),
+    [0.5, 0.5],
+    "locomotion output normalized weights should remain based on total layer weight"
+  );
   const zeroLocomotionSync = synchronizeLocomotionPlayback([
     { id: "zero-duration", duration: 0, weight: 1 },
     { id: "zero-weight", duration: 1, weight: 0 }
   ]);
+  assert.equal(
+    zeroLocomotionSync.activeWeight,
+    0,
+    "inactive locomotion layers should not contribute active weight"
+  );
   assert.equal(
     zeroLocomotionSync.synchronizedDuration,
     0,
