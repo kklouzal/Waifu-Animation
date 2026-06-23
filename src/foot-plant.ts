@@ -82,6 +82,7 @@ export type FootPlantStabilizerLegState = {
   contactConfidence: number;
   graceSecondsRemaining: number;
   planted: boolean;
+  groundContact?: GroundContact;
 };
 
 export type FootPlantStabilizerState = {
@@ -95,6 +96,7 @@ export type FootPlantStabilizerObservation = {
   contactConfidence?: number;
   influence?: number;
   skippedReason?: string;
+  groundContact?: GroundContact;
 };
 
 export type FootPlantStabilizerOptions = {
@@ -113,6 +115,7 @@ export type FootPlantStabilizedLeg = {
   planted: boolean;
   contactConfidence: number;
   graceSecondsRemaining: number;
+  groundContact?: GroundContact;
 };
 
 export type FootPlantStabilizerUpdate = {
@@ -204,6 +207,10 @@ export function updateFootPlantStabilizer(
     const blockedContact =
       observation.active === false ||
       (observation.skippedReason !== undefined && observation.skippedReason !== "missing-ground-contact");
+    const observedGroundContact =
+      hasUsableContact && !blockedContact && observation.groundContact
+        ? sanitizeGroundContact(observation.groundContact, [0, 0, 0])
+        : undefined;
     const targetInfluence = hasUsableContact && !blockedContact ? contactConfidence * requestedInfluence : 0;
     const graceSecondsRemaining =
       hasUsableContact && !blockedContact
@@ -222,12 +229,16 @@ export function updateFootPlantStabilizer(
         );
     const influence = clampRange(nextInfluence, minInfluence, maxInfluence);
     const planted = (hasUsableContact || inGrace) && influence > 1e-5;
+    const groundContact = blockedContact
+      ? undefined
+      : observedGroundContact ?? (inGrace ? previous.groundContact : undefined);
     const stateEntry: FootPlantStabilizerLegState = {
       id,
       influence,
       contactConfidence: hasUsableContact ? contactConfidence : inGrace ? previous.contactConfidence : 0,
       graceSecondsRemaining,
-      planted
+      planted,
+      ...(groundContact === undefined ? {} : { groundContact })
     };
     nextState.push(stateEntry);
     stabilized.push({
@@ -236,7 +247,8 @@ export function updateFootPlantStabilizer(
       active: influence > 1e-5,
       planted,
       contactConfidence: stateEntry.contactConfidence,
-      graceSecondsRemaining
+      graceSecondsRemaining,
+      ...(groundContact === undefined ? {} : { groundContact })
     });
   }
 
@@ -247,8 +259,11 @@ export function createFootPlantStabilizerObservations(result: FootPlantResult): 
   return result.legs.map((leg) => ({
     id: leg.id,
     planted: leg.planted,
-    active: leg.planted,
+    ...(leg.planted || leg.skippedReason !== "missing-ground-contact" ? { active: leg.planted } : {}),
     contactConfidence: leg.planted ? 1 : 0,
+    ...(leg.planted && leg.groundPoint
+      ? { groundContact: { point: leg.groundPoint, normal: leg.groundNormal } }
+      : {}),
     ...(leg.skippedReason === undefined ? {} : { skippedReason: leg.skippedReason })
   }));
 }
@@ -264,6 +279,7 @@ export function applyFootPlantStabilizedInfluence(
     const influence = clamp01((Number.isFinite(leg.influence) ? (leg.influence as number) : 1) * result.influence);
     const next: FootPlantLegInput = { ...leg, influence };
     if (!result.active) delete next.ground;
+    else if (result.planted && !next.ground && result.groundContact) next.ground = result.groundContact;
     return next;
   });
 }
@@ -614,7 +630,10 @@ function sanitizeStabilizerLegState(input: FootPlantStabilizerLegState): FootPla
     influence: clamp01(input.influence),
     contactConfidence: clamp01(input.contactConfidence),
     graceSecondsRemaining: finiteNonNegative(input.graceSecondsRemaining, 0),
-    planted: input.planted === true
+    planted: input.planted === true,
+    ...(input.groundContact === undefined
+      ? {}
+      : { groundContact: sanitizeGroundContact(input.groundContact, [0, 0, 0]) })
   };
 }
 

@@ -810,6 +810,57 @@ export function runIkFootPlantTests(): void {
     1,
     "one-frame missing contacts inside grace should preserve stabilized influence"
   );
+  const gracePlantedLegInput = {
+    id: "left",
+    hip: [0, 1, 0] as [number, number, number],
+    knee: [0, 0.5, 0] as [number, number, number],
+    ankle: [0, 0.1, 0] as [number, number, number],
+    ground: {
+      point: [0, 0, 0] as [number, number, number],
+      normal: [0, 1, 0] as [number, number, number]
+    }
+  };
+  const cachedContactPlant = solveFootPlant([gracePlantedLegInput], { footHeight: 0.08 });
+  const cachedContactStabilizer = updateFootPlantStabilizer(
+    undefined,
+    createFootPlantStabilizerObservations(cachedContactPlant),
+    { deltaSeconds: 0.1, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.05 }
+  );
+  const missingContactPlant = solveFootPlant([
+    {
+      id: "left",
+      hip: [0, 1, 0],
+      knee: [0, 0.5, 0],
+      ankle: [0, 0.1, 0]
+    }
+  ]);
+  const missingContactGrace = updateFootPlantStabilizer(
+    cachedContactStabilizer.state,
+    createFootPlantStabilizerObservations(missingContactPlant),
+    { deltaSeconds: 0.025, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.05 }
+  );
+  const graceStabilizedInputs = applyFootPlantStabilizedInfluence(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.1, 0]
+      }
+    ],
+    missingContactGrace.legs
+  );
+  const graceSolvedFootPlant = solveFootPlant(graceStabilizedInputs, { footHeight: 0.08 });
+  assert.deepEqual(
+    graceStabilizedInputs[0]!.ground?.point,
+    [0, 0, 0],
+    "stabilized missing-contact grace should reuse the last valid ground contact"
+  );
+  assert.equal(
+    graceSolvedFootPlant.plantedCount,
+    1,
+    "stabilized missing-contact grace should keep the leg solvable for one dropped raycast frame"
+  );
   const blendOutStabilizer = updateFootPlantStabilizer(
     graceStabilizer.state,
     [{ id: "left", planted: false, skippedReason: "missing-ground-contact" }],
@@ -837,11 +888,28 @@ export function runIkFootPlantTests(): void {
           influence: Number.POSITIVE_INFINITY,
           contactConfidence: Number.NaN,
           graceSecondsRemaining: Number.NaN,
-          planted: true
+          planted: true,
+          groundContact: {
+            point: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+            normal: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+            rayStart: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
+          }
         }
       ]
     },
-    [{ id: "left", planted: true, contactConfidence: Number.NaN, influence: Number.POSITIVE_INFINITY }],
+    [
+      {
+        id: "left",
+        planted: true,
+        contactConfidence: Number.NaN,
+        influence: Number.POSITIVE_INFINITY,
+        groundContact: {
+          point: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+          normal: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+          rayStart: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
+        }
+      }
+    ],
     {
       deltaSeconds: Number.NaN,
       blendInSeconds: Number.NaN,
@@ -861,6 +929,16 @@ export function runIkFootPlantTests(): void {
         Number.isFinite(leg.graceSecondsRemaining)
     ),
     "foot-plant stabilizer should keep non-finite state/options deterministic and clamped"
+  );
+  assert.ok(
+    finiteStabilizer.legs.every(
+      (leg) =>
+        leg.groundContact !== undefined &&
+        leg.groundContact.point.every(Number.isFinite) &&
+        (leg.groundContact.normal?.every(Number.isFinite) ?? true) &&
+        (leg.groundContact.rayStart?.every(Number.isFinite) ?? true)
+    ),
+    "foot-plant stabilizer should sanitize cached ground contacts"
   );
   const stabilizedInputs = applyFootPlantStabilizedInfluence(
     [
