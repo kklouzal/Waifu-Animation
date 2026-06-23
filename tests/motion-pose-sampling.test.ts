@@ -680,6 +680,108 @@ export async function runMotionPoseSamplingTests(): Promise<void> {
     ),
     "validateClip should report unknown humanoid track identifiers without requiring a skeleton"
   );
+  const noSkeletonMixedTargetClip: AnimationClip = {
+    id: "no-skeleton-mixed-targets",
+    duration: 1,
+    tracks: [
+      { humanBone: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+      { joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) }
+    ]
+  };
+  assert.equal(
+    validateClip(noSkeletonMixedTargetClip).some((issue) => issue.message.startsWith("duplicate target channel")),
+    false,
+    "validateClip should not treat same-label joint and humanBone tracks as duplicate channels without a skeleton"
+  );
+  const noSkeletonDuplicateJointClip: AnimationClip = {
+    id: "no-skeleton-duplicate-joint",
+    duration: 1,
+    tracks: [
+      { joint: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+      { joint: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) }
+    ]
+  };
+  assert.ok(
+    validateClip(noSkeletonDuplicateJointClip).some(
+      (issue) =>
+        issue.track === 1 &&
+        issue.joint === "head" &&
+        issue.property === "rotation" &&
+        issue.message === "duplicate target channel head.rotation conflicts with track 0 (head.rotation)"
+    ),
+    "validateClip should still report same-kind duplicate channels without a skeleton"
+  );
+  const duplicateHumanoidRotationClip: AnimationClip = {
+    id: "duplicate-humanoid-rotation",
+    duration: 1,
+    tracks: [
+      { humanBone: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+      { humanBone: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) }
+    ]
+  };
+  const duplicateHumanoidRotationIssues = validateClip(duplicateHumanoidRotationClip, skeleton);
+  assert.ok(
+    duplicateHumanoidRotationIssues.some(
+      (issue) =>
+        issue.track === 1 &&
+        issue.joint === "head[2]" &&
+        issue.property === "rotation" &&
+        issue.message === "duplicate target channel head[2].rotation conflicts with track 0 (head[2].rotation)"
+    ),
+    "validateClip should report duplicate humanoid rotation channels by resolved skeleton joint"
+  );
+  const duplicateAliasRotationClip: AnimationClip = {
+    id: "duplicate-alias-rotation",
+    duration: 1,
+    tracks: [
+      { humanBone: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+      { joint: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) }
+    ]
+  };
+  assert.ok(
+    validateClip(duplicateAliasRotationClip, skeleton).some(
+      (issue) =>
+        issue.track === 1 &&
+        issue.joint === "head[2]" &&
+        issue.property === "quaternion" &&
+        issue.message === "duplicate target channel head[2].rotation conflicts with track 0 (head[2].rotation)"
+    ),
+    "validateClip should normalize rotation/quaternion aliases before checking duplicate skeleton channels"
+  );
+  const distinctSameJointPropertiesClip: AnimationClip = {
+    id: "distinct-same-joint-properties",
+    duration: 1,
+    tracks: [
+      { humanBone: "head", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+      { joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }
+    ]
+  };
+  assert.equal(
+    validateClip(distinctSameJointPropertiesClip, skeleton).some((issue) =>
+      issue.message.startsWith("duplicate target channel")
+    ),
+    false,
+    "validateClip should allow distinct transform properties on the same resolved joint"
+  );
+  const unresolvedDuplicateClip: AnimationClip = {
+    id: "unresolved-duplicate",
+    duration: 1,
+    tracks: [
+      { joint: "missing", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+      { joint: "missing", property: "rotation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) }
+    ]
+  };
+  const unresolvedDuplicateIssues = validateClip(unresolvedDuplicateClip, skeleton);
+  assert.equal(
+    unresolvedDuplicateIssues.filter((issue) => issue.message === "track does not map to skeleton").length,
+    2,
+    "validateClip should keep existing unresolved-target validation for each unmapped track"
+  );
+  assert.equal(
+    unresolvedDuplicateIssues.some((issue) => issue.message.startsWith("duplicate target channel")),
+    false,
+    "validateClip should not report duplicate target channels for tracks that do not resolve to a skeleton joint"
+  );
   assert.throws(
     () => sampleTrack(unsupportedPropertyClip.tracks[0]!, 0),
     /unsupported animation track property visibility/,

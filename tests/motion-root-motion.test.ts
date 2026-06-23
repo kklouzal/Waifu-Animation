@@ -453,11 +453,7 @@ export async function runMotionRootMotionTests(): Promise<void> {
     { id: "zero-duration", duration: 0, weight: 1 },
     { id: "zero-weight", duration: 1, weight: 0 }
   ]);
-  assert.equal(
-    zeroLocomotionSync.activeWeight,
-    0,
-    "inactive locomotion layers should not contribute active weight"
-  );
+  assert.equal(zeroLocomotionSync.activeWeight, 0, "inactive locomotion layers should not contribute active weight");
   assert.equal(
     zeroLocomotionSync.synchronizedDuration,
     0,

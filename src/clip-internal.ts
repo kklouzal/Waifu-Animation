@@ -307,7 +307,8 @@ function resolvedTrackChannel(
     const joint = skeleton.joints[jointIndex]!;
     return { key: `${jointIndex}:${property}`, joint: `${joint.name}[${jointIndex}]` };
   }
-  return { key: `${String(jointName)}:${property}`, joint: String(jointName) };
+  const targetKind = track.joint !== undefined ? "joint" : "humanBone";
+  return { key: `${targetKind}:${String(jointName)}:${property}`, joint: String(jointName) };
 }
 
 export function trackStride(property: string): 3 | 4 {
