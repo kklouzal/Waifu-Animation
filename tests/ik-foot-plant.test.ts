@@ -5,11 +5,13 @@ import {
   applyAimIkChildToParentChainToPose,
   applyAimIkModelCorrection,
   applyThreeFootPlantResult,
+  applyFootPlantStabilizedInfluence,
   applyTwoBoneIkLocalCorrections,
   assert,
   clearThreeFootPlantOffsets,
   clonePose,
   composeMat4,
+  createFootPlantStabilizerObservations,
   createHumanoidLookAtAimChain,
   createSkeleton,
   dotVec3,
@@ -25,6 +27,7 @@ import {
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
   solveTwoBoneIkModel,
+  updateFootPlantStabilizer,
   updateLocalToModelPoseRange
 } from "./test-api.js";
 import { distance3, matrixDirection, modelPosition, quaternionNearlyEqual, vectorNearlyEqual } from "./test-helpers.js";
@@ -778,6 +781,106 @@ export function runIkFootPlantTests(): void {
     steepSlopeFootPlant.issues.includes("left: ground slope too steep"),
     "slope-rejected foot plant results should expose a clear issue"
   );
+  let stabilizer = updateFootPlantStabilizer(undefined, [{ id: "left", planted: true }], {
+    deltaSeconds: 0.05,
+    blendInSeconds: 0.1,
+    blendOutSeconds: 0.2,
+    contactGraceSeconds: 0.05
+  });
+  assert.equal(stabilizer.legs[0]!.active, true);
+  assert.ok(
+    stabilizer.legs[0]!.influence > 0.49 && stabilizer.legs[0]!.influence < 0.51,
+    "foot-plant stabilizer should blend contact influence in over time"
+  );
+  stabilizer = updateFootPlantStabilizer(stabilizer.state, [{ id: "left", planted: true }], {
+    deltaSeconds: 0.05,
+    blendInSeconds: 0.1,
+    blendOutSeconds: 0.2,
+    contactGraceSeconds: 0.05
+  });
+  assert.equal(stabilizer.legs[0]!.influence, 1);
+  const graceStabilizer = updateFootPlantStabilizer(
+    stabilizer.state,
+    [{ id: "left", planted: false, skippedReason: "missing-ground-contact" }],
+    { deltaSeconds: 0.025, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.05 }
+  );
+  assert.equal(graceStabilizer.legs[0]!.active, true);
+  assert.equal(
+    graceStabilizer.legs[0]!.influence,
+    1,
+    "one-frame missing contacts inside grace should preserve stabilized influence"
+  );
+  const blendOutStabilizer = updateFootPlantStabilizer(
+    graceStabilizer.state,
+    [{ id: "left", planted: false, skippedReason: "missing-ground-contact" }],
+    { deltaSeconds: 0.1, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.05 }
+  );
+  assert.ok(
+    blendOutStabilizer.legs[0]!.influence > 0.49 && blendOutStabilizer.legs[0]!.influence < 0.51,
+    "foot-plant stabilizer should blend out after contact grace expires"
+  );
+  const blockedStabilizer = updateFootPlantStabilizer(
+    stabilizer.state,
+    [{ id: "left", planted: false, active: false, skippedReason: "ground-slope-too-steep" }],
+    { deltaSeconds: 0.1, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.25 }
+  );
+  assert.equal(blockedStabilizer.legs[0]!.graceSecondsRemaining, 0);
+  assert.ok(
+    blockedStabilizer.legs[0]!.influence < 1,
+    "blocked contacts should drop influence immediately without missing-contact grace"
+  );
+  const finiteStabilizer = updateFootPlantStabilizer(
+    {
+      legs: [
+        {
+          id: "left",
+          influence: Number.POSITIVE_INFINITY,
+          contactConfidence: Number.NaN,
+          graceSecondsRemaining: Number.NaN,
+          planted: true
+        }
+      ]
+    },
+    [{ id: "left", planted: true, contactConfidence: Number.NaN, influence: Number.POSITIVE_INFINITY }],
+    {
+      deltaSeconds: Number.NaN,
+      blendInSeconds: Number.NaN,
+      blendOutSeconds: Number.NaN,
+      contactGraceSeconds: Number.NaN,
+      minInfluence: Number.NaN,
+      maxInfluence: Number.POSITIVE_INFINITY
+    }
+  );
+  assert.ok(
+    finiteStabilizer.legs.every(
+      (leg) =>
+        Number.isFinite(leg.influence) &&
+        leg.influence >= 0 &&
+        leg.influence <= 1 &&
+        Number.isFinite(leg.contactConfidence) &&
+        Number.isFinite(leg.graceSecondsRemaining)
+    ),
+    "foot-plant stabilizer should keep non-finite state/options deterministic and clamped"
+  );
+  const stabilizedInputs = applyFootPlantStabilizedInfluence(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.1, 0],
+        ground: { point: [0, 0, 0], normal: [0, 1, 0] }
+      }
+    ],
+    updateFootPlantStabilizer(undefined, createFootPlantStabilizerObservations(steepSlopeFootPlant), {
+      deltaSeconds: 0.1,
+      blendInSeconds: 0.1,
+      blendOutSeconds: 0.1
+    }).legs
+  );
+  const stabilizedFootPlant = solveFootPlant(stabilizedInputs, { footHeight: 0.08 });
+  assert.equal(stabilizedInputs[0]!.ground, undefined);
+  assert.equal(stabilizedFootPlant.plantedCount, 0, "stabilized inactive influence should feed solveFootPlant safely");
   const nonFiniteSlopeThresholdFootPlant = solveFootPlant(
     [
       {

@@ -76,6 +76,50 @@ export type FootPlantResult = {
   issues: string[];
 };
 
+export type FootPlantStabilizerLegState = {
+  id: string;
+  influence: number;
+  contactConfidence: number;
+  graceSecondsRemaining: number;
+  planted: boolean;
+};
+
+export type FootPlantStabilizerState = {
+  legs: FootPlantStabilizerLegState[];
+};
+
+export type FootPlantStabilizerObservation = {
+  id: string;
+  planted?: boolean;
+  active?: boolean;
+  contactConfidence?: number;
+  influence?: number;
+  skippedReason?: string;
+};
+
+export type FootPlantStabilizerOptions = {
+  deltaSeconds?: number;
+  blendInSeconds?: number;
+  blendOutSeconds?: number;
+  contactGraceSeconds?: number;
+  minInfluence?: number;
+  maxInfluence?: number;
+};
+
+export type FootPlantStabilizedLeg = {
+  id: string;
+  influence: number;
+  active: boolean;
+  planted: boolean;
+  contactConfidence: number;
+  graceSecondsRemaining: number;
+};
+
+export type FootPlantStabilizerUpdate = {
+  state: FootPlantStabilizerState;
+  legs: FootPlantStabilizedLeg[];
+};
+
 export type OzzFootIkSide = "left" | "right";
 
 export type OzzFootIkRay = {
@@ -127,6 +171,102 @@ export type OzzFootIkLegResult = FootPlantLegResult & {
 export type OzzFootIkResult = Omit<FootPlantResult, "legs"> & {
   legs: OzzFootIkLegResult[];
 };
+
+export function updateFootPlantStabilizer(
+  previousState: FootPlantStabilizerState | undefined,
+  observations: readonly FootPlantStabilizerObservation[],
+  options: FootPlantStabilizerOptions = {}
+): FootPlantStabilizerUpdate {
+  const deltaSeconds = finiteNonNegative(options.deltaSeconds, 0);
+  const blendInSeconds = finiteNonNegative(options.blendInSeconds, 0.08);
+  const blendOutSeconds = finiteNonNegative(options.blendOutSeconds, 0.12);
+  const contactGraceSeconds = finiteNonNegative(options.contactGraceSeconds, 0.04);
+  const minInfluence = clamp01(options.minInfluence ?? 0);
+  const maxInfluence = Math.max(minInfluence, clamp01(options.maxInfluence ?? 1));
+  const previousById = new Map((previousState?.legs ?? []).map((leg) => [leg.id, sanitizeStabilizerLegState(leg)]));
+  const nextState: FootPlantStabilizerLegState[] = [];
+  const stabilized: FootPlantStabilizedLeg[] = [];
+
+  for (const observation of observations) {
+    const id = String(observation.id);
+    const previous = previousById.get(id) ?? {
+      id,
+      influence: 0,
+      contactConfidence: 0,
+      graceSecondsRemaining: 0,
+      planted: false
+    };
+    const rawContactConfidence =
+      observation.contactConfidence === undefined ? (observation.planted ? 1 : 0) : observation.contactConfidence;
+    const contactConfidence = clamp01(Number.isFinite(rawContactConfidence) ? rawContactConfidence : 0);
+    const requestedInfluence = clamp01(observation.influence ?? 1);
+    const hasUsableContact = observation.active !== false && (observation.planted === true || contactConfidence > 0);
+    const blockedContact =
+      observation.active === false ||
+      (observation.skippedReason !== undefined && observation.skippedReason !== "missing-ground-contact");
+    const targetInfluence = hasUsableContact && !blockedContact ? contactConfidence * requestedInfluence : 0;
+    const graceSecondsRemaining =
+      hasUsableContact && !blockedContact
+        ? contactGraceSeconds
+        : blockedContact
+          ? 0
+          : Math.max(0, previous.graceSecondsRemaining - deltaSeconds);
+    const inGrace = !hasUsableContact && !blockedContact && graceSecondsRemaining > 0;
+    const nextInfluence = inGrace
+      ? previous.influence
+      : stepInfluence(
+          previous.influence,
+          targetInfluence,
+          deltaSeconds,
+          targetInfluence >= previous.influence ? blendInSeconds : blendOutSeconds
+        );
+    const influence = clampRange(nextInfluence, minInfluence, maxInfluence);
+    const planted = (hasUsableContact || inGrace) && influence > 1e-5;
+    const stateEntry: FootPlantStabilizerLegState = {
+      id,
+      influence,
+      contactConfidence: hasUsableContact ? contactConfidence : inGrace ? previous.contactConfidence : 0,
+      graceSecondsRemaining,
+      planted
+    };
+    nextState.push(stateEntry);
+    stabilized.push({
+      id,
+      influence,
+      active: influence > 1e-5,
+      planted,
+      contactConfidence: stateEntry.contactConfidence,
+      graceSecondsRemaining
+    });
+  }
+
+  return { state: { legs: nextState }, legs: stabilized };
+}
+
+export function createFootPlantStabilizerObservations(result: FootPlantResult): FootPlantStabilizerObservation[] {
+  return result.legs.map((leg) => ({
+    id: leg.id,
+    planted: leg.planted,
+    active: leg.planted,
+    contactConfidence: leg.planted ? 1 : 0,
+    ...(leg.skippedReason === undefined ? {} : { skippedReason: leg.skippedReason })
+  }));
+}
+
+export function applyFootPlantStabilizedInfluence(
+  input: readonly FootPlantLegInput[],
+  stabilized: readonly FootPlantStabilizedLeg[]
+): FootPlantLegInput[] {
+  const stabilizedById = new Map(stabilized.map((leg) => [leg.id, leg]));
+  return input.map((leg) => {
+    const result = stabilizedById.get(leg.id);
+    if (!result) return { ...leg };
+    const influence = clamp01((Number.isFinite(leg.influence) ? (leg.influence as number) : 1) * result.influence);
+    const next: FootPlantLegInput = { ...leg, influence };
+    if (!result.active) delete next.ground;
+    return next;
+  });
+}
 
 export function computeAnkleTargetFromGround(contact: GroundContact, footHeight: number): Vec3 {
   const point = finiteVec3(contact.point, [0, 0, 0]);
@@ -466,6 +606,31 @@ function createSkippedFootPlantLegResult(
 function resolveMinGroundNormalDot(maxGroundSlopeAngle: number | undefined): number | undefined {
   if (maxGroundSlopeAngle === undefined || !Number.isFinite(maxGroundSlopeAngle)) return undefined;
   return Math.cos(Math.min(Math.PI, Math.max(0, maxGroundSlopeAngle)));
+}
+
+function sanitizeStabilizerLegState(input: FootPlantStabilizerLegState): FootPlantStabilizerLegState {
+  return {
+    id: String(input.id),
+    influence: clamp01(input.influence),
+    contactConfidence: clamp01(input.contactConfidence),
+    graceSecondsRemaining: finiteNonNegative(input.graceSecondsRemaining, 0),
+    planted: input.planted === true
+  };
+}
+
+function stepInfluence(current: number, target: number, deltaSeconds: number, blendSeconds: number): number {
+  const safeCurrent = clamp01(current);
+  const safeTarget = clamp01(target);
+  if (blendSeconds <= 1e-8) return safeTarget;
+  const step = deltaSeconds / blendSeconds;
+  if (!Number.isFinite(step) || step <= 0) return safeCurrent;
+  if (safeCurrent < safeTarget) return Math.min(safeTarget, safeCurrent + step);
+  return Math.max(safeTarget, safeCurrent - step);
+}
+
+function clampRange(value: number, min: number, max: number): number {
+  const finite = Number.isFinite(value) ? value : 0;
+  return Math.min(max, Math.max(min, finite));
 }
 
 function transformLinearVector(matrix: Mat4, vector: Vec3): Vec3 {
