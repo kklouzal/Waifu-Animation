@@ -38,8 +38,67 @@ function finiteAttentionWeight(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-function isEligibleAttentionTarget(target: AttentionTarget): boolean {
-  return finiteAttentionWeight(target.weight) > 0 && target.position.every(Number.isFinite);
+export type AttentionTargetSafetyOptions = {
+  minDistance?: number;
+  maxDistance?: number;
+  minForwardZ?: number;
+  minForwardCosine?: number;
+};
+
+export type AttentionTargetSafety =
+  | "safe"
+  | "nonFinitePosition"
+  | "nonPositiveWeight"
+  | "tooClose"
+  | "tooFar"
+  | "behind"
+  | "outsideYaw";
+
+const DEFAULT_ATTENTION_TARGET_SAFETY: Required<
+  Pick<AttentionTargetSafetyOptions, "minDistance" | "maxDistance" | "minForwardZ">
+> = {
+  minDistance: 0.05,
+  maxDistance: 40,
+  minForwardZ: 0
+};
+
+function finiteDistanceOption(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+function finiteCosineOption(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? clamp(value, -1, 1) : undefined;
+}
+
+export function classifyAttentionTargetSafety(
+  target: AttentionTarget,
+  options: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
+): AttentionTargetSafety {
+  if (finiteAttentionWeight(target.weight) <= 0) return "nonPositiveWeight";
+  const x = target.position[0];
+  const y = target.position[1];
+  const z = target.position[2];
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return "nonFinitePosition";
+  const distanceSq = x * x + y * y + z * z;
+  const minDistance = finiteDistanceOption(options.minDistance, DEFAULT_ATTENTION_TARGET_SAFETY.minDistance);
+  if (distanceSq < minDistance * minDistance) return "tooClose";
+  const maxDistance = finiteDistanceOption(options.maxDistance, DEFAULT_ATTENTION_TARGET_SAFETY.maxDistance);
+  if (maxDistance > 0 && distanceSq > maxDistance * maxDistance) return "tooFar";
+  const minForwardZ =
+    typeof options.minForwardZ === "number" && Number.isFinite(options.minForwardZ)
+      ? options.minForwardZ
+      : DEFAULT_ATTENTION_TARGET_SAFETY.minForwardZ;
+  if (z < minForwardZ) return "behind";
+  const minForwardCosine = finiteCosineOption(options.minForwardCosine);
+  if (minForwardCosine !== undefined && z / Math.sqrt(distanceSq) < minForwardCosine) return "outsideYaw";
+  return "safe";
+}
+
+export function isSafeAttentionTarget(
+  target: AttentionTarget,
+  options: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
+): boolean {
+  return classifyAttentionTargetSafety(target, options) === "safe";
 }
 
 export function distributeLookAt(localTarget: Vec3, options: LookAtOptions = {}): LookAtDistribution {
@@ -81,7 +140,8 @@ export class AttentionScheduler {
     nowMs: number,
     targets: readonly AttentionTarget[],
     minDwellMs = 900,
-    maxDwellMs = 3200
+    maxDwellMs = 3200,
+    safetyOptions: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
   ): AttentionTarget | null {
     if (targets.length === 0) {
       this.currentId = null;
@@ -90,14 +150,14 @@ export class AttentionScheduler {
     }
     const now = finiteNonNegative(nowMs, 0);
     const currentTarget = this.currentId
-      ? (targets.find((target) => target.id === this.currentId && isEligibleAttentionTarget(target)) ?? null)
+      ? (targets.find((target) => target.id === this.currentId && isSafeAttentionTarget(target, safetyOptions)) ?? null)
       : null;
-    if (now >= this.nextSwitchAt || !currentTarget || !isEligibleAttentionTarget(currentTarget)) {
+    if (now >= this.nextSwitchAt || !currentTarget || !isSafeAttentionTarget(currentTarget, safetyOptions)) {
       let maxWeight = 0;
       let lastEligible = -1;
       for (let i = 0; i < targets.length; i += 1) {
         const target = targets[i]!;
-        if (!isEligibleAttentionTarget(target)) continue;
+        if (!isSafeAttentionTarget(target, safetyOptions)) continue;
         maxWeight = Math.max(maxWeight, finiteAttentionWeight(target.weight));
         lastEligible = i;
       }
@@ -109,14 +169,14 @@ export class AttentionScheduler {
       let total = 0;
       for (let i = 0; i < targets.length; i += 1) {
         const target = targets[i]!;
-        if (!isEligibleAttentionTarget(target)) continue;
+        if (!isSafeAttentionTarget(target, safetyOptions)) continue;
         total += finiteAttentionWeight(target.weight) / maxWeight;
       }
       let pick = this.random() * total;
       this.currentId = targets[lastEligible]!.id;
       for (let i = 0; i < targets.length; i += 1) {
         const target = targets[i]!;
-        if (!isEligibleAttentionTarget(target)) continue;
+        if (!isSafeAttentionTarget(target, safetyOptions)) continue;
         pick -= finiteAttentionWeight(target.weight) / maxWeight;
         if (pick <= 0) {
           this.currentId = target.id;
@@ -126,7 +186,9 @@ export class AttentionScheduler {
       const minDwell = finiteNonNegative(minDwellMs, 900);
       const maxDwell = Math.max(minDwell, finiteNonNegative(maxDwellMs, 3200));
       this.nextSwitchAt = now + randomRange(this.random, minDwell, maxDwell);
-      return targets.find((target) => target.id === this.currentId && isEligibleAttentionTarget(target)) ?? null;
+      return (
+        targets.find((target) => target.id === this.currentId && isSafeAttentionTarget(target, safetyOptions)) ?? null
+      );
     }
     return currentTarget;
   }

@@ -8,6 +8,7 @@ import {
   applyThreePresenceTargets,
   assert,
   breathingWeight,
+  classifyAttentionTargetSafety,
   composeFacialExpressions,
   dampAlpha,
   distributeLookAt,
@@ -108,6 +109,43 @@ export function runPresencePlanningTests(): void {
     { id: "valid-position", position: [0, 1, 1], weight: 1 }
   ]);
   assert.equal(finitePositionAttention?.id, "valid-position", "invalid attention target positions should be ignored");
+  assert.equal(
+    classifyAttentionTargetSafety({ id: "behind", position: [0, 0, -1], weight: 1 }),
+    "behind",
+    "attention target safety should classify targets behind the avatar"
+  );
+  assert.equal(
+    classifyAttentionTargetSafety({ id: "too-close", position: [0, 0, 0.01], weight: 1 }),
+    "tooClose",
+    "attention target safety should classify near-zero look-at targets"
+  );
+  assert.equal(
+    classifyAttentionTargetSafety({ id: "outside-yaw", position: [1, 0, 0], weight: 1 }, { minForwardCosine: 0.5 }),
+    "outsideYaw",
+    "attention target safety should support stricter yaw cones"
+  );
+  const unsafeFilteredAttention = new AttentionScheduler("attention-unsafe-filtered");
+  const forwardAttention = unsafeFilteredAttention.choose(1_000, [
+    { id: "behind", position: [0, 0, -1], weight: 100 },
+    { id: "too-close", position: [0, 0, 0.01], weight: 100 },
+    { id: "non-finite", position: [Number.NaN, 0, 1], weight: 100 },
+    { id: "zero-weight", position: [0, 0, 2], weight: 0 },
+    { id: "valid-forward", position: [0.2, 0, 2], weight: 1 }
+  ]);
+  assert.equal(
+    forwardAttention?.id,
+    "valid-forward",
+    "unsafe attention targets should be ignored while preserving a valid forward target"
+  );
+  const tooFarAttention = new AttentionScheduler("attention-too-far");
+  assert.equal(
+    tooFarAttention.choose(1_000, [
+      { id: "too-far", position: [0, 0, 100], weight: 100 },
+      { id: "valid-forward", position: [0, 0, 2], weight: 1 }
+    ])?.id,
+    "valid-forward",
+    "attention scheduler should ignore targets beyond the default maximum distance"
+  );
   const reorderedDwellAttention = new AttentionScheduler("attention-reorder-dwell");
   assert.equal(
     reorderedDwellAttention.choose(
@@ -179,6 +217,37 @@ export function runPresencePlanningTests(): void {
     )?.id,
     "replacement",
     "invalid current attention target should not be retained until dwell expires"
+  );
+  const unsafeCurrentAttention = new AttentionScheduler("attention-unsafe-current");
+  assert.equal(
+    unsafeCurrentAttention.choose(100, [{ id: "initial", position: [0, 0, 1], weight: 1 }], 10_000, 10_000)?.id,
+    "initial"
+  );
+  assert.equal(
+    unsafeCurrentAttention.choose(
+      101,
+      [
+        { id: "initial", position: [0, 0, -1], weight: 10 },
+        { id: "replacement", position: [0.1, 0, 1], weight: 1 }
+      ],
+      10_000,
+      10_000
+    )?.id,
+    "replacement",
+    "current attention target should switch before dwell expires when it becomes unsafe"
+  );
+  assert.equal(
+    unsafeCurrentAttention.choose(
+      102,
+      [
+        { id: "replacement", position: [0, 0, 0.01], weight: 1 },
+        { id: "behind", position: [0, 0, -1], weight: 1 }
+      ],
+      10_000,
+      10_000
+    ),
+    null,
+    "all unsafe targets should clear the current attention target"
   );
   const deterministicAttentionA = new AttentionScheduler("attention-deterministic");
   const deterministicAttentionB = new AttentionScheduler("attention-deterministic");
