@@ -709,8 +709,29 @@ export function runIkFootPlantTests(): void {
     ],
     { footHeight: 0.08, maxAnkleCorrection: 0.1 }
   );
+  assert.equal(clampedFootPlant.plantedCount, 1);
   assert.equal(clampedFootPlant.legs[0]!.clamped, true);
+  assert.equal(clampedFootPlant.legs[0]!.skippedReason, undefined);
   assert.ok(clampedFootPlant.legs[0]!.correctionDistance <= 0.1001);
+  const rejectAnkleCorrectionFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.4, 0],
+        ground: { point: [0, -1, 0], normal: [0, 1, 0] }
+      }
+    ],
+    { footHeight: 0.08, maxAnkleCorrection: 0.1, rejectUnreachable: true }
+  );
+  assert.equal(rejectAnkleCorrectionFootPlant.plantedCount, 0);
+  assert.equal(rejectAnkleCorrectionFootPlant.legs[0]!.planted, false);
+  assert.equal(rejectAnkleCorrectionFootPlant.legs[0]!.skippedReason, "ankle-correction-unreachable");
+  assert.ok(
+    rejectAnkleCorrectionFootPlant.issues.includes("left: ankle correction unreachable"),
+    "opt-in unreachable rejection should expose over-large ankle corrections as explicit issues"
+  );
   const zeroMaxAnkleCorrectionPlant = solveFootPlant(
     [
       {
@@ -876,9 +897,14 @@ export function runIkFootPlantTests(): void {
     { deltaSeconds: 0.1, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.25 }
   );
   assert.equal(blockedStabilizer.legs[0]!.graceSecondsRemaining, 0);
-  assert.ok(
-    blockedStabilizer.legs[0]!.influence < 1,
-    "blocked contacts should drop influence immediately without missing-contact grace"
+  assert.equal(blockedStabilizer.legs[0]!.active, false);
+  assert.equal(blockedStabilizer.legs[0]!.influence, 0);
+  assert.equal(blockedStabilizer.legs[0]!.contactConfidence, 0);
+  assert.equal(blockedStabilizer.legs[0]!.groundContact, undefined);
+  assert.equal(
+    blockedStabilizer.state.legs[0]!.groundContact,
+    undefined,
+    "blocked contacts should clear cached contacts immediately without missing-contact grace"
   );
   const finiteStabilizer = updateFootPlantStabilizer(
     {
@@ -976,6 +1002,63 @@ export function runIkFootPlantTests(): void {
     1,
     "non-finite slope thresholds should preserve default no-gate foot-plant behavior"
   );
+  const rejectMaxStretchFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 0, 0],
+        knee: [0, -1, 0],
+        ankle: [0, -2, 0],
+        ground: { point: [0.8, -1, 0], normal: [0, 1, 0] },
+        footHeight: 0,
+        maxAnkleCorrection: 3,
+        maxStretch: 0.5
+      }
+    ],
+    { footHeight: 0, maxAnkleCorrection: 3, maxPelvisOffset: 0.1, maxStretch: 0.5, rejectUnreachable: true }
+  );
+  assert.equal(rejectMaxStretchFootPlant.plantedCount, 0);
+  assert.equal(rejectMaxStretchFootPlant.legs[0]!.planted, false);
+  assert.equal(rejectMaxStretchFootPlant.legs[0]!.skippedReason, "ik-target-unreachable");
+  assert.ok(
+    rejectMaxStretchFootPlant.issues.includes("left: ik target unreachable"),
+    "opt-in unreachable rejection should skip targets that remain beyond configured IK reach"
+  );
+  assert.deepEqual(
+    rejectMaxStretchFootPlant.pelvisOffset,
+    [0, 0, 0],
+    "IK-rejected contacts should not keep their provisional ankle correction in pelvis lowering"
+  );
+  const unreachableContactStabilizer = updateFootPlantStabilizer(
+    cachedContactStabilizer.state,
+    createFootPlantStabilizerObservations(rejectMaxStretchFootPlant),
+    { deltaSeconds: 0.025, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.25 }
+  );
+  assert.equal(unreachableContactStabilizer.legs[0]!.active, false);
+  assert.equal(unreachableContactStabilizer.legs[0]!.influence, 0);
+  assert.equal(unreachableContactStabilizer.legs[0]!.graceSecondsRemaining, 0);
+  assert.equal(
+    unreachableContactStabilizer.legs[0]!.groundContact,
+    undefined,
+    "unreachable IK contacts should be treated as blocked, not transient missing-contact grace"
+  );
+  const reachableRejectFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 0, 0],
+        knee: [0, -1, 0],
+        ankle: [0, -2, 0],
+        ground: { point: [0, -2, 0], normal: [0, 1, 0] },
+        footHeight: 0,
+        maxAnkleCorrection: 1,
+        maxStretch: 1
+      }
+    ],
+    { footHeight: 0, maxAnkleCorrection: 1, maxStretch: 1, rejectUnreachable: true }
+  );
+  assert.equal(reachableRejectFootPlant.plantedCount, 1, "reachable opt-in contacts should still plant");
+  assert.equal(reachableRejectFootPlant.legs[0]!.skippedReason, undefined);
   const boundaryReachPlant = solveFootPlant(
     [
       {

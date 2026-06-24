@@ -51,6 +51,7 @@ export type FootPlantOptions = {
   maxAnkleCorrection?: number;
   maxStretch?: number;
   maxGroundSlopeAngle?: number;
+  rejectUnreachable?: boolean;
 };
 
 export type FootPlantLegResult = {
@@ -219,14 +220,16 @@ export function updateFootPlantStabilizer(
           ? 0
           : Math.max(0, previous.graceSecondsRemaining - deltaSeconds);
     const inGrace = !hasUsableContact && !blockedContact && graceSecondsRemaining > 0;
-    const nextInfluence = inGrace
-      ? previous.influence
-      : stepInfluence(
-          previous.influence,
-          targetInfluence,
-          deltaSeconds,
-          targetInfluence >= previous.influence ? blendInSeconds : blendOutSeconds
-        );
+    const nextInfluence = blockedContact
+      ? 0
+      : inGrace
+        ? previous.influence
+        : stepInfluence(
+            previous.influence,
+            targetInfluence,
+            deltaSeconds,
+            targetInfluence >= previous.influence ? blendInSeconds : blendOutSeconds
+          );
     const influence = clampRange(nextInfluence, minInfluence, maxInfluence);
     const planted = (hasUsableContact || inGrace) && influence > 1e-5;
     const groundContact = blockedContact
@@ -309,11 +312,11 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   const maxPelvisOffset = finiteNonNegative(options.maxPelvisOffset, 0.35);
   const maxAnkleCorrection = finiteNonNegative(options.maxAnkleCorrection, 0.5);
   const minGroundNormalDot = resolveMinGroundNormalDot(options.maxGroundSlopeAngle);
+  const rejectUnreachable = options.rejectUnreachable === true;
   const up = scaleVec3(down, -1);
   const legs: FootPlantLegResult[] = [];
   const issues: string[] = [];
   const sanitizedInput = input.map(sanitizeFootPlantLegInput);
-  let lowestCorrection = 0;
   let reachPelvisCorrection = 0;
 
   for (const leg of sanitizedInput) {
@@ -337,13 +340,22 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
       maxAnkleCorrection
     );
     const clamped = rawDistance > allowedCorrection + 1e-6;
+    if (rejectUnreachable && clamped) {
+      legs.push(
+        createSkippedFootPlantLegResult(leg, groundNormal, "ankle-correction-unreachable", leg.ground.point, {
+          targetAnkle: rawTarget,
+          ankleOffset: rawOffset,
+          correctionDistance: rawDistance
+        })
+      );
+      issues.push(`${leg.id}: ankle correction unreachable`);
+      continue;
+    }
     const targetAnkle = clamped
       ? addVec3(leg.ankle, scaleVec3(normalizeVec3(rawOffset, [0, 0, 0]), allowedCorrection))
       : rawTarget;
     const ankleOffset = subVec3(targetAnkle, leg.ankle);
     const correctionDistance = finiteLength(ankleOffset, 0);
-    const downwardCorrection = Math.max(0, dotVec3(ankleOffset, down));
-    lowestCorrection = Math.max(lowestCorrection, downwardCorrection);
     legs.push({
       id: leg.id,
       planted: true,
@@ -378,9 +390,29 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     const distance = lengthVec3(rootToTarget);
     const horizontalDistanceSquared = Math.max(0, distance * distance - downDistance * downDistance);
     const maxDownDistanceSquared = maxReach * maxReach - horizontalDistanceSquared;
-    if (maxDownDistanceSquared < -1e-8) continue;
+    if (maxDownDistanceSquared < -1e-8) {
+      if (rejectUnreachable) {
+        result.skippedReason = "ik-target-unreachable";
+        result.planted = false;
+        issues.push(`${leg.id}: ik target unreachable`);
+      }
+      continue;
+    }
     const maxDownDistance = Math.sqrt(Math.max(0, maxDownDistanceSquared));
-    reachPelvisCorrection = Math.max(reachPelvisCorrection, (downDistance - maxDownDistance) / influence);
+    const requiredPelvisCorrection = (downDistance - maxDownDistance) / influence;
+    if (rejectUnreachable && requiredPelvisCorrection > maxPelvisOffset + 1e-6) {
+      result.skippedReason = "ik-target-unreachable";
+      result.planted = false;
+      issues.push(`${leg.id}: ik target unreachable`);
+      continue;
+    }
+    reachPelvisCorrection = Math.max(reachPelvisCorrection, requiredPelvisCorrection);
+  }
+
+  let lowestCorrection = 0;
+  for (const result of legs) {
+    if (!result.planted) continue;
+    lowestCorrection = Math.max(lowestCorrection, Math.max(0, dotVec3(result.ankleOffset, down)));
   }
 
   const pelvisCorrection = Math.max(lowestCorrection * pelvisCompensation, reachPelvisCorrection);
@@ -390,7 +422,6 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   for (let i = 0; i < legs.length; i += 1) {
     const result = legs[i]!;
     if (!result.planted) continue;
-    plantedCount += 1;
     const leg = sanitizedInput[i]!;
     const influence = clamp01(leg.influence ?? defaultInfluence);
     const root = addVec3(leg.hip, pelvisOffset);
@@ -409,6 +440,15 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     result.ik = ik;
     result.targetReach = ik.targetReach;
     result.clamped = result.clamped || ik.clamped;
+    const targetBeyondMaxStretch =
+      maxStretch !== undefined && targetDistanceExceedsMaxStretch(root, joint, end, target, maxStretch);
+    if (rejectUnreachable && (ik.clamped || targetBeyondMaxStretch)) {
+      result.planted = false;
+      result.skippedReason = "ik-target-unreachable";
+      issues.push(`${leg.id}: ik target unreachable`);
+      continue;
+    }
+    plantedCount += 1;
     if (ik.clamped) issues.push(`${leg.id}: ik target reach clamped`);
   }
 
@@ -600,21 +640,36 @@ function createSkippedFootPlantLegResult(
   leg: FootPlantLegInput,
   groundNormal: Vec3,
   skippedReason: string,
-  groundPoint?: Vec3
+  groundPoint?: Vec3,
+  override?: Partial<Pick<FootPlantLegResult, "targetAnkle" | "ankleOffset" | "correctionDistance">>
 ): FootPlantLegResult {
   return {
     id: leg.id,
     planted: false,
     clamped: false,
     initialAnkle: leg.ankle,
-    targetAnkle: leg.ankle,
-    ankleOffset: [0, 0, 0],
-    correctionDistance: 0,
+    targetAnkle: override?.targetAnkle ?? leg.ankle,
+    ankleOffset: override?.ankleOffset ?? [0, 0, 0],
+    correctionDistance: override?.correctionDistance ?? 0,
     groundNormal,
     targetReach: 1,
     skippedReason,
     ...(groundPoint === undefined ? {} : { groundPoint })
   };
+}
+
+function targetDistanceExceedsMaxStretch(
+  root: Vec3,
+  joint: Vec3,
+  end: Vec3,
+  target: Vec3,
+  configuredMaxStretch: number
+): boolean {
+  const upperLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(joint, root), MIN_IK_REACH));
+  const lowerLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(end, joint), MIN_IK_REACH));
+  const maxStretch = Math.min(1, finiteNonNegative(configuredMaxStretch, 0.998));
+  const maxReach = (upperLength + lowerLength) * maxStretch;
+  return finiteLength(subVec3(target, root), 0) > maxReach + 1e-4;
 }
 
 function resolveMinGroundNormalDot(maxGroundSlopeAngle: number | undefined): number | undefined {
