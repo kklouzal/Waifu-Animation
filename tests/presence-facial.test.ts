@@ -85,6 +85,11 @@ export function runPresencePlanningTests(): void {
     Object.values(hostileLook).every((part) => Math.abs(part.yaw) <= 0.85 && Math.abs(part.pitch) <= 0.52),
     "look-at distribution should clamp unsafe option multipliers to bounded corrections"
   );
+  assert.equal(sanitizeAttentionTargetWeight(-1), 0);
+  assert.equal(sanitizeAttentionTargetWeight(Number.POSITIVE_INFINITY), 0);
+  assert.equal(sanitizeAttentionTargetWeight(Number.NaN), 0);
+  assert.equal(sanitizeAttentionTargetWeight(0.25), 0.25);
+  assert.equal(sanitizeAttentionTargetWeight(2), 1);
   const attention = new AttentionScheduler("attention-safety");
   const noPositiveAttention = attention.choose(Number.NaN, [
     { id: "nan", position: [Number.NaN, 0, 0], weight: Number.NaN },
@@ -523,10 +528,3 @@ export function runFacialAnimationTests(): void {
   );
 }
 
-test("attention target weights are sanitized to aim-compatible unit weights", () => {
-  assert.equal(sanitizeAttentionTargetWeight(-1), 0);
-  assert.equal(sanitizeAttentionTargetWeight(Number.POSITIVE_INFINITY), 0);
-  assert.equal(sanitizeAttentionTargetWeight(Number.NaN), 0);
-  assert.equal(sanitizeAttentionTargetWeight(0.25), 0.25);
-  assert.equal(sanitizeAttentionTargetWeight(2), 1);
-});
