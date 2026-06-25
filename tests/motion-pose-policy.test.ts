@@ -129,8 +129,13 @@ export async function runMotionPosePolicyTests(): Promise<void> {
   const malformedPartialMask = new Float32Array([1, Number.NaN]);
   const maskIssues = validateJointMask(skeleton, malformedPartialMask);
   assert.ok(
-    maskIssues.some((issue) => issue.index === -1 && issue.message.includes("does not match skeleton")),
-    "validateJointMask should report masks that do not cover the full skeleton"
+    maskIssues.some(
+      (issue) =>
+        issue.index === -1 &&
+        issue.message.includes("does not match skeleton") &&
+        issue.message.includes("missing joints will be treated as zero")
+    ),
+    "validateJointMask should report short masks and their zero-weight fallback"
   );
   assert.ok(
     maskIssues.some((issue) => issue.index === 1 && issue.message.includes("treated as zero")),
@@ -142,7 +147,21 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "validateJointMask should report negative weights that are sanitized during blending"
   );
   const overweightMaskIssues = validateJointMask(skeleton, new Float32Array([1, 1.25, 2.5, 3]));
-  assert.equal(overweightMaskIssues.length, 0, "validateJointMask should preserve Ozz-style positive mask weights above 1");
+  assert.equal(
+    overweightMaskIssues.length,
+    0,
+    "validateJointMask should preserve Ozz-style positive mask weights above 1"
+  );
+  const longMaskIssues = validateJointMask(skeleton, new Float32Array([1, 1, 1, 1, 0.5]));
+  assert.ok(
+    longMaskIssues.some(
+      (issue) =>
+        issue.index === -1 &&
+        issue.message.includes("does not match skeleton") &&
+        issue.message.includes("extra joint weights will be ignored")
+    ),
+    "validateJointMask should report overlong masks and their ignored trailing weights"
+  );
 
   const maskedRuntimeClip: AnimationClip = {
     id: "masked-runtime",
@@ -150,7 +169,11 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     tracks: [makeTransformTrack("hips", "translation", [1, 0, 0])]
   };
   const maskedRuntime = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
-  maskedRuntime.setLayer("override-mask", maskedRuntimeClip, { weight: 1, targetWeight: 1, mask: malformedPartialMask });
+  maskedRuntime.setLayer("override-mask", maskedRuntimeClip, {
+    weight: 1,
+    targetWeight: 1,
+    mask: malformedPartialMask
+  });
   maskedRuntime.setLayer("additive-mask", maskedRuntimeClip, {
     weight: 1,
     targetWeight: 1,
@@ -166,9 +189,9 @@ export async function runMotionPosePolicyTests(): Promise<void> {
         issue.layerId === "override-mask" &&
         issue.clipId === "masked-runtime" &&
         issue.index === -1 &&
-        issue.message.includes("does not match skeleton")
+        issue.message.includes("missing joints will be treated as zero")
     ),
-    "runtime diagnostics should report malformed override mask lengths"
+    "runtime diagnostics should report short override mask lengths with fallback semantics"
   );
   assert.ok(
     maskedRuntimeDiagnostics.some(
@@ -187,9 +210,9 @@ export async function runMotionPosePolicyTests(): Promise<void> {
         issue.stage === "mask" &&
         issue.layerId === "additive-mask" &&
         issue.index === -1 &&
-        issue.message.includes("does not match skeleton")
+        issue.message.includes("missing joints will be treated as zero")
     ),
-    "runtime diagnostics should report malformed additive mask lengths"
+    "runtime diagnostics should report short additive mask lengths with fallback semantics"
   );
   assert.ok(
     maskedRuntimeDiagnostics.some(

@@ -88,10 +88,14 @@ export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): Po
 export function validateJointMask(skeleton: Skeleton, mask: JointMask): JointMaskValidationIssue[] {
   const issues: JointMaskValidationIssue[] = [];
   if (mask.length !== skeleton.joints.length) {
+    const lengthDetail =
+      mask.length < skeleton.joints.length
+        ? "missing joints will be treated as zero"
+        : "extra joint weights will be ignored";
     issues.push({
       joint: "<mask>",
       index: -1,
-      message: `mask length ${mask.length} does not match skeleton ${skeleton.joints.length}`
+      message: `mask length ${mask.length} does not match skeleton ${skeleton.joints.length}; ${lengthDetail}`
     });
   }
   const jointCount = Math.min(mask.length, skeleton.joints.length);
