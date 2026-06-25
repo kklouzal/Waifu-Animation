@@ -1510,4 +1510,25 @@ export function runIkFootPlantTests(): void {
     anchoredReachAppliedAnkle.distanceTo(anchoredReachTarget) < 0.003,
     "Three foot plant application should keep an anchored ankle world-stable while the avatar root advances"
   );
+
+  const ozzGlobalInfluenceAnkleAim = solveOzzFootIk({
+    skeleton: { joints: [{ name: "hip" }, { name: "knee" }, { name: "ankle" }] } as any,
+    modelPose: [
+      composeMat4({ translation: [0, 2, 0] }),
+      composeMat4({ translation: [0, 1, 0] }),
+      composeMat4({ translation: [0, 0.1, 0] })
+    ],
+    legs: [{ id: "left", hip: 0, knee: 1, ankle: 2, ankleUp: [0, 1, 0], footForward: [0, 0, 1] }],
+    contacts: { left: { point: [0, 0, 0], normal: [0, 1, 0] } },
+    influence: 0.25,
+    footHeight: 0.1,
+    maxAnkleCorrection: 1
+  });
+  assert.equal(ozzGlobalInfluenceAnkleAim.plantedCount, 1);
+  assert.equal(
+    ozzGlobalInfluenceAnkleAim.legs[0]!.ankleAim?.weight,
+    0.25,
+    "Ozz foot IK ankle aim should respect global foot-plant influence when no per-leg influence is set"
+  );
+
 }

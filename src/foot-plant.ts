@@ -501,13 +501,14 @@ export function solveOzzFootIk(input: OzzFootIkOptions): OzzFootIkResult {
       const ankleModel = input.modelPose[resolved.ankleJoint];
       if (ankleModel) {
         const footForward = resolved.footForward ?? ([0, 0, 1] as Vec3);
+        const ankleAimInfluence = clamp01(resolved.influence ?? input.influence ?? 1);
         result.ankleAim = solveAimIk({
           joint: ankleModel,
           target: addVec3(leg.targetAnkle, leg.groundNormal),
           forward: resolved.ankleUp ?? [0, 1, 0],
           up: footForward,
           pole: transformLinearVector(ankleModel, footForward),
-          ...(resolved.influence === undefined ? {} : { weight: resolved.influence })
+          weight: ankleAimInfluence
         });
       }
     }
