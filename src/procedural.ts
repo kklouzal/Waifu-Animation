@@ -34,8 +34,12 @@ function finiteOption01(value: number | undefined, fallback: number): number {
   return clamp01(finiteSigned(value, fallback));
 }
 
+export function sanitizeAttentionTargetWeight(value: number): number {
+  return Number.isFinite(value) ? clamp01(value) : 0;
+}
+
 function finiteAttentionWeight(value: number): number {
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
+  return sanitizeAttentionTargetWeight(value);
 }
 
 export type AttentionTargetSafetyOptions = {

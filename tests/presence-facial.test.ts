@@ -9,6 +9,7 @@ import {
   assert,
   breathingWeight,
   classifyAttentionTargetSafety,
+  sanitizeAttentionTargetWeight,
   composeFacialExpressions,
   dampAlpha,
   distributeLookAt,
@@ -521,3 +522,11 @@ export function runFacialAnimationTests(): void {
     "malformed mouth release speeds should fall back instead of freezing mouth motion"
   );
 }
+
+test("attention target weights are sanitized to aim-compatible unit weights", () => {
+  assert.equal(sanitizeAttentionTargetWeight(-1), 0);
+  assert.equal(sanitizeAttentionTargetWeight(Number.POSITIVE_INFINITY), 0);
+  assert.equal(sanitizeAttentionTargetWeight(Number.NaN), 0);
+  assert.equal(sanitizeAttentionTargetWeight(0.25), 0.25);
+  assert.equal(sanitizeAttentionTargetWeight(2), 1);
+});
