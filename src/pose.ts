@@ -49,6 +49,12 @@ export type PoseValidationIssue = {
   message: string;
 };
 
+export type JointMaskValidationIssue = {
+  joint: string;
+  index: number;
+  message: string;
+};
+
 export function clonePose(pose: readonly Transform[]): Pose {
   return cloneTransformList(pose);
 }
@@ -73,6 +79,29 @@ export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): Po
         joint: skeleton.joints[index]!.name,
         index,
         message: "transform is not finite or quaternion is invalid"
+      });
+    }
+  }
+  return issues;
+}
+
+export function validateJointMask(skeleton: Skeleton, mask: JointMask): JointMaskValidationIssue[] {
+  const issues: JointMaskValidationIssue[] = [];
+  if (mask.length !== skeleton.joints.length) {
+    issues.push({
+      joint: "<mask>",
+      index: -1,
+      message: `mask length ${mask.length} does not match skeleton ${skeleton.joints.length}`
+    });
+  }
+  const jointCount = Math.min(mask.length, skeleton.joints.length);
+  for (let index = 0; index < jointCount; index += 1) {
+    const value = mask[index]!;
+    if (!Number.isFinite(value) || value < 0) {
+      issues.push({
+        joint: skeleton.joints[index]!.name,
+        index,
+        message: "mask weight is negative or non-finite and will be treated as zero"
       });
     }
   }

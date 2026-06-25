@@ -20,6 +20,7 @@ import {
 import { type MotionCarrier, blendMotionDeltas, sampleMotionIntervalDelta } from "./motion.js";
 import {
   type JointMask,
+  type JointMaskValidationIssue,
   type Pose,
   type PoseValidationIssue,
   additiveDeltaPose,
@@ -28,6 +29,7 @@ import {
   clonePose,
   normalizePose,
   sanitizeBlendThreshold,
+  validateJointMask,
   validatePose
 } from "./pose.js";
 import { type Skeleton, createRestPose, localToModelPose } from "./skeleton.js";
@@ -98,7 +100,7 @@ export type RuntimeEvaluateOptions = {
 };
 
 export type RuntimeEvaluationDiagnostic = PoseValidationIssue & {
-  stage: "sample" | "final";
+  stage: "sample" | "mask" | "final";
   layerId?: string;
   clipId?: string;
   track?: number;
@@ -374,6 +376,7 @@ export class AnimationRuntime {
           layerId: layer.id,
           clipId: layer.clip.id
         });
+        if (layer.mask) pushMaskDiagnostics(diagnostics, validateJointMask(this.skeleton, layer.mask), layer);
       }
       if (layer.blendMode === "additive")
         additiveLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
@@ -535,6 +538,16 @@ function pushPoseDiagnostics(
 ): void {
   for (const issue of issues) {
     diagnostics.push({ ...issue, ...context });
+  }
+}
+
+function pushMaskDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: JointMaskValidationIssue[],
+  layer: AnimationLayer
+): void {
+  for (const issue of issues) {
+    diagnostics.push({ ...issue, stage: "mask", layerId: layer.id, clipId: layer.clip.id });
   }
 }
 

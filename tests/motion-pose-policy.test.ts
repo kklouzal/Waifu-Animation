@@ -21,6 +21,7 @@ import {
   sampleClipToPose,
   sanitizeQuaternionTrackValues,
   toFloat32Array,
+  validateJointMask,
   validatePose
 } from "./test-api.js";
 import { makeAuthoredLoopClip, makeTransformTrack, sampleNodPose, skeleton } from "./test-helpers.js";
@@ -126,6 +127,86 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "subtree masks should allow selected joints to own the blended pose"
   );
   const malformedPartialMask = new Float32Array([1, Number.NaN]);
+  const maskIssues = validateJointMask(skeleton, malformedPartialMask);
+  assert.ok(
+    maskIssues.some((issue) => issue.index === -1 && issue.message.includes("does not match skeleton")),
+    "validateJointMask should report masks that do not cover the full skeleton"
+  );
+  assert.ok(
+    maskIssues.some((issue) => issue.index === 1 && issue.message.includes("treated as zero")),
+    "validateJointMask should report non-finite weights that are sanitized during blending"
+  );
+  const negativeMaskIssues = validateJointMask(skeleton, new Float32Array([1, -0.25, 0, 1]));
+  assert.ok(
+    negativeMaskIssues.some((issue) => issue.index === 1 && issue.joint === "spine"),
+    "validateJointMask should report negative weights that are sanitized during blending"
+  );
+  const overweightMaskIssues = validateJointMask(skeleton, new Float32Array([1, 1.25, 2.5, 3]));
+  assert.equal(overweightMaskIssues.length, 0, "validateJointMask should preserve Ozz-style positive mask weights above 1");
+
+  const maskedRuntimeClip: AnimationClip = {
+    id: "masked-runtime",
+    duration: 1,
+    tracks: [makeTransformTrack("hips", "translation", [1, 0, 0])]
+  };
+  const maskedRuntime = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  maskedRuntime.setLayer("override-mask", maskedRuntimeClip, { weight: 1, targetWeight: 1, mask: malformedPartialMask });
+  maskedRuntime.setLayer("additive-mask", maskedRuntimeClip, {
+    weight: 1,
+    targetWeight: 1,
+    blendMode: "additive",
+    mask: new Float32Array([1, -0.25, 2.5])
+  });
+  assert.equal(maskedRuntime.evaluate().diagnostics, undefined, "runtime mask diagnostics should stay opt-in");
+  const maskedRuntimeDiagnostics = maskedRuntime.evaluate({ diagnostics: true }).diagnostics ?? [];
+  assert.ok(
+    maskedRuntimeDiagnostics.some(
+      (issue) =>
+        issue.stage === "mask" &&
+        issue.layerId === "override-mask" &&
+        issue.clipId === "masked-runtime" &&
+        issue.index === -1 &&
+        issue.message.includes("does not match skeleton")
+    ),
+    "runtime diagnostics should report malformed override mask lengths"
+  );
+  assert.ok(
+    maskedRuntimeDiagnostics.some(
+      (issue) =>
+        issue.stage === "mask" &&
+        issue.layerId === "override-mask" &&
+        issue.joint === "spine" &&
+        issue.index === 1 &&
+        issue.message.includes("treated as zero")
+    ),
+    "runtime diagnostics should report sanitized override mask weights"
+  );
+  assert.ok(
+    maskedRuntimeDiagnostics.some(
+      (issue) =>
+        issue.stage === "mask" &&
+        issue.layerId === "additive-mask" &&
+        issue.index === -1 &&
+        issue.message.includes("does not match skeleton")
+    ),
+    "runtime diagnostics should report malformed additive mask lengths"
+  );
+  assert.ok(
+    maskedRuntimeDiagnostics.some(
+      (issue) =>
+        issue.stage === "mask" &&
+        issue.layerId === "additive-mask" &&
+        issue.joint === "spine" &&
+        issue.index === 1 &&
+        issue.message.includes("treated as zero")
+    ),
+    "runtime diagnostics should report sanitized additive mask weights"
+  );
+  assert.ok(
+    !maskedRuntimeDiagnostics.some((issue) => issue.stage === "mask" && issue.index === 2),
+    "runtime diagnostics should preserve Ozz-style positive mask weights above 1"
+  );
+
   const malformedMaskedBlend = blendPoses(
     skeleton,
     [{ pose: malformedMaskPose, weight: 1, mask: malformedPartialMask }],
