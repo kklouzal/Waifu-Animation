@@ -377,7 +377,7 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
     const leg = sanitizedInput[i]!;
     const influence = clamp01(leg.influence ?? defaultInfluence);
     if (influence <= 1e-5) continue;
-    const configuredMaxStretch = leg.maxStretch ?? options.maxStretch;
+    const configuredMaxStretch = leg.maxStretch ?? options.maxStretch ?? (rejectUnreachable ? 1 : undefined);
     if (configuredMaxStretch === undefined) continue;
     const upperLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(leg.knee, leg.hip), MIN_IK_REACH));
     const lowerLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(leg.ankle, leg.knee), MIN_IK_REACH));

@@ -1029,6 +1029,27 @@ export function runIkFootPlantTests(): void {
     [0, 0, 0],
     "IK-rejected contacts should not keep their provisional ankle correction in pelvis lowering"
   );
+  const physicallyUnreachableFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 0, 0],
+        knee: [0, -1, 0],
+        ankle: [0, -2, 0],
+        ground: { point: [0, -5, 0], normal: [0, 1, 0] }
+      }
+    ],
+    { footHeight: 0, maxAnkleCorrection: 10, maxPelvisOffset: 0.1, rejectUnreachable: true }
+  );
+  assert.equal(physicallyUnreachableFootPlant.plantedCount, 0);
+  assert.equal(physicallyUnreachableFootPlant.legs[0]!.planted, false);
+  assert.equal(physicallyUnreachableFootPlant.legs[0]!.skippedReason, "ik-target-unreachable");
+  assert.deepEqual(
+    physicallyUnreachableFootPlant.pelvisOffset,
+    [0, 0, 0],
+    "rejected physically unreachable contacts must not contribute pelvis compensation"
+  );
+
   const unreachableContactStabilizer = updateFootPlantStabilizer(
     cachedContactStabilizer.state,
     createFootPlantStabilizerObservations(rejectMaxStretchFootPlant),
