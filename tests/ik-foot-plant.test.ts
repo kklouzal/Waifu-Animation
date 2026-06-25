@@ -1512,11 +1512,11 @@ export function runIkFootPlantTests(): void {
   );
 
   const ozzGlobalInfluenceAnkleAim = solveOzzFootIk({
-    skeleton: { joints: [{ name: "hip" }, { name: "knee" }, { name: "ankle" }] } as any,
+    skeleton: createSkeleton([{ name: "hip" }, { name: "knee", parentIndex: 0 }, { name: "ankle", parentIndex: 1 }]),
     modelPose: [
-      composeMat4({ translation: [0, 2, 0] }),
-      composeMat4({ translation: [0, 1, 0] }),
-      composeMat4({ translation: [0, 0.1, 0] })
+      composeMat4({ translation: [0, 2, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }),
+      composeMat4({ translation: [0, 1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }),
+      composeMat4({ translation: [0, 0.1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] })
     ],
     legs: [{ id: "left", hip: 0, knee: 1, ankle: 2, ankleUp: [0, 1, 0], footForward: [0, 0, 1] }],
     contacts: { left: { point: [0, 0, 0], normal: [0, 1, 0] } },
@@ -1530,5 +1530,4 @@ export function runIkFootPlantTests(): void {
     0.25,
     "Ozz foot IK ankle aim should respect global foot-plant influence when no per-leg influence is set"
   );
-
 }
