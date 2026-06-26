@@ -1,13 +1,17 @@
 import {
+  type Quat,
   type Mat4,
   type Transform,
+  type Vec3,
   EPSILON,
   clamp01,
   dampAlpha,
+  dotQuat,
   finiteNonNegative,
   finiteSigned,
   identityTransform,
-  lerpTransform
+  lerpTransform,
+  normalizeQuat
 } from "./math.js";
 import {
   type AnimationClip,
@@ -17,7 +21,7 @@ import {
   sampleClipToPose,
   validateClip
 } from "./clip.js";
-import { type MotionCarrier, blendMotionDeltas, sampleMotionIntervalDelta } from "./motion.js";
+import { type MotionCarrier, sampleMotionIntervalDelta } from "./motion.js";
 import {
   type JointMask,
   type JointMaskValidationIssue,
@@ -523,12 +527,50 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
 }
 
 function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: number): Transform {
-  return blendMotionDeltas(
-    group.map((item) => ({
-      delta: item.interval.delta,
-      weight: readRootMotionIntervalEffectiveWeight(item) / totalWeight
-    }))
-  );
+  if (!(totalWeight > EPSILON)) return identityTransform();
+
+  const translation: Vec3 = [0, 0, 0];
+  const scale: Vec3 = [0, 0, 0];
+  const rotationSum: Quat = [0, 0, 0, 0];
+  let firstRotation: Quat | undefined;
+  let acceptedWeight = 0;
+
+  for (const item of group) {
+    const weight = finiteNonNegative(readRootMotionIntervalEffectiveWeight(item), 0);
+    if (weight <= EPSILON) continue;
+    const normalizedWeight = weight / totalWeight;
+    const delta = item.interval.delta;
+
+    translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
+    translation[1] += finiteSigned(delta.translation[1], 0) * normalizedWeight;
+    translation[2] += finiteSigned(delta.translation[2], 0) * normalizedWeight;
+
+    scale[0] += finiteSigned(delta.scale[0], 1) * normalizedWeight;
+    scale[1] += finiteSigned(delta.scale[1], 1) * normalizedWeight;
+    scale[2] += finiteSigned(delta.scale[2], 1) * normalizedWeight;
+
+    let rotation = normalizeQuat([
+      finiteSigned(delta.rotation[0], 0),
+      finiteSigned(delta.rotation[1], 0),
+      finiteSigned(delta.rotation[2], 0),
+      finiteSigned(delta.rotation[3], 1)
+    ]);
+    const reference = dotQuat(rotationSum, rotationSum) > EPSILON ? rotationSum : firstRotation;
+    if (reference) {
+      if (dotQuat(reference, rotation) < 0) rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
+    } else if (dotQuat([0, 0, 0, 1], rotation) < 0) {
+      rotation = [-rotation[0], -rotation[1], -rotation[2], -rotation[3]];
+    }
+    firstRotation ??= rotation;
+    rotationSum[0] += rotation[0] * normalizedWeight;
+    rotationSum[1] += rotation[1] * normalizedWeight;
+    rotationSum[2] += rotation[2] * normalizedWeight;
+    rotationSum[3] += rotation[3] * normalizedWeight;
+    acceptedWeight += normalizedWeight;
+  }
+
+  if (acceptedWeight <= EPSILON) return identityTransform();
+  return { translation, rotation: normalizeQuat(rotationSum), scale };
 }
 
 function pushPoseDiagnostics(

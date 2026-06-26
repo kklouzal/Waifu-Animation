@@ -1200,19 +1200,10 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
   assert.ok(
     vectorNearlyEqual(
       orthogonalRootMotionUpdate.rootMotionDelta.translation,
-      [Math.SQRT1_2 * 10, 0, Math.SQRT1_2 * 10],
+      [5, 0, 5],
       1e-6
     ),
-    "orthogonal equal root-motion deltas should preserve Ozz blended translation length"
-  );
-  assert.ok(
-    Math.abs(Math.hypot(...orthogonalRootMotionUpdate.rootMotionDelta.translation) - 10) < 1e-6,
-    "orthogonal root-motion blend should keep the weighted average length"
-  );
-  assert.notDeepEqual(
-    orthogonalRootMotionUpdate.rootMotionDelta.translation,
-    [5, 0, 5],
-    "orthogonal root-motion blend should not collapse to the naive component average"
+    "orthogonal equal root-motion deltas should use Ozz component weighted-average translation"
   );
 
   const rotationOrderMotionA: AnimationClip = {
