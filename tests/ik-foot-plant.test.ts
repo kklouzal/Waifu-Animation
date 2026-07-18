@@ -1286,6 +1286,51 @@ export function runIkFootPlantTests(): void {
     applyPelvis: true,
     applyLegIk: true
   });
+  const poleRoot = new Object3D();
+  const poleHip = new Object3D();
+  poleHip.position.set(0, 1, 0);
+  const poleKnee = new Object3D();
+  poleKnee.position.set(0, -0.5, -0.02);
+  const poleAnkle = new Object3D();
+  poleAnkle.position.set(0, -0.5, 0.02);
+  poleRoot.add(poleHip);
+  poleHip.add(poleKnee);
+  poleKnee.add(poleAnkle);
+  poleRoot.updateMatrixWorld(true);
+  const poleTarget = poleAnkle.getWorldPosition(new Vector3()).clone();
+  poleTarget.y -= 0.08;
+  const polePlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: poleHip.getWorldPosition(new Vector3()).toArray(),
+        knee: poleKnee.getWorldPosition(new Vector3()).toArray(),
+        ankle: poleAnkle.getWorldPosition(new Vector3()).toArray(),
+        ground: { point: [poleTarget.x, poleTarget.y, poleTarget.z], normal: [0, 1, 0] },
+        pole: [0, 0, 1],
+        footHeight: 0,
+        maxAnkleCorrection: 0.5,
+        maxStretch: 1
+      }
+    ],
+    { footHeight: 0, maxAnkleCorrection: 0.5, maxPelvisOffset: 0, maxStretch: 1 }
+  );
+  applyThreeFootPlantResult(polePlant, {
+    resolveBone: (bone) =>
+      ({
+        leftUpperLeg: poleHip,
+        leftLowerLeg: poleKnee,
+        leftFoot: poleAnkle
+      })[bone] ?? null,
+    legs: [{ id: "left", hip: "leftUpperLeg", knee: "leftLowerLeg", ankle: "leftFoot", pole: [0, 0, 1], alignAnkleToGround: false }],
+    applyPelvis: false,
+    applyLegIk: true
+  });
+  poleRoot.updateMatrixWorld(true);
+  assert.ok(
+    poleKnee.getWorldPosition(new Vector3()).z > 0,
+    "Three foot-plant leg binding pole should keep the knee on the configured anatomical bend side"
+  );
   assert.equal(footPlantApply.applied, true);
   assert.equal(footPlantApply.pelvisApplied, true);
   assert.ok(pelvisBone.position.y < 0);

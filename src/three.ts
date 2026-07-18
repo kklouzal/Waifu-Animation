@@ -242,6 +242,12 @@ export type ThreeFootPlantLegBinding = {
   hip: string;
   knee: string;
   ankle?: string;
+  /**
+   * Model/world-space pole direction used to keep the two-bone IK bend plane stable.
+   * For forward humanoid locomotion this should point toward the anatomical knee bend,
+   * not rely on the previous frame's possibly-near-straight knee offset.
+   */
+  pole?: Vec3;
   influence?: number;
   alignAnkleToGround?: boolean;
   ankleLocalUp?: Vec3;
@@ -1034,7 +1040,8 @@ export function applyThreeFootPlantResult(
           hip,
           knee,
           ankle,
-          shouldResolveFootPlantIkFromAppliedPose(result.pelvisOffset, amount, pelvisApplied)
+          shouldResolveFootPlantIkFromAppliedPose(result.pelvisOffset, amount, pelvisApplied),
+          binding.pole
         );
         if (hip) {
           applied.appliedHip = applyWorldQuaternionCorrection(hip, ik.rootCorrection, legAmount);
@@ -1085,14 +1092,16 @@ function resolveFootPlantIkForAppliedPose(
   hip: Object3D | null | undefined,
   knee: Object3D | null | undefined,
   ankle: Object3D | null | undefined,
-  useAppliedPose: boolean
+  useAppliedPose: boolean,
+  pole?: Vec3
 ): NonNullable<FootPlantResult["legs"][number]["ik"]> {
   if (!useAppliedPose || !hip || !knee || !ankle) return leg.ik!;
   return solveTwoBoneIkCorrections({
     root: objectWorldVec3(hip),
     joint: objectWorldVec3(knee),
     end: objectWorldVec3(ankle),
-    target: leg.targetAnkle
+    target: leg.targetAnkle,
+    ...(pole === undefined ? {} : { pole })
   });
 }
 
