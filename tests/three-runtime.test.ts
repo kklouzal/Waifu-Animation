@@ -3,6 +3,7 @@ import {
   AnimationMixer,
   LoopOnce,
   Object3D,
+  Quaternion,
   WAIFU_ANIMATION_BINARY_FORMAT,
   adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion,
   assert,
@@ -13,6 +14,7 @@ import {
   calculateThreeRuntimeStartTime,
   createThreeAnimationClip,
   createThreeRuntimeClipsForEntry,
+  normalizedHumanoidDeltaFromSourceLocalSample,
   prepareThreeRuntimeAction,
   quatFromAxisAngle,
   readActiveThreeRuntimeClipSnapshots,
@@ -120,6 +122,69 @@ export async function runThreeRuntimeTests(): Promise<void> {
     canonicalVrm0ActualValues.every((value, index) => Math.abs(value - pixivOfficialVrm0Rule[index]!) < 1e-6),
     "Three binding should adapt canonical normalized-delta tracks for VRM0 targets without rebaking assets"
   );
+
+  const officialNormalizedDelta = (
+    parentWorldRest: readonly number[],
+    sourceLocalSample: readonly number[],
+    sourceLocalRest: readonly number[]
+  ): number[] => {
+    const parent = new Quaternion().fromArray(parentWorldRest).normalize();
+    const parentInverse = parent.clone().invert();
+    const sample = new Quaternion().fromArray(sourceLocalSample).normalize();
+    const restInverse = new Quaternion().fromArray(sourceLocalRest).normalize().invert();
+    return parent.clone().multiply(sample).multiply(restInverse).multiply(parentInverse).normalize().toArray();
+  };
+  const oracleBones = [
+    "hips",
+    "spine",
+    "leftUpperArm",
+    "rightUpperArm",
+    "leftLowerArm",
+    "rightLowerArm",
+    "leftUpperLeg",
+    "rightUpperLeg",
+    "leftLowerLeg",
+    "rightLowerLeg",
+    "leftFoot",
+    "rightFoot"
+  ];
+  const oracleParent = quatFromAxisAngle([0.31, 0.87, -0.22], 0.64);
+  const oracleRest = quatFromAxisAngle([0.12, -0.28, 0.95], -0.37);
+  const hingeThirty = quatFromAxisAngle([1, 0, 0], Math.PI / 6);
+  const twistPreserved = quatFromAxisAngle([0, 1, 0], -Math.PI / 7);
+  for (const bone of oracleBones) {
+    const sample = new Quaternion().fromArray(hingeThirty).multiply(new Quaternion().fromArray(twistPreserved)).toArray();
+    assert.ok(
+      quaternionNearlyEqual(
+        normalizedHumanoidDeltaFromSourceLocalSample(oracleParent, sample, oracleRest),
+        officialNormalizedDelta(oracleParent, sample, oracleRest),
+        1e-6
+      ),
+      `${bone} canonical bake must match Pixiv helper order P*S*R^-1*P^-1 and preserve hinge+twist`
+    );
+  }
+  assert.ok(
+    quaternionNearlyEqual(
+      normalizedHumanoidDeltaFromSourceLocalSample(oracleParent, oracleRest, oracleRest),
+      [0, 0, 0, 1],
+      1e-6
+    ),
+    "identity rest samples should bake to identity normalized deltas"
+  );
+  const symmetricLeft = normalizedHumanoidDeltaFromSourceLocalSample(oracleParent, hingeThirty, [0, 0, 0, 1]);
+  const symmetricRight = normalizedHumanoidDeltaFromSourceLocalSample(
+    [-oracleParent[0]!, oracleParent[1]!, -oracleParent[2]!, oracleParent[3]!],
+    [-hingeThirty[0]!, hingeThirty[1]!, -hingeThirty[2]!, hingeThirty[3]!],
+    [0, 0, 0, 1]
+  );
+  assert.ok(
+    Math.abs(symmetricLeft[0]! + symmetricRight[0]!) < 1e-6 &&
+      Math.abs(symmetricLeft[1]! - symmetricRight[1]!) < 1e-6 &&
+      Math.abs(symmetricLeft[2]! + symmetricRight[2]!) < 1e-6 &&
+      Math.abs(symmetricLeft[3]! - symmetricRight[3]!) < 1e-6,
+    "mirrored normalized-delta inputs should preserve VRM-style X/Z quaternion symmetry"
+  );
+
   const invalidThreeTrackWarnings: string[] = [];
   const invalidThreeTimeClip = createThreeAnimationClip(
     {
