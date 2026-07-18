@@ -9,6 +9,7 @@ import {
   multiplyQuat,
   normalizeQuat,
   normalizeVec3,
+  quatFromUnitVectors,
   rotateVec3ByQuat,
   subVec3
 } from "./math.js";
@@ -73,15 +74,33 @@ export function retargetQuaternionSample(
   const srcRest = normalizeQuat(sourceRest);
   const dstRest = normalizeQuat(targetRest);
   const srcSample = normalizeQuat(sourceSample, srcRest);
+
+  const sourceChildDirection = normalizedDirection(sourceRestChildDirection);
+  const targetChildDirection = normalizedDirection(targetRestChildDirection);
+  if (sourceChildDirection && targetChildDirection) {
+    void humanBone;
+    const sourceRestDirection = normalizeVec3(rotateVec3ByQuat(srcRest, sourceChildDirection));
+    const sourceSampleDirection = normalizeVec3(rotateVec3ByQuat(srcSample, sourceChildDirection));
+    const sourceSwing = quatFromUnitVectors(sourceRestDirection, sourceSampleDirection);
+    const basis = sourceBasis ? cloneNormalizedQuat(sourceBasis) : quatFromUnitVectors(sourceRestDirection, targetChildDirection);
+    const targetSwing = multiplyQuat(multiplyQuat(basis, sourceSwing), invertQuat(basis));
+    return normalizeQuat(multiplyQuat(targetSwing, dstRest));
+  }
+
   void humanBone;
-  void sourceRestChildDirection;
-  void targetRestChildDirection;
   let sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
   if (sourceBasis) {
     const basis = cloneNormalizedQuat(sourceBasis);
     sourceDelta = multiplyQuat(multiplyQuat(basis, sourceDelta), invertQuat(basis));
   }
   return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
+}
+
+function normalizedDirection(value: ArrayLike<number> | undefined): Vec3 | null {
+  if (!value || value.length < 3) return null;
+  const direction: Vec3 = [Number(value[0] ?? 0), Number(value[1] ?? 0), Number(value[2] ?? 0)];
+  if (!direction.every(Number.isFinite) || lengthVec3(direction) <= EPSILON) return null;
+  return normalizeVec3(direction);
 }
 
 export function retargetQuaternionTrackValues(

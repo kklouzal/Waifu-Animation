@@ -143,9 +143,14 @@ export function runRetargetingTests(): void {
     [0, 1, 0],
     [1, 0, 0]
   );
+  const childDirectionMetadataBasis = quatFromUnitVectors([0, 1, 0], [1, 0, 0]);
+  const childDirectionMetadataExpected = multiplyQuat(
+    multiplyQuat(childDirectionMetadataBasis, childDirectionMetadataDelta),
+    invertQuat(childDirectionMetadataBasis)
+  );
   assert.ok(
-    quaternionNearlyEqual(childDirectionMetadataRetargeted, childDirectionMetadataDelta, 1e-5),
-    "source/target child-direction metadata must not silently conjugate local rotation deltas"
+    quaternionNearlyEqual(childDirectionMetadataRetargeted, childDirectionMetadataExpected, 1e-5),
+    "source/target child-direction metadata should retarget parent-space swing into the target rest child frame"
   );
   const targetChildDirectionHingeDelta = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
   const targetChildDirectionHingeRetargeted = retargetQuaternionSample(
