@@ -1,4 +1,15 @@
-import { type Quat, type Vec3, EPSILON, ONE_VEC3, cloneNormalizedQuat, cloneQuat, cloneVec3, clamp } from "./math.js";
+import {
+  type Quat,
+  type Vec3,
+  EPSILON,
+  ONE_VEC3,
+  cloneNormalizedQuat,
+  cloneQuat,
+  cloneVec3,
+  clamp,
+  multiplyQuat,
+  normalizeQuat
+} from "./math.js";
 import { retargetQuaternionSample } from "./retargeting.js";
 import type {
   AnimationClip,
@@ -114,6 +125,7 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
         message: "track does not map to skeleton"
       });
     }
+    validateRotationSpace(issues, track, index, targetName, property);
     validateSourceRestQuaternion(issues, track, index, targetName, property);
     validateSourceRestChildDirection(issues, track, index, targetName, property);
     const channel = targetValid ? resolvedTrackChannel(skeleton, track, jointIndex, property) : null;
@@ -172,6 +184,33 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     validateRotationTrackQuaternions(issues, track, index, targetName, property);
   }
   return issues;
+}
+
+function validateRotationSpace(
+  issues: ClipValidationIssue[],
+  track: AnimationTrack,
+  index: number,
+  jointName: string,
+  property: NormalizedTrackProperty
+): void {
+  if (track.rotationSpace === undefined) return;
+  if (property !== "rotation") {
+    issues.push({
+      track: index,
+      joint: jointName,
+      property: track.property,
+      message: "rotationSpace is only valid on rotation tracks"
+    });
+    return;
+  }
+  if (track.rotationSpace !== "local-source" && track.rotationSpace !== "normalized-humanoid-delta") {
+    issues.push({
+      track: index,
+      joint: jointName,
+      property: track.property,
+      message: "rotationSpace must be local-source or normalized-humanoid-delta"
+    });
+  }
 }
 
 function validateSourceRestChildDirection(
@@ -334,9 +373,14 @@ export type TrackMetadataForSampling = {
   property: TrackProperty;
   joint?: string;
   humanBone?: string;
+  rotationSpace?: string;
   sourceRestQuaternion?: ArrayLike<number>;
   sourceRestChildDirection?: ArrayLike<number>;
 };
+
+export function isNormalizedHumanoidDeltaRotationTrack(track: { rotationSpace?: string }): boolean {
+  return track.rotationSpace === "normalized-humanoid-delta";
+}
 
 export function retargetSampledRotation(
   track: TrackMetadataForSampling,
@@ -346,6 +390,10 @@ export function retargetSampledRotation(
   options: SampleOptions,
   diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">
 ): Quat {
+  if (isNormalizedHumanoidDeltaRotationTrack(track)) {
+    const delta = cloneNormalizedQuat(sampled);
+    return targetRest ? normalizeQuat(multiplyQuat(delta, targetRest)) : delta;
+  }
   const sourceRest = track.sourceRestQuaternion;
   if (!sourceRest || !targetRest) return sampled;
   if (sourceRest.length !== 4) {

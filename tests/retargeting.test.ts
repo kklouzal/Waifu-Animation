@@ -8,6 +8,7 @@ import {
   invertQuat,
   multiplyQuat,
   normalizeQuat,
+  normalizedHumanoidDeltaFromSourceLocalSample,
   quatFromAxisAngle,
   quatFromUnitVectors,
   retargetQuaternionSample,
@@ -56,7 +57,7 @@ export function runRetargetingTests(): void {
       Math.abs(retargetedNonUnitSample[3] - retargetedUnitSample[3]) < 1e-5,
     "retargeting should repair non-unit source samples without changing their rotation"
   );
-  const expectedEquivalentRestDelta = multiplyQuat(invertQuat(sourceRestX), sourceSampleWithLocalDelta);
+  const expectedEquivalentRestDelta = multiplyQuat(sourceSampleWithLocalDelta, invertQuat(sourceRestX));
   const retargetedToEquivalentRest = retargetQuaternionSample(sourceRestX, sourceRestX, sourceSampleWithLocalDelta);
   assert.ok(
     Math.abs(retargetedToEquivalentRest[0] - sourceSampleWithLocalDelta[0]) < 1e-5 &&
@@ -72,7 +73,7 @@ export function runRetargetingTests(): void {
       Math.abs(retargetedToNormalizedRest[1] - expectedNormalizedDelta[1]) < 1e-5 &&
       Math.abs(retargetedToNormalizedRest[2] - expectedNormalizedDelta[2]) < 1e-5 &&
       Math.abs(retargetedToNormalizedRest[3] - expectedNormalizedDelta[3]) < 1e-5,
-    "retargeting should preserve source local rotation deltas before applying normalized target rest"
+    "retargeting should preserve official parent-frame normalized deltas before applying normalized target rest"
   );
   assert.deepEqual(
     retargetQuaternionTrackValues([0, 0, 0, 1, 0, 0, 0, -1], undefined, [0, 0, 0, 1]).values,
@@ -144,14 +145,27 @@ export function runRetargetingTests(): void {
     [1, 0, 0]
   );
   const childDirectionMetadataBasis = quatFromUnitVectors([0, 1, 0], [1, 0, 0]);
-  const childDirectionMetadataExpected = multiplyQuat(
-    multiplyQuat(childDirectionMetadataBasis, childDirectionMetadataDelta),
-    invertQuat(childDirectionMetadataBasis)
+  void childDirectionMetadataBasis;
+  assert.ok(
+    quaternionNearlyEqual(childDirectionMetadataRetargeted, childDirectionMetadataDelta, 1e-5),
+    "source/target child-direction metadata must not discard twist or trigger swing-only remapping without an explicit basis"
+  );
+  const officialParentRest = quatFromAxisAngle([0, 0, 1], Math.PI / 2);
+  const officialSourceRest = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+  const officialSourceSample = multiplyQuat(officialSourceRest, quatFromAxisAngle([0, 1, 0], Math.PI / 6));
+  const officialOracle = multiplyQuat(
+    multiplyQuat(multiplyQuat(officialParentRest, officialSourceSample), invertQuat(officialSourceRest)),
+    invertQuat(officialParentRest)
   );
   assert.ok(
-    quaternionNearlyEqual(childDirectionMetadataRetargeted, childDirectionMetadataExpected, 1e-5),
-    "source/target child-direction metadata should retarget parent-space swing into the target rest child frame"
+    quaternionNearlyEqual(
+      normalizedHumanoidDeltaFromSourceLocalSample(officialParentRest, officialSourceSample, officialSourceRest),
+      officialOracle,
+      1e-5
+    ),
+    "official normalized humanoid oracle should implement P * sample * rest^-1 * P^-1"
   );
+
   const targetChildDirectionHingeDelta = quatFromAxisAngle([0, 1, 0], Math.PI / 4);
   const targetChildDirectionHingeRetargeted = retargetQuaternionSample(
     [0, 0, 0, 1],
@@ -218,16 +232,16 @@ export function runRetargetingTests(): void {
   );
   const mismatchedBasisExpected = rotateVec3ByQuat(mismatchedBasisExpectedRotation, [0, 1, 0]);
   const mismatchedBasisConjugatedPath = rotateVec3ByQuat(
-    multiplyQuat(mismatchedBasisSample, invertQuat(mismatchedBasisSourceRest)),
+    multiplyQuat(invertQuat(mismatchedBasisSourceRest), mismatchedBasisSample),
     [0, 1, 0]
   );
   assert.ok(
     !vectorNearlyEqual(mismatchedBasisExpected, mismatchedBasisConjugatedPath, 1e-4),
-    "basis fixture should distinguish local delta retargeting from rest-basis conjugation"
+    "basis fixture should distinguish official parent-frame deltas from the old inverse-rest local delta path"
   );
   assert.ok(
     vectorNearlyEqual(mismatchedBasisActual, mismatchedBasisExpected, 1e-5),
-    "Three retargeting should render child direction from the source local delta"
+    "Three retargeting should render child direction from the official parent-frame normalized delta"
   );
 
   const invalidSourceRestTrackBones = createSingleLimbBones([0, 0, 0, 1], "leftUpperArm", "leftLowerArm", [0, 1, 0]);
@@ -357,22 +371,18 @@ export function runRetargetingTests(): void {
         {
           humanBone: "leftUpperLeg",
           property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
           sourceRestQuaternion: Float32Array.from(mirroredLegSourceRestLeft),
           times: toFloat32Array([0, 1]),
-          values: sanitizeQuaternionTrackValues([
-            ...mirroredLegSourceRestLeft,
-            ...multiplyQuat(mirroredLegSourceRestLeft, mirroredLegFlexion)
-          ])
+          values: sanitizeQuaternionTrackValues([[0, 0, 0, 1], mirroredLegFlexion].flat())
         },
         {
           humanBone: "rightUpperLeg",
           property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
           sourceRestQuaternion: Float32Array.from(mirroredLegSourceRestRight),
           times: toFloat32Array([0, 1]),
-          values: sanitizeQuaternionTrackValues([
-            ...mirroredLegSourceRestRight,
-            ...multiplyQuat(mirroredLegSourceRestRight, mirroredLegFlexion)
-          ])
+          values: sanitizeQuaternionTrackValues([[0, 0, 0, 1], mirroredLegFlexion].flat())
         }
       ]
     },
@@ -407,11 +417,11 @@ export function runRetargetingTests(): void {
   );
   assert.ok(
     vectorNearlyEqual(mirroredLegActualLeft, mirroredLegExpected, 1e-5),
-    "left leg rendered direction should preserve source flexion axis"
+    "left leg rendered direction should preserve canonical normalized flexion axis"
   );
   assert.ok(
     vectorNearlyEqual(mirroredLegActualRight, mirroredLegExpected, 1e-5),
-    "right leg rendered direction should preserve source flexion axis"
+    "right leg rendered direction should preserve canonical normalized flexion axis"
   );
 
   const motusLeftLowerLegRest: [number, number, number, number] = [-0.0344, 0.0344, -0.2013, 0.9783];

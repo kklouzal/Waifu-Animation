@@ -311,22 +311,25 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
     runtimeDuration = Math.max(runtimeDuration, sampleWindow.duration);
 
     if (property === "rotation") {
-      const { values, invalidSamples } = retargetQuaternionTrackValues(
-        sampleWindow.values,
-        track.sourceRestQuaternion,
-        options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray(),
-        String(boneName),
-        options.sourceBasisQuaternion?.(String(boneName), bone),
-        track.sourceRestChildDirection,
-        options.targetRestChildDirection?.(String(boneName), bone)
-      );
-      if (invalidSamples > 0) {
-        options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, invalidSamples);
+      const retargeted =
+        track.rotationSpace === "normalized-humanoid-delta"
+          ? { values: sampleWindow.values, invalidSamples: 0 }
+          : retargetQuaternionTrackValues(
+              sampleWindow.values,
+              track.sourceRestQuaternion,
+              options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray(),
+              String(boneName),
+              options.sourceBasisQuaternion?.(String(boneName), bone),
+              track.sourceRestChildDirection,
+              options.targetRestChildDirection?.(String(boneName), bone)
+            );
+      if (retargeted.invalidSamples > 0) {
+        options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, retargeted.invalidSamples);
       }
       const threeTrack = new QuaternionKeyframeTrack(
         `${bone.uuid}.quaternion`,
         Float32Array.from(sampleWindow.times),
-        Float32Array.from(values)
+        Float32Array.from(retargeted.values)
       );
       trackSourceNames[threeTrack.name] = `${String(boneName)}.quaternion`;
       return [threeTrack];

@@ -6,6 +6,7 @@ import {
   createSkeleton,
   diagnoseRetargetingRestAxes,
   localToModelPose,
+  invertQuat,
   multiplyQuat,
   normalizeVec3,
   quatFromAxisAngle,
@@ -36,10 +37,10 @@ export async function runMotionPoseSamplingTests(): Promise<void> {
   assert.ok(
     quaternionNearlyEqual(
       retargetQuaternionSample(coreRetargetSourceRest, coreRetargetTargetRest, coreRetargetSourceSample),
-      multiplyQuat(coreRetargetTargetRest, coreRetargetDelta),
+      multiplyQuat(multiplyQuat(coreRetargetSourceSample, invertQuat(coreRetargetSourceRest)), coreRetargetTargetRest),
       1e-5
     ),
-    "retargeting should preserve source local deltas by post-applying them to target rest"
+    "retargeting should preserve canonical parent-frame deltas by pre-applying them to target rest"
   );
   const coreRetargetSkeleton = createSkeleton([
     { name: "root" },
@@ -58,7 +59,7 @@ export async function runMotionPoseSamplingTests(): Promise<void> {
       }
     ]
   };
-  const coreRetargetExpected = multiplyQuat(coreRetargetTargetRest, coreRetargetDelta);
+  const coreRetargetExpected = multiplyQuat(multiplyQuat(coreRetargetSourceSample, invertQuat(coreRetargetSourceRest)), coreRetargetTargetRest);
   const coreRetargetPose = sampleClipToPose(coreRetargetSkeleton, coreRetargetClip, 1);
   assert.ok(
     !quaternionNearlyEqual(coreRetargetSourceSample, coreRetargetExpected, 1e-4),

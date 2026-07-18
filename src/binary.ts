@@ -11,14 +11,16 @@ import {
 export const WAIFU_ANIMATION_BINARY_FORMAT = "waifu-animation-bin";
 
 const MAGIC = "WANI";
-const VERSION = 2;
+const VERSION = 3;
 const HEADER_BYTES = 32;
-const TRACK_BYTES = 44;
+const TRACK_BYTES = 48;
+const V2_TRACK_BYTES = 44;
 const LEGACY_TRACK_BYTES = 36;
 const NO_OFFSET = 0xffffffff;
 
 type TargetKind = 1 | 2;
 type BinaryProperty = 1 | 2 | 3;
+type BinaryRotationSpace = 0 | 1 | 2;
 
 const TARGET_HUMAN_BONE: TargetKind = 1;
 const TARGET_JOINT: TargetKind = 2;
@@ -26,6 +28,10 @@ const TARGET_JOINT: TargetKind = 2;
 const PROPERTY_TRANSLATION: BinaryProperty = 1;
 const PROPERTY_ROTATION: BinaryProperty = 2;
 const PROPERTY_SCALE: BinaryProperty = 3;
+
+const ROTATION_SPACE_DEFAULT: BinaryRotationSpace = 0;
+const ROTATION_SPACE_LOCAL_SOURCE: BinaryRotationSpace = 1;
+const ROTATION_SPACE_NORMALIZED_HUMANOID_DELTA: BinaryRotationSpace = 2;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -51,6 +57,7 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
       property: encodeProperty(property),
       times,
       values,
+      rotationSpace: encodeRotationSpace(track.rotationSpace),
       sourceRestQuaternion: readSourceRestQuaternion(track),
       sourceRestChildDirection: readSourceRestChildDirection(track)
     };
@@ -125,6 +132,7 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
     view.setUint32(trackOffset + 32, record.sourceRestQuaternion ? 1 : 0, true);
     view.setUint32(trackOffset + 36, sourceRestChildDirectionOffset, true);
     view.setUint32(trackOffset + 40, record.sourceRestChildDirection ? 1 : 0, true);
+    view.setUint32(trackOffset + 44, record.rotationSpace, true);
 
     bytes.set(encodedName, HEADER_BYTES + trackRecords.length * TRACK_BYTES + stringOffset);
     stringOffset += encodedName.byteLength;
@@ -156,10 +164,10 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
 
   const view = new DataView(buffer);
   const version = view.getUint32(4, true);
-  if (version !== VERSION && version !== 1) throw new Error(`unsupported animation binary version ${version}`);
+  if (version !== VERSION && version !== 2 && version !== 1) throw new Error(`unsupported animation binary version ${version}`);
   const headerBytes = view.getUint32(8, true);
   const trackBytes = view.getUint32(12, true);
-  if (headerBytes !== HEADER_BYTES || (trackBytes !== TRACK_BYTES && trackBytes !== LEGACY_TRACK_BYTES))
+  if (headerBytes !== HEADER_BYTES || (trackBytes !== TRACK_BYTES && trackBytes !== V2_TRACK_BYTES && trackBytes !== LEGACY_TRACK_BYTES))
     throw new Error("animation binary layout is unsupported");
 
   const duration = view.getFloat32(16, true);
@@ -200,6 +208,8 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
       : NO_OFFSET;
     const property = decodeProperty(propertyCode);
     const stride = trackStride(property);
+    const rotationSpace =
+      trackBytes >= TRACK_BYTES ? decodeRotationSpace(view.getUint32(trackOffset + 44, true), index) : undefined;
 
     if (targetKind !== TARGET_HUMAN_BONE && targetKind !== TARGET_JOINT) {
       throw new Error(`animation track ${index} target kind is invalid`);
@@ -238,12 +248,14 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
         ? {
             ...trackBase,
             humanBone: name,
+            ...(rotationSpace ? { rotationSpace } : {}),
             ...(sourceRestQuaternion ? { sourceRestQuaternion } : {}),
             ...(sourceRestChildDirection ? { sourceRestChildDirection } : {})
           }
         : {
             ...trackBase,
             joint: name,
+            ...(rotationSpace ? { rotationSpace } : {}),
             ...(sourceRestQuaternion ? { sourceRestQuaternion } : {}),
             ...(sourceRestChildDirection ? { sourceRestChildDirection } : {})
           };
@@ -274,6 +286,20 @@ function encodeProperty(property: "translation" | "rotation" | "scale"): BinaryP
   if (property === "translation") return PROPERTY_TRANSLATION;
   if (property === "rotation") return PROPERTY_ROTATION;
   return PROPERTY_SCALE;
+}
+
+function encodeRotationSpace(rotationSpace: AnimationTrack["rotationSpace"]): BinaryRotationSpace {
+  if (rotationSpace === undefined) return ROTATION_SPACE_DEFAULT;
+  if (rotationSpace === "local-source") return ROTATION_SPACE_LOCAL_SOURCE;
+  if (rotationSpace === "normalized-humanoid-delta") return ROTATION_SPACE_NORMALIZED_HUMANOID_DELTA;
+  throw new Error(`unknown animation rotation space ${String(rotationSpace)}`);
+}
+
+function decodeRotationSpace(rotationSpace: number, trackIndex: number): AnimationTrack["rotationSpace"] | undefined {
+  if (rotationSpace === ROTATION_SPACE_DEFAULT) return undefined;
+  if (rotationSpace === ROTATION_SPACE_LOCAL_SOURCE) return "local-source";
+  if (rotationSpace === ROTATION_SPACE_NORMALIZED_HUMANOID_DELTA) return "normalized-humanoid-delta";
+  throw new Error(`animation track ${trackIndex} rotation space is invalid`);
 }
 
 function decodeProperty(property: number): "translation" | "rotation" | "scale" {

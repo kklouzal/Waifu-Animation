@@ -4,12 +4,19 @@ import type { HumanoidBoneNameLike } from "./skeleton.js";
 export type TrackProperty = "translation" | "rotation" | "scale" | "position" | "quaternion";
 export type NormalizedTrackProperty = "translation" | "rotation" | "scale";
 
+export type RotationSpace = "local-source" | "normalized-humanoid-delta";
+
 export type AnimationTrack = {
   joint?: string;
   humanBone?: HumanoidBoneNameLike;
   property: TrackProperty;
   times: Float32Array;
   values: Float32Array;
+  /**
+   * Rotation values are legacy local source-bone samples by default. New importer-baked humanoid clips use
+   * normalized-humanoid-delta: VRM Animation/Pixiv normalized humanoid relative rotations in identity rest space.
+   */
+  rotationSpace?: RotationSpace;
   sourceRestQuaternion?: Float32Array;
   sourceRestChildDirection?: Float32Array;
 };

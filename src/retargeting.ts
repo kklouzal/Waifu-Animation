@@ -9,7 +9,6 @@ import {
   multiplyQuat,
   normalizeQuat,
   normalizeVec3,
-  quatFromUnitVectors,
   rotateVec3ByQuat,
   subVec3
 } from "./math.js";
@@ -62,6 +61,17 @@ const DIAGNOSTIC_CHILD_BONES: Partial<Record<HumanoidBoneName, HumanoidBoneName>
 
 const DIAGNOSTIC_BONES = Object.keys(DIAGNOSTIC_CHILD_BONES) as HumanoidBoneName[];
 
+export function normalizedHumanoidDeltaFromSourceLocalSample(
+  parentWorldRest: Quat,
+  sourceLocalSample: Quat,
+  sourceLocalRest: Quat
+): Quat {
+  const parent = cloneNormalizedQuat(parentWorldRest);
+  const sample = cloneNormalizedQuat(sourceLocalSample, sourceLocalRest);
+  const rest = cloneNormalizedQuat(sourceLocalRest);
+  return normalizeQuat(multiplyQuat(multiplyQuat(multiplyQuat(parent, sample), invertQuat(rest)), invertQuat(parent)));
+}
+
 export function retargetQuaternionSample(
   sourceRest: Quat,
   targetRest: Quat,
@@ -71,36 +81,18 @@ export function retargetQuaternionSample(
   sourceRestChildDirection?: ArrayLike<number>,
   targetRestChildDirection?: ArrayLike<number>
 ): Quat {
+  void humanBone;
+  void sourceRestChildDirection;
+  void targetRestChildDirection;
   const srcRest = normalizeQuat(sourceRest);
   const dstRest = normalizeQuat(targetRest);
   const srcSample = normalizeQuat(sourceSample, srcRest);
-
-  const sourceChildDirection = normalizedDirection(sourceRestChildDirection);
-  const targetChildDirection = normalizedDirection(targetRestChildDirection);
-  if (sourceChildDirection && targetChildDirection) {
-    void humanBone;
-    const sourceRestDirection = normalizeVec3(rotateVec3ByQuat(srcRest, sourceChildDirection));
-    const sourceSampleDirection = normalizeVec3(rotateVec3ByQuat(srcSample, sourceChildDirection));
-    const sourceSwing = quatFromUnitVectors(sourceRestDirection, sourceSampleDirection);
-    const basis = sourceBasis ? cloneNormalizedQuat(sourceBasis) : quatFromUnitVectors(sourceRestDirection, targetChildDirection);
-    const targetSwing = multiplyQuat(multiplyQuat(basis, sourceSwing), invertQuat(basis));
-    return normalizeQuat(multiplyQuat(targetSwing, dstRest));
-  }
-
-  void humanBone;
-  let sourceDelta = multiplyQuat(invertQuat(srcRest), srcSample);
+  let sourceDelta = multiplyQuat(srcSample, invertQuat(srcRest));
   if (sourceBasis) {
     const basis = cloneNormalizedQuat(sourceBasis);
     sourceDelta = multiplyQuat(multiplyQuat(basis, sourceDelta), invertQuat(basis));
   }
-  return normalizeQuat(multiplyQuat(dstRest, sourceDelta));
-}
-
-function normalizedDirection(value: ArrayLike<number> | undefined): Vec3 | null {
-  if (!value || value.length < 3) return null;
-  const direction: Vec3 = [Number(value[0] ?? 0), Number(value[1] ?? 0), Number(value[2] ?? 0)];
-  if (!direction.every(Number.isFinite) || lengthVec3(direction) <= EPSILON) return null;
-  return normalizeVec3(direction);
+  return normalizeQuat(multiplyQuat(sourceDelta, dstRest));
 }
 
 export function retargetQuaternionTrackValues(
@@ -166,10 +158,13 @@ export function diagnoseRetargetingRestAxes(
       (track) =>
         (track.humanBone ?? track.joint) === humanBone && retargetDiagnosticTrackProperty(track.property) === "rotation"
     );
+    const isCanonicalNormalizedDelta = rotationTrack?.rotationSpace === "normalized-humanoid-delta";
     const sourceRestQuaternion =
       rotationTrack?.sourceRestQuaternion?.length === 4
         ? cloneNormalizedQuat(rotationTrack.sourceRestQuaternion)
-        : undefined;
+        : isCanonicalNormalizedDelta
+          ? cloneNormalizedQuat(targetRestQuaternion)
+          : undefined;
     const sourceRestChildDirection =
       rotationTrack?.sourceRestChildDirection?.length === 3
         ? normalizeVec3([
@@ -179,7 +174,7 @@ export function diagnoseRetargetingRestAxes(
           ])
         : undefined;
     const strongestSample = rotationTrack
-      ? strongestQuaternionSample(rotationTrack.values, sourceRestQuaternion ?? targetRestQuaternion)
+      ? strongestQuaternionSample(rotationTrack.values, isCanonicalNormalizedDelta ? [0, 0, 0, 1] : (sourceRestQuaternion ?? targetRestQuaternion))
       : undefined;
     const sourceChildDirection =
       sourceRestChildDirection ??
@@ -187,17 +182,19 @@ export function diagnoseRetargetingRestAxes(
         ? rotateVec3ByQuat(sourceRestQuaternion, targetChildDirection)
         : undefined);
     const retargeted =
-      sourceRestQuaternion && strongestSample
-        ? retargetQuaternionSample(
-            sourceRestQuaternion,
-            targetRestQuaternion,
-            strongestSample,
-            humanBone,
-            options.sourceBasisQuaternion?.(humanBone, jointIndex) ?? undefined,
-            sourceRestChildDirection,
-            targetChildDirection
-          )
-        : undefined;
+      isCanonicalNormalizedDelta && strongestSample
+        ? strongestSample
+        : sourceRestQuaternion && strongestSample
+          ? retargetQuaternionSample(
+              sourceRestQuaternion,
+              targetRestQuaternion,
+              strongestSample,
+              humanBone,
+              options.sourceBasisQuaternion?.(humanBone, jointIndex) ?? undefined,
+              sourceRestChildDirection,
+              targetChildDirection
+            )
+          : undefined;
     const retargetedChildDirection =
       retargeted && childIndex >= 0
         ? retargetedModelDirection(skeleton, jointIndex, childIndex, retargeted)
