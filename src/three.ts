@@ -53,9 +53,20 @@ export type ThreeAnimationClipOptions = {
   targetRestQuaternion?: (humanBone: string, bone: Object3D) => ArrayLike<number> | null | undefined;
   sourceBasisQuaternion?: (humanBone: string, bone: Object3D) => ArrayLike<number> | null | undefined;
   targetRestChildDirection?: (humanBone: string, bone: Object3D) => ArrayLike<number> | null | undefined;
+  /** Target VRM metaVersion. VRM0 targets use Pixiv's normalized-humanoid X/Z sign adaptation. */
+  targetVrmMetaVersion?: string;
   logger?: Pick<Console, "warn">;
   minimumDuration?: number;
 };
+
+export function adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion(
+  values: ArrayLike<number>,
+  targetVrmMetaVersion: string | undefined
+): number[] {
+  const output = Array.from(values);
+  if (targetVrmMetaVersion !== "0") return output;
+  return output.map((value, index) => (index % 4 === 0 || index % 4 === 2 ? -value : value));
+}
 
 export type TrackSampleWindow = {
   times: number[];
@@ -313,7 +324,13 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
     if (property === "rotation") {
       const retargeted =
         track.rotationSpace === "normalized-humanoid-delta"
-          ? { values: sampleWindow.values, invalidSamples: 0 }
+          ? {
+              values: adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion(
+                sampleWindow.values,
+                options.targetVrmMetaVersion
+              ),
+              invalidSamples: 0
+            }
           : retargetQuaternionTrackValues(
               sampleWindow.values,
               track.sourceRestQuaternion,

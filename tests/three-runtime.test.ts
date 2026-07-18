@@ -4,6 +4,7 @@ import {
   LoopOnce,
   Object3D,
   WAIFU_ANIMATION_BINARY_FORMAT,
+  adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion,
   assert,
   calculateThreeBaseLoopSeamWindow,
   calculateThreeBaseLoopTransitionWeights,
@@ -78,6 +79,46 @@ export async function runThreeRuntimeTests(): Promise<void> {
   assert.ok(
     quaternionNearlyEqual(staticThreeBone.quaternion.toArray(), staticThreeRotation, 1e-5),
     "single-key Three tracks should sample as static local rotations through AnimationMixer"
+  );
+
+  const canonicalVrm0SourceValues = [0.1, 0.2, 0.3, 0.9273618495, -0.4, 0.5, -0.1, 0.7615773106];
+  const pixivOfficialVrm0Rule = canonicalVrm0SourceValues.map((value, index) =>
+    index % 2 === 0 ? -value : value
+  );
+  assert.deepEqual(
+    adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion(canonicalVrm0SourceValues, "0"),
+    pixivOfficialVrm0Rule,
+    "VRM0 target normalized-humanoid rotations must match Pixiv's official quaternion X/Z sign adaptation"
+  );
+  assert.deepEqual(
+    adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion(canonicalVrm0SourceValues, "1"),
+    canonicalVrm0SourceValues,
+    "VRM1 target normalized-humanoid rotations must not receive the VRM0 sign adaptation"
+  );
+  const canonicalVrm0Bone = new Object3D();
+  const canonicalVrm0Clip = createThreeAnimationClip(
+    {
+      id: "canonical-vrm0-target-adaptation",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array(canonicalVrm0SourceValues)
+        }
+      ]
+    },
+    {
+      resolveBone: (humanBone) => (humanBone === "head" ? canonicalVrm0Bone : null),
+      targetVrmMetaVersion: "0"
+    }
+  );
+  const canonicalVrm0ActualValues = Array.from(canonicalVrm0Clip.tracks[0]!.values);
+  assert.ok(
+    canonicalVrm0ActualValues.every((value, index) => Math.abs(value - pixivOfficialVrm0Rule[index]!) < 1e-6),
+    "Three binding should adapt canonical normalized-delta tracks for VRM0 targets without rebaking assets"
   );
   const invalidThreeTrackWarnings: string[] = [];
   const invalidThreeTimeClip = createThreeAnimationClip(
