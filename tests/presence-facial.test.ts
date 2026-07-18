@@ -527,4 +527,3 @@ export function runFacialAnimationTests(): void {
     "malformed mouth release speeds should fall back instead of freezing mouth motion"
   );
 }
-

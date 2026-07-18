@@ -1198,11 +1198,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
   runtimeOrthogonalRootMotion.setLayer("orthogonal-b", orthogonalMotionB, { weight: 1, targetWeight: 1, priority: 4 });
   const orthogonalRootMotionUpdate = runtimeOrthogonalRootMotion.update(1, { collectRootMotion: true });
   assert.ok(
-    vectorNearlyEqual(
-      orthogonalRootMotionUpdate.rootMotionDelta.translation,
-      [5, 0, 5],
-      1e-6
-    ),
+    vectorNearlyEqual(orthogonalRootMotionUpdate.rootMotionDelta.translation, [5, 0, 5], 1e-6),
     "orthogonal equal root-motion deltas should use Ozz component weighted-average translation"
   );
 
