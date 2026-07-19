@@ -622,6 +622,45 @@ export async function runMotionRootMotionTests(): Promise<void> {
     vectorNearlyEqual(sampleMotionTracks(unevenRawLoopDistribution.motion, 0.1).transform.translation, [0, 0, 0], 1e-6),
     "raw root-motion loop distribution should spread endpoint drift by key time instead of key ordinal"
   );
+
+  const residualBakeSource = createRawAnimation({
+    id: "raw-residual-trajectory-bake",
+    duration: 1,
+    loop: true,
+    tracks: [
+      {
+        joint: "root",
+        translations: [
+          { time: 0, value: [0, 1, 0] },
+          { time: 0.25, value: [0.08, 1.05, 2.5] },
+          { time: 0.5, value: [0, 0.98, 5] },
+          { time: 0.75, value: [-0.08, 1.04, 7.5] },
+          { time: 1, value: [0, 1.01, 10] }
+        ]
+      }
+    ]
+  });
+  const residualBake = extractRawRootMotion(motionSkeleton, residualBakeSource, {
+    reference: "absolute",
+    translation: { axes: { x: false, y: false, z: true }, bake: true, bakeMode: "remove-linear-trajectory", loop: true },
+    rotation: false
+  });
+  const bakedTranslations = residualBake.rawAnimation.tracks[0]!.translations.map((key) => key.value);
+  assert.ok(
+    vectorNearlyEqual(bakedTranslations[0]!, [0, 1, 0], 1e-6) &&
+      vectorNearlyEqual(bakedTranslations[2]!, [0, 0.98, 0], 1e-6) &&
+      vectorNearlyEqual(bakedTranslations[4]!, [0, 1.01, 0], 1e-6),
+    "linear trajectory baking should remove cumulative selected-axis path travel without flattening authored vertical values"
+  );
+  assert.ok(
+    vectorNearlyEqual(bakedTranslations[1]!, [0.08, 1.05, 0], 1e-6) &&
+      vectorNearlyEqual(bakedTranslations[3]!, [-0.08, 1.04, 0], 1e-6),
+    "linear trajectory baking should preserve unselected lateral pelvis sway while removing selected forward travel"
+  );
+  assert.ok(
+    vectorNearlyEqual(sampleMotionTracks(residualBake.motion, 0.25).transform.translation, [0, 0, 0], 1e-6),
+    "loop-normalized extracted trajectory should not include cyclic lateral/vertical residual COM motion"
+  );
   const rawFullRotationLoopDistribution = extractRawRootMotion(
     motionSkeleton,
     createRawAnimation({

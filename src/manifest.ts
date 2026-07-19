@@ -165,7 +165,7 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
     });
   }
   if (rootMotionPolicy === "stripped-to-in-place") {
-    if (movingRootCarrierTrack) {
+    if (movingRootCarrierTrack && !isDirectorOwnedResidualRootCarrier(entry)) {
       issues.push({
         joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
         property: movingRootCarrierTrack.property,
@@ -268,6 +268,19 @@ export function readRequiredAnimationCoverage(entry: AnimationManifestEntry): Re
         ).sort()
       : []
   };
+}
+
+function isDirectorOwnedResidualRootCarrier(entry: AnimationManifestEntry): boolean {
+  const rootMotion = entry.source?.rootMotion;
+  if (typeof rootMotion !== "object" || rootMotion === null) return false;
+  const metadata = rootMotion as Record<string, unknown>;
+  return (
+    metadata.policy === "stripped-to-in-place" &&
+    metadata.owner === "director-xz" &&
+    metadata.carrier === "hips" &&
+    metadata.units === "meters-target-rest-offset" &&
+    metadata.bakeMode === "remove-linear-trajectory"
+  );
 }
 
 function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {

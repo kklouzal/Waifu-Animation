@@ -81,12 +81,15 @@ export type MotionExtractionAxisMask = {
   z?: boolean;
 };
 
+export type MotionTranslationBakeMode = "reference" | "remove-linear-trajectory";
+
 export type MotionRotationExtractionMode = "yaw" | "full";
 
 export type MotionTranslationExtractionOptions = {
   axes?: MotionExtractionAxisMask;
   reference?: MotionExtractionReference;
   bake?: boolean;
+  bakeMode?: MotionTranslationBakeMode;
   loop?: boolean;
 };
 
@@ -161,6 +164,7 @@ type ResolvedTranslationExtraction = {
   axes: Required<MotionExtractionAxisMask>;
   reference: MotionExtractionReference;
   bake: boolean;
+  bakeMode: MotionTranslationBakeMode;
   loop: boolean;
 };
 
@@ -346,11 +350,7 @@ export function extractRawRootMotion(
     : undefined;
 
   if (translationSettings?.bake) {
-    for (let index = 0; index < outputTrack.translations.length; index += 1) {
-      const key = outputTrack.translations[index]!;
-      const motionValue = rawPositionKeys[index]?.value ?? [0, 0, 0];
-      key.value = subVec3(key.value, motionValue);
-    }
+    bakeRawMotionCarrierTranslation(outputTrack, translationSettings, translationReference, duration);
   }
 
   if (rotationSettings?.bake) {
@@ -734,6 +734,7 @@ function resolveTranslationExtraction(options: ExtractRootMotionOptions): Resolv
     },
     reference: channel.reference ?? options.reference ?? "skeleton",
     bake: channel.bake ?? options.bake ?? false,
+    bakeMode: channel.bakeMode ?? "reference",
     loop: channel.loop ?? false
   };
 }
@@ -1063,11 +1064,7 @@ function bakeCarrierTrack(
   if (jointIndex < 0 || resolveTrackJointIndex(skeleton, track) !== jointIndex) return copy;
 
   if (property === "translation" && translation?.bake) {
-    for (let offset = 0; offset + 2 < copy.values.length; offset += 3) {
-      if (translation.axes.x) copy.values[offset] = translationReference.translation[0];
-      if (translation.axes.y) copy.values[offset + 1] = translationReference.translation[1];
-      if (translation.axes.z) copy.values[offset + 2] = translationReference.translation[2];
-    }
+    bakeClipMotionCarrierTranslation(copy, translation, translationReference.translation, duration);
   }
 
   if (property === "translation" && rotation?.bake && motionRotation) {
@@ -1103,6 +1100,101 @@ function bakeCarrierTrack(
   }
 
   return copy;
+}
+
+function bakeRawMotionCarrierTranslation(
+  track: RawAnimationJointTrack,
+  translation: ResolvedTranslationExtraction,
+  reference: Vec3,
+  duration: number
+): void {
+  if (translation.bakeMode === "remove-linear-trajectory") {
+    const endpoints = rawTranslationEndpointDelta(track.translations, translation.axes);
+    for (const key of track.translations) {
+      key.value = bakeLinearTrajectoryValue(key.value, reference, endpoints, translation.axes, key.time, duration);
+    }
+    return;
+  }
+
+  for (const key of track.translations) {
+    key.value = bakeReferenceTranslationValue(key.value, reference, translation.axes);
+  }
+}
+
+function bakeClipMotionCarrierTranslation(
+  track: AnimationTrack,
+  translation: ResolvedTranslationExtraction,
+  reference: Vec3,
+  duration: number
+): void {
+  if (translation.bakeMode === "remove-linear-trajectory") {
+    const endpoints = clipTranslationEndpointDelta(track, translation.axes);
+    for (let key = 0; key < track.times.length; key += 1) {
+      const offset = key * 3;
+      const value: Vec3 = [track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!];
+      track.values.set(bakeLinearTrajectoryValue(value, reference, endpoints, translation.axes, track.times[key]!, duration), offset);
+    }
+    return;
+  }
+
+  for (let offset = 0; offset + 2 < track.values.length; offset += 3) {
+    track.values.set(
+      bakeReferenceTranslationValue([track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!], reference, translation.axes),
+      offset
+    );
+  }
+}
+
+function bakeReferenceTranslationValue(
+  value: Vec3,
+  reference: Vec3,
+  axes: Required<MotionExtractionAxisMask>
+): Vec3 {
+  return [axes.x ? reference[0] : value[0], axes.y ? reference[1] : value[1], axes.z ? reference[2] : value[2]];
+}
+
+function bakeLinearTrajectoryValue(
+  value: Vec3,
+  reference: Vec3,
+  endpointDelta: Vec3,
+  axes: Required<MotionExtractionAxisMask>,
+  time: number,
+  duration: number
+): Vec3 {
+  const ratio = motionSampleRatio(time, finiteMotionDuration(duration));
+  return [
+    axes.x ? finiteSigned(value[0] - endpointDelta[0] * ratio, reference[0]) : value[0],
+    axes.y ? finiteSigned(value[1] - endpointDelta[1] * ratio, reference[1]) : value[1],
+    axes.z ? finiteSigned(value[2] - endpointDelta[2] * ratio, reference[2]) : value[2]
+  ];
+}
+
+function rawTranslationEndpointDelta(
+  keys: readonly RawAnimationVec3KeyLike[],
+  axes: Required<MotionExtractionAxisMask>
+): Vec3 {
+  if (keys.length < 2) return [0, 0, 0];
+  return maskedEndpointDelta(keys[0]!.value, keys[keys.length - 1]!.value, axes);
+}
+
+function clipTranslationEndpointDelta(track: AnimationTrack, axes: Required<MotionExtractionAxisMask>): Vec3 {
+  if (track.values.length < 6) return [0, 0, 0];
+  const last = track.values.length - 3;
+  return maskedEndpointDelta(
+    [track.values[0]!, track.values[1]!, track.values[2]!],
+    [track.values[last]!, track.values[last + 1]!, track.values[last + 2]!],
+    axes
+  );
+}
+
+type RawAnimationVec3KeyLike = { value: Vec3 };
+
+function maskedEndpointDelta(from: ArrayLike<number>, to: ArrayLike<number>, axes: Required<MotionExtractionAxisMask>): Vec3 {
+  return [
+    axes.x ? finiteSigned((to[0] ?? 0) - (from[0] ?? 0), 0) : 0,
+    axes.y ? finiteSigned((to[1] ?? 0) - (from[1] ?? 0), 0) : 0,
+    axes.z ? finiteSigned((to[2] ?? 0) - (from[2] ?? 0), 0) : 0
+  ];
 }
 
 function sampleMotionTrackTime(duration: number, timeSeconds: number, loop: boolean): number {
