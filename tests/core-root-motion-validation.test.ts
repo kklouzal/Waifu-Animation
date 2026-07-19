@@ -288,6 +288,58 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     true,
     "stripped-to-in-place clips should tolerate tiny stationary root-carrier translation noise"
   );
+  const verticalTransitionClip: AnimationClip = {
+    id: "stand-to-crouch-vertical-transition",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "hips",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0, -0.55, 0])
+      }
+    ]
+  };
+  const verticalTransitionRootMotion = {
+    policy: "stripped-to-in-place" as const,
+    provenance: "preserved-in-clip",
+    owner: "director-xz",
+    carrier: "hips",
+    units: "meters-target-rest-offset",
+    bakeMode: "reference",
+    extractedAxes: ["x", "z"],
+    preservedAxes: ["y"],
+    support: "vertical-transition"
+  };
+  assert.equal(
+    inspectClipAsset(
+      {
+        id: verticalTransitionClip.id,
+        label: "Stand To Crouch Vertical Transition",
+        url: "/stand-to-crouch-vertical-transition.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotion: verticalTransitionRootMotion }
+      },
+      verticalTransitionClip
+    ).accepted,
+    true,
+    "a stripped in-place vertical transition should retain only its explicitly owned hips Y articulation"
+  );
+  assert.equal(
+    inspectClipAsset(
+      {
+        id: "malformed-vertical-transition",
+        label: "Malformed Vertical Transition",
+        url: "/malformed-vertical-transition.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotion: { ...verticalTransitionRootMotion, preservedAxes: ["x", "y"] } }
+      },
+      verticalTransitionClip
+    ).accepted,
+    false,
+    "vertical-transition metadata must not authorize retained horizontal root-carrier motion"
+  );
+
   const preservedRootMotionHeadOnlyClip: AnimationClip = {
     id: "root-motion-head-only",
     duration: 1,

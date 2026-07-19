@@ -343,6 +343,39 @@ export async function runThreeRuntimeTests(): Promise<void> {
     false,
     "stripped-to-in-place runtime clips should still remove root carrier position tracks"
   );
+  const verticalTransitionClip = createThreeAnimationClip(hipsTranslationSourceClip, {
+    resolveBone: (humanBone) => (humanBone === "hips" ? hipsTranslationBone : null)
+  });
+  createThreeRuntimeClipsForEntry(
+    {
+      id: "vertical-transition-hips-y",
+      label: "Vertical Transition Hips Y",
+      url: "/vertical-transition-hips-y.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      loop: false,
+      source: {
+        rootMotion: {
+          policy: "stripped-to-in-place",
+          provenance: "preserved-in-clip",
+          owner: "director-xz",
+          carrier: "hips",
+          units: "meters-target-rest-offset",
+          bakeMode: "reference",
+          extractedAxes: ["x", "z"],
+          preservedAxes: ["y"],
+          support: "vertical-transition"
+        }
+      }
+    },
+    new AnimationMixer(hipsTranslationRuntimeRoot),
+    verticalTransitionClip
+  );
+  assert.equal(
+    verticalTransitionClip.tracks.some((track) => track.name === `${hipsTranslationBone.uuid}.position`),
+    true,
+    "non-looping vertical-transition runtime clips should retain the explicitly owned hips Y track"
+  );
+
   const namedRootCarrierRuntimeRoot = new Object3D();
   const rootTranslationBone = new Object3D();
   rootTranslationBone.name = "root";

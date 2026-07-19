@@ -226,6 +226,41 @@ export async function runMotionRootMotionTests(): Promise<void> {
     "root-motion baking should leave unrelated tracks unchanged"
   );
 
+  const stationaryResidualRaw = createRawAnimation({
+    id: "stationary-residual-pelvis",
+    duration: 1,
+    loop: true,
+    tracks: [
+      {
+        joint: "root",
+        translations: [
+          { time: 0, value: [10, 100, -5] },
+          { time: 0.5, value: [20, 103, -7] },
+          { time: 1, value: [10.2, 100.1, -5.1] }
+        ]
+      }
+    ]
+  });
+  const stationaryResidual = extractRawRootMotion(motionSkeleton, stationaryResidualRaw, {
+    carrier: { joint: "root" },
+    reference: "animation",
+    translation: { axes: { x: true, y: true, z: true }, bake: true, bakeMode: "remove-linear-trajectory", loop: true },
+    rotation: false
+  });
+  assert.ok(stationaryResidual.motion.position, "stationary residual extraction should emit pelvis/COM translation");
+  assert.ok(
+    vectorNearlyEqual(stationaryResidual.rawAnimation.tracks[0]!.translations[0]!.value, [10, 100, -5], 1e-6),
+    "stationary residual bake should preserve target rest-relative first pelvis sample"
+  );
+  assert.ok(
+    vectorNearlyEqual(stationaryResidual.rawAnimation.tracks[0]!.translations[1]!.value, [19.9, 102.95, -6.95], 1e-5),
+    "stationary residual bake should remove only seam drift, not destroy authored COM X/Y/Z residual"
+  );
+  assert.ok(
+    vectorNearlyEqual(stationaryResidual.rawAnimation.tracks[0]!.translations[2]!.value, [10, 100, -5], 1e-5),
+    "stationary residual loop normalization should close the pelvis seam without scene-root travel"
+  );
+
   const rotationBakeTranslationClip: AnimationClip = {
     id: "rotation-bake-translation-compensation",
     duration: 1,

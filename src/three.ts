@@ -12,7 +12,7 @@ import {
   type Object3D
 } from "three";
 import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
-import { type FootPlantResult, solveTwoBoneIkCorrections } from "./ik.js";
+import { type FootPlantResult, type StationarySupportCompensation, solveTwoBoneIkCorrections } from "./ik.js";
 import {
   type Quat,
   type Vec3,
@@ -292,6 +292,23 @@ export type ThreeFootPlantClearResult = {
   issues: string[];
 };
 
+export type ThreeStationarySupportApplyOptions = {
+  root: Object3D;
+  targetOffset: Vec3;
+  currentOffset?: Vec3;
+  deltaSeconds?: number;
+  influence?: number;
+  speed?: number;
+  maxOffset?: number;
+};
+
+export type ThreeStationarySupportApplyResult = {
+  applied: boolean;
+  offset: Vec3;
+  delta: Vec3;
+  influence: number;
+};
+
 const tmpCorrection = new Quaternion();
 const tmpCurrentWorld = new Quaternion();
 const tmpTargetWorld = new Quaternion();
@@ -469,10 +486,11 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
   mixer: AnimationMixer,
   animationClip: ThreeAnimationClip
 ): ThreeRuntimeClip<TEntry>[] {
-  if (shouldStripRuntimeRootTranslation(entry, animationClip))
+  const preservesResidualPelvisCarrier = entryHasResidualPelvisCarrier(entry);
+  if (readThreeRuntimeRootMotionPolicy(entry, animationClip) === "stripped-to-in-place" && !preservesResidualPelvisCarrier)
     applyThreeTrackPolicy(animationClip, ROOT_TRANSLATION_EXCLUDE_POLICY);
   if (entry.loop === false) {
-    applyThreeTrackPolicy(animationClip, OVERLAY_UPPER_BODY_TRACK_POLICY);
+    if (!entryHasVerticalTransitionPelvisCarrier(entry)) applyThreeTrackPolicy(animationClip, OVERLAY_UPPER_BODY_TRACK_POLICY);
     animationClip.name = `${entry.id}:overlay`;
     return [createThreeRuntimeClip(entry, mixer, animationClip, "overlay")];
   }
@@ -502,8 +520,42 @@ function readThreeRuntimeRootMotionPolicy(
   return isRootMotionPolicy(clipPolicy) ? clipPolicy : null;
 }
 
-function shouldStripRuntimeRootTranslation(entry: AnimationManifestEntry, animationClip: ThreeAnimationClip): boolean {
-  return readThreeRuntimeRootMotionPolicy(entry, animationClip) === "stripped-to-in-place";
+function exactRootMotionAxes(value: unknown, expected: readonly string[]): boolean {
+  if (!Array.isArray(value) || value.some((axis) => typeof axis !== "string")) return false;
+  const actual = Array.from(new Set(value)).sort();
+  const sortedExpected = [...expected].sort();
+  return actual.length === sortedExpected.length && actual.every((axis, index) => axis === sortedExpected[index]);
+}
+
+function entryHasVerticalTransitionPelvisCarrier(entry: AnimationManifestEntry): boolean {
+  const rootMotion = entry.source?.rootMotion;
+  if (typeof rootMotion !== "object" || rootMotion === null) return false;
+  const metadata = rootMotion as Record<string, unknown>;
+  return (
+    metadata.policy === "stripped-to-in-place" &&
+    metadata.owner === "director-xz" &&
+    metadata.carrier === "hips" &&
+    metadata.units === "meters-target-rest-offset" &&
+    metadata.support === "vertical-transition" &&
+    metadata.bakeMode === "reference" &&
+    exactRootMotionAxes(metadata.extractedAxes, ["x", "z"]) &&
+    exactRootMotionAxes(metadata.preservedAxes, ["y"])
+  );
+}
+
+function entryHasResidualPelvisCarrier(entry: AnimationManifestEntry): boolean {
+  if (entryHasVerticalTransitionPelvisCarrier(entry)) return true;
+  const rootMotion = entry.source?.rootMotion;
+  if (typeof rootMotion !== "object" || rootMotion === null) return false;
+  const metadata = rootMotion as Record<string, unknown>;
+  return (
+    metadata.policy === "stripped-to-in-place" &&
+    metadata.carrier === "hips" &&
+    metadata.units === "meters-target-rest-offset" &&
+    metadata.bakeMode === "remove-linear-trajectory" &&
+    (metadata.owner === "director-xz" ||
+      (metadata.owner === "none" && metadata.support === "contact-aware-stationary"))
+  );
 }
 
 function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {
@@ -1081,6 +1133,39 @@ export function applyThreeFootPlantResult(
     legs,
     issues
   };
+}
+
+
+export function applyThreeStationarySupportResult(
+  result: Pick<StationarySupportCompensation, "rootOffset">,
+  options: ThreeStationarySupportApplyOptions
+): ThreeStationarySupportApplyResult {
+  const influence = sanitizeThreeRuntimeWeight(options.influence ?? 1);
+  const speed = finiteNonNegative(options.speed ?? 22, 22);
+  const amount = dampedInfluenceAmount(influence, speed, options.deltaSeconds);
+  const current = finiteThreeVec3(options.currentOffset ?? [0, 0, 0], [0, 0, 0]);
+  const maxOffset = finiteNonNegative(options.maxOffset ?? 0.18, 0.18);
+  const target = finiteThreeVec3(options.targetOffset ?? result.rootOffset, [0, 0, 0]);
+  const horizontal = Math.hypot(target[0], target[2]);
+  const scale = horizontal > maxOffset && horizontal > 1e-6 ? maxOffset / horizontal : 1;
+  const next: Vec3 = [
+    current[0] + (target[0] * scale - current[0]) * amount,
+    current[1] + (target[1] * scale - current[1]) * amount,
+    current[2] + (target[2] * scale - current[2]) * amount
+  ];
+  const delta: Vec3 = [next[0] - current[0], next[1] - current[1], next[2] - current[2]];
+  options.root.position.add(tmpWorldDirection.set(delta[0], delta[1], delta[2]));
+  options.root.updateMatrixWorld(true);
+  return { applied: lengthVec3(delta) > 1e-8, offset: next, delta, influence };
+}
+
+function finiteThreeVec3(value: Vec3 | undefined, fallback: Vec3): Vec3 {
+  if (!Array.isArray(value) || value.length < 3) return [...fallback] as Vec3;
+  return [
+    isFiniteNumber(value[0]) ? value[0] : fallback[0],
+    isFiniteNumber(value[1]) ? value[1] : fallback[1],
+    isFiniteNumber(value[2]) ? value[2] : fallback[2]
+  ];
 }
 
 function shouldResolveFootPlantIkFromAppliedPose(pelvisOffset: Vec3, amount: number, pelvisApplied: boolean): boolean {

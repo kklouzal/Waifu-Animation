@@ -29,6 +29,188 @@ export type GroundContact = {
   rayStart?: Vec3;
 };
 
+export type StationarySupportContactSide = "left" | "right";
+
+export type StationarySupportContactSample = {
+  time: number;
+  position: Vec3;
+  height?: number;
+};
+
+export type StationarySupportContactClassifierOptions = {
+  floorY?: number;
+  enterHeight?: number;
+  exitHeight?: number;
+  maxHorizontalVelocity?: number;
+  maxVerticalVelocity?: number;
+  minContactSeconds?: number;
+};
+
+export type StationarySupportContactInterval = {
+  side: StationarySupportContactSide;
+  startTime: number;
+  endTime: number;
+  duration: number;
+  anchor: Vec3;
+  maxSlide: number;
+  sampleCount: number;
+};
+
+export type StationarySupportContactClassification = {
+  intervals: StationarySupportContactInterval[];
+  plantedSampleRatio: number;
+  maxPlantedSlide: number;
+};
+
+export type StationarySupportCompensationInput = {
+  left?: StationarySupportContactClassification;
+  right?: StationarySupportContactClassification;
+  pelvisOffset: Vec3;
+  leftError?: Vec3;
+  rightError?: Vec3;
+  maxCompensation?: number;
+  influence?: number;
+};
+
+export type StationarySupportCompensation = {
+  rootOffset: Vec3;
+  pelvisOffset: Vec3;
+  supportCount: number;
+  influence: number;
+};
+
+export type StationarySupportSideSample = {
+  time: number;
+  sole: Vec3;
+};
+
+export type StationarySupportSideBaseline = {
+  /**
+   * Vertical distance from ankle joint to sole/contact point in world/model metres.
+   * For Lilin-style VRM feet this is typically around 0.12-0.16m. It is never a
+   * sole clearance and must not be subtracted from the measured sole/floor clearance.
+   */
+  ankleToSoleHeight: number;
+  /** Back-compat alias for soleClearance; never an ankle-center height. */
+  height: number;
+  /** Offset from ankle joint center to the sole/contact point, in the same coordinates as ankle/sole. */
+  soleOffset: Vec3;
+  /** Locked planted-sole clearance over floor in metres; normally near 0 for stationary support. */
+  soleClearance: number;
+  source: "rest" | "initial-window" | "expected" | "fallback";
+  sampleCount: number;
+};
+
+export type StationarySupportStateSide = {
+  active: boolean;
+  anchor?: Vec3;
+  previousSole?: Vec3;
+  previousHeight?: number;
+  maxPreReleaseAnchorError: number;
+  unsupportedExpectedSeconds: number;
+  unsupportedExpectedSamples: number;
+  maxUnsupportedExpectedDuration: number;
+  currentUnsupportedExpectedDuration: number;
+  initialized: boolean;
+  influence: number;
+  maxSlide: number;
+  totalSlide: number;
+  reanchorCount: number;
+  blockedUntilLift: boolean;
+  transition?: string;
+};
+
+export type StationarySupportSolverState = {
+  left: StationarySupportStateSide;
+  right: StationarySupportStateSide;
+};
+
+export type StationarySupportSideInput = {
+  side: StationarySupportContactSide;
+  hip: Vec3;
+  knee: Vec3;
+  ankle: Vec3;
+  /** Sole/contact point in world space. If omitted, ankle plus baseline soleOffset is used. */
+  sole?: Vec3;
+  baseline: StationarySupportSideBaseline;
+  expected?: boolean;
+  influence?: number;
+};
+
+export type StationarySupportSolveOptions = {
+  deltaSeconds?: number;
+  floorY?: number;
+  enterHeight?: number;
+  exitHeight?: number;
+  releaseHeight?: number;
+  maxHorizontalVelocity?: number;
+  maxVerticalVelocity?: number;
+  maxPlantedDrift?: number;
+  maxRootCompensation?: number;
+  maxAnkleCorrection?: number;
+  maxPelvisOffset?: number;
+  pelvisCompensation?: number;
+  maxStretch?: number;
+  blendInSeconds?: number;
+  blendOutSeconds?: number;
+  pole?: Vec3;
+  /**
+   * Treat a planted foot that exceeds drift as a source-authored contact transfer when it either
+   * fails the low/slow classifier or drifts materially farther than the contralateral planted side.
+   * This is intentionally opt-in for runtimes that can distinguish global stationary support from
+   * per-side double-support expectations.
+   */
+  releaseOnContactTransfer?: boolean;
+  /** Horizontal anchor drift required before releaseOnContactTransfer may release a planted side. */
+  maxTransferDrift?: number;
+  /** Optional stricter low-contact horizontal velocity that identifies a contact transfer before the planted classifier releases. */
+  maxTransferVelocity?: number;
+  /** Expect at least one side to provide stationary support; side.expected remains per-side. */
+  expectedSupport?: boolean;
+};
+
+export type StationarySupportSideSolveTelemetry = {
+  side: StationarySupportContactSide;
+  sole: Vec3;
+  baselineHeight: number;
+  ankleToSoleHeight: number;
+  soleClearanceBaseline: number;
+  height: number;
+  soleClearance: number;
+  horizontalVelocity: number | null;
+  verticalVelocity: number | null;
+  /** Low/near-floor vertical support, independent of horizontal anchoring. */
+  verticalSupport: boolean;
+  contact: boolean;
+  anchor: Vec3 | null;
+  anchorError: number | null;
+  maxSlide: number;
+  totalSlide: number;
+  transition: string | null;
+  blockedUntilLift: boolean;
+  influence: number;
+  reanchorCount: number;
+  releaseReason: string | null;
+  acquireReason: string | null;
+  unsupportedExpectedDuration: number;
+  unsupportedExpectedSamples: number;
+  maxUnsupportedExpectedDuration: number;
+  maxPreReleaseAnchorError: number;
+};
+
+export type StationarySupportSolveResult = {
+  state: StationarySupportSolverState;
+  footPlant: FootPlantResult;
+  activeSides: StationarySupportContactSide[];
+  rootCompensation: Vec3;
+  requestedRootCompensation: Vec3;
+  maxRootCompensation: number;
+  supportState: "released" | "left-support" | "right-support" | "double-support";
+  left: StationarySupportSideSolveTelemetry;
+  right: StationarySupportSideSolveTelemetry;
+  issues: string[];
+};
+
 export type FootPlantLegInput = {
   id: string;
   hip: Vec3;
@@ -175,6 +357,552 @@ export type OzzFootIkLegResult = FootPlantLegResult & {
 export type OzzFootIkResult = Omit<FootPlantResult, "legs"> & {
   legs: OzzFootIkLegResult[];
 };
+
+export function classifyStationarySupportContacts(
+  side: StationarySupportContactSide,
+  samples: readonly StationarySupportContactSample[],
+  options: StationarySupportContactClassifierOptions = {}
+): StationarySupportContactClassification {
+  const floorY = finiteNumber(options.floorY, 0);
+  const enterHeight = finiteNonNegative(options.enterHeight, 0.035);
+  const exitHeight = Math.max(enterHeight, finiteNonNegative(options.exitHeight, 0.065));
+  const maxHorizontalVelocity = finiteNonNegative(options.maxHorizontalVelocity, 0.08);
+  const maxVerticalVelocity = finiteNonNegative(options.maxVerticalVelocity, 0.12);
+  const minContactSeconds = finiteNonNegative(options.minContactSeconds, 0.05);
+  const sorted = samples
+    .map((sample) => ({
+      time: finiteNonNegative(sample.time, 0),
+      position: finiteVec3(sample.position, [0, 0, 0]),
+      height: finiteNumber(sample.height, sample.position[1] - floorY)
+    }))
+    .sort((a, b) => a.time - b.time);
+  const intervals: StationarySupportContactInterval[] = [];
+  let current: { startTime: number; endTime: number; anchor: Vec3; maxSlide: number; sampleCount: number } | null =
+    null;
+  let previous: (typeof sorted)[number] | null = null;
+
+  for (const sample of sorted) {
+    const dt = previous ? Math.max(sample.time - previous.time, 1e-5) : 1 / 60;
+    const horizontalVelocity = previous
+      ? Math.hypot(sample.position[0] - previous.position[0], sample.position[2] - previous.position[2]) / dt
+      : 0;
+    const verticalVelocity = previous ? Math.abs(sample.position[1] - previous.position[1]) / dt : 0;
+    const lowEnough = current ? sample.height <= exitHeight : sample.height <= enterHeight;
+    const slowEnough = horizontalVelocity <= maxHorizontalVelocity && verticalVelocity <= maxVerticalVelocity;
+    const planted = lowEnough && slowEnough;
+    if (planted) {
+      if (!current) {
+        current = {
+          startTime: sample.time,
+          endTime: sample.time,
+          anchor: sample.position,
+          maxSlide: 0,
+          sampleCount: 1
+        };
+      } else {
+        current.endTime = sample.time;
+        current.sampleCount += 1;
+        current.maxSlide = Math.max(
+          current.maxSlide,
+          Math.hypot(sample.position[0] - current.anchor[0], sample.position[2] - current.anchor[2])
+        );
+      }
+    } else if (current) {
+      pushStationarySupportInterval(side, current, intervals, minContactSeconds);
+      current = null;
+    }
+    previous = sample;
+  }
+  if (current) pushStationarySupportInterval(side, current, intervals, minContactSeconds);
+
+  const plantedSamples = intervals.reduce((sum, interval) => sum + interval.sampleCount, 0);
+  return {
+    intervals,
+    plantedSampleRatio: sorted.length > 0 ? plantedSamples / sorted.length : 0,
+    maxPlantedSlide: intervals.reduce((max, interval) => Math.max(max, interval.maxSlide), 0)
+  };
+}
+
+export function computeStationarySupportCompensation(
+  input: StationarySupportCompensationInput
+): StationarySupportCompensation {
+  const influence = clamp01(input.influence ?? 1);
+  const maxCompensation = finiteNonNegative(input.maxCompensation, 0.12);
+  const supportCount = (input.left?.intervals.length ? 1 : 0) + (input.right?.intervals.length ? 1 : 0);
+  if (supportCount === 0 || influence <= 0) {
+    return {
+      rootOffset: [0, 0, 0],
+      pelvisOffset: finiteVec3(input.pelvisOffset, [0, 0, 0]),
+      supportCount: 0,
+      influence
+    };
+  }
+  const pelvis = finiteVec3(input.pelvisOffset, [0, 0, 0]);
+  const errors = [input.leftError, input.rightError]
+    .filter((value): value is Vec3 => Array.isArray(value))
+    .map((value) => finiteVec3(value, [0, 0, 0]));
+  const desired: Vec3 =
+    errors.length > 0
+      ? [
+          errors.reduce((sum, value) => sum + value[0], 0) / errors.length,
+          0,
+          errors.reduce((sum, value) => sum + value[2], 0) / errors.length
+        ]
+      : [-pelvis[0], 0, -pelvis[2]];
+  const horizontal = Math.hypot(desired[0], desired[2]);
+  const scale = horizontal > maxCompensation && horizontal > 1e-6 ? maxCompensation / horizontal : 1;
+  const rootOffset: Vec3 = [desired[0] * scale * influence, 0, desired[2] * scale * influence];
+  return {
+    rootOffset,
+    pelvisOffset: [pelvis[0] + rootOffset[0], pelvis[1], pelvis[2] + rootOffset[2]],
+    supportCount,
+    influence
+  };
+}
+
+export function createStationarySupportSolverState(): StationarySupportSolverState {
+  return {
+    left: createStationarySupportStateSide(),
+    right: createStationarySupportStateSide()
+  };
+}
+
+export function estimateStationarySupportBaseline(
+  samples: readonly StationarySupportSideSample[],
+  options: { expectedHeight?: number; restSoleOffset?: Vec3; floorY?: number; initialWindowSeconds?: number } = {}
+): StationarySupportSideBaseline {
+  const soleOffset = finiteVec3(options.restSoleOffset, [0, 0, 0]);
+  const ankleToSoleHeight = Math.max(0, -soleOffset[1]);
+  const createBaseline = (
+    soleClearance: number,
+    source: StationarySupportSideBaseline["source"],
+    sampleCount: number
+  ): StationarySupportSideBaseline => ({
+    ankleToSoleHeight,
+    height: Math.max(0, finiteNumber(soleClearance, 0)),
+    soleOffset,
+    soleClearance: Math.max(0, finiteNumber(soleClearance, 0)),
+    source,
+    sampleCount
+  });
+  if (Number.isFinite(options.expectedHeight)) {
+    return createBaseline(Number(options.expectedHeight), "expected", 0);
+  }
+  const floorY = finiteNumber(options.floorY, 0);
+  const sorted = samples
+    .map((sample) => ({ time: finiteNonNegative(sample.time, 0), sole: finiteVec3(sample.sole, [0, 0, 0]) }))
+    .sort((a, b) => a.time - b.time);
+  if (sorted.length === 0) return createBaseline(0, "fallback", 0);
+  const firstTime = sorted[0]!.time;
+  const windowSeconds = finiteNonNegative(options.initialWindowSeconds, 0.35);
+  const window = sorted.filter((sample) => sample.time <= firstTime + windowSeconds);
+  const candidates = (window.length > 0 ? window : sorted)
+    .map((sample) => sample.sole[1] - floorY)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (candidates.length === 0) return createBaseline(0, "fallback", 0);
+  const lowCount = Math.max(1, Math.ceil(candidates.length * 0.35));
+  const soleClearance = candidates.slice(0, lowCount).reduce((sum, value) => sum + value, 0) / lowCount;
+  return createBaseline(soleClearance, "initial-window", candidates.length);
+}
+
+export function solveStationarySupport(
+  input: { state?: StationarySupportSolverState; left: StationarySupportSideInput; right: StationarySupportSideInput },
+  options: StationarySupportSolveOptions = {}
+): StationarySupportSolveResult {
+  const state = cloneStationarySupportSolverState(input.state);
+  const deltaSeconds = Math.max(finiteNonNegative(options.deltaSeconds, 1 / 60), 1 / 240);
+  const floorY = finiteNumber(options.floorY, 0);
+  const enterHeight = finiteNonNegative(options.enterHeight, 0.028);
+  const exitHeight = Math.max(enterHeight, finiteNonNegative(options.exitHeight, 0.052));
+  const releaseHeight = Math.max(exitHeight, finiteNonNegative(options.releaseHeight, 0.085));
+  const maxHorizontalVelocity = finiteNonNegative(options.maxHorizontalVelocity, 0.16);
+  const maxVerticalVelocity = finiteNonNegative(options.maxVerticalVelocity, 0.22);
+  const maxPlantedDrift = finiteNonNegative(options.maxPlantedDrift, 0.045);
+  const maxRootCompensation = finiteNonNegative(options.maxRootCompensation, 0.025);
+  const releaseOnContactTransfer = options.releaseOnContactTransfer === true;
+  const maxTransferDrift = finiteNonNegative(options.maxTransferDrift, maxPlantedDrift);
+  const maxTransferVelocity = finiteNonNegative(options.maxTransferVelocity, maxHorizontalVelocity);
+  const blendInSeconds = finiteNonNegative(options.blendInSeconds, 0.08);
+  const blendOutSeconds = finiteNonNegative(options.blendOutSeconds, 0.1);
+  const issues: string[] = [];
+  const sides = [input.left, input.right] as const;
+  const sideTelemetry = new Map<StationarySupportContactSide, StationarySupportSideSolveTelemetry>();
+  const footInput: FootPlantLegInput[] = [];
+  const floorGuardCandidates: Array<{ id: StationarySupportContactSide; height: number; input: FootPlantLegInput }> = [];
+  const requestedRoot = [0, 0, 0] as Vec3;
+  let activeCount = 0;
+  let verticalSupportCount = 0;
+
+  // Snapshot both planted sides before mutating either state. A deliberately slow authored
+  // foot transfer can remain below the velocity classifier, so compare its anchor drift with
+  // the contralateral planted side. This keeps one stable support anchor while allowing the
+  // materially farther side to release instead of visibly dragging both feet.
+  const transferEvidence = new Map<
+    StationarySupportContactSide,
+    { activeVerticalSupport: boolean; anchorError: number | null }
+  >();
+  for (const sideInput of sides) {
+    const sideState = state[sideInput.side];
+    const ankle = finiteVec3(sideInput.ankle, [0, 0, 0]);
+    const soleOffset = finiteVec3(sideInput.baseline.soleOffset, [0, 0, 0]);
+    const soleClearanceBaseline = finiteNonNegative(sideInput.baseline.soleClearance, 0);
+    const sole = finiteVec3(sideInput.sole, addVec3(ankle, soleOffset));
+    const height = sole[1] - floorY - soleClearanceBaseline;
+    const verticalVelocity =
+      sideState.previousHeight === undefined ? null : Math.abs(height - sideState.previousHeight) / deltaSeconds;
+    const lift = height > releaseHeight || (verticalVelocity ?? 0) > maxVerticalVelocity * 2.5;
+    transferEvidence.set(sideInput.side, {
+      activeVerticalSupport: sideState.active && sideState.anchor !== undefined && !lift,
+      anchorError:
+        sideState.active && sideState.anchor
+          ? Math.hypot(sole[0] - sideState.anchor[0], sole[2] - sideState.anchor[2])
+          : null
+    });
+  }
+
+  for (const sideInput of sides) {
+    const sideState = state[sideInput.side];
+    delete sideState.transition;
+    const ankle = finiteVec3(sideInput.ankle, [0, 0, 0]);
+    const soleOffset = finiteVec3(sideInput.baseline.soleOffset, [0, 0, 0]);
+    const ankleToSoleHeight = finiteNonNegative(sideInput.baseline.ankleToSoleHeight, Math.max(0, -soleOffset[1]));
+    const soleClearanceBaseline = finiteNonNegative(sideInput.baseline.soleClearance, 0);
+    const sole = finiteVec3(sideInput.sole, addVec3(ankle, soleOffset));
+    // Dimensional invariant: `height`/`soleClearance` is sole.y-floorY minus a sole-clearance baseline.
+    // It is not an ankle-center measurement, so ankleToSoleHeight is only used for IK target height.
+    const soleClearance = sole[1] - floorY;
+    const height = soleClearance - soleClearanceBaseline;
+    const horizontalVelocity =
+      sideState.initialized && sideState.previousSole
+        ? Math.hypot(sole[0] - sideState.previousSole[0], sole[2] - sideState.previousSole[2]) / deltaSeconds
+        : null;
+    const verticalVelocity =
+      sideState.previousHeight === undefined ? null : Math.abs(height - sideState.previousHeight) / deltaSeconds;
+    const lowEnough = sideState.active ? height <= exitHeight : height <= enterHeight;
+    const slowEnough =
+      (horizontalVelocity ?? 0) <= maxHorizontalVelocity && (verticalVelocity ?? 0) <= maxVerticalVelocity;
+    const contactCandidate = lowEnough && slowEnough;
+    const lift = height > releaseHeight || (verticalVelocity ?? 0) > maxVerticalVelocity * 2.5;
+    const anchorError =
+      sideState.active && sideState.anchor
+        ? Math.hypot(sole[0] - sideState.anchor[0], sole[2] - sideState.anchor[2])
+        : null;
+    const driftLimitExceeded = anchorError !== null && anchorError > maxPlantedDrift;
+    const transferVelocityExceeded = (horizontalVelocity ?? 0) > maxTransferVelocity;
+    const transferClassifierMiss =
+      !contactCandidate && ((horizontalVelocity ?? 0) > maxHorizontalVelocity || height > exitHeight);
+    const verticalSupport = !lift && height <= releaseHeight;
+    const otherSide: StationarySupportContactSide = sideInput.side === "left" ? "right" : "left";
+    const otherTransferEvidence = transferEvidence.get(otherSide);
+    const asymmetricDriftTransfer =
+      anchorError !== null &&
+      otherTransferEvidence?.activeVerticalSupport === true &&
+      otherTransferEvidence.anchorError !== null &&
+      anchorError - otherTransferEvidence.anchorError > Math.max(1e-4, maxTransferDrift * 0.25);
+    const contactTransfer =
+      releaseOnContactTransfer &&
+      anchorError !== null &&
+      anchorError > maxTransferDrift &&
+      !lift &&
+      (transferClassifierMiss || transferVelocityExceeded || asymmetricDriftTransfer);
+    let acquireReason: string | null = null;
+    let releaseReason: string | null = null;
+
+    if (sideState.blockedUntilLift && (!contactCandidate || lift)) sideState.blockedUntilLift = false;
+    if (sideState.active) {
+      if (sideState.anchor) {
+        sideState.maxSlide = Math.max(sideState.maxSlide, anchorError ?? 0);
+        if (sideState.previousSole)
+          sideState.totalSlide += Math.hypot(sole[0] - sideState.previousSole[0], sole[2] - sideState.previousSole[2]);
+      }
+      if (lift) {
+        sideState.active = false;
+        sideState.influence = stepInfluence(sideState.influence, 0, deltaSeconds, blendOutSeconds);
+        releaseReason = "lift";
+        sideState.transition = `release-${releaseReason}`;
+        sideState.blockedUntilLift = false;
+      } else if (contactTransfer) {
+        sideState.active = false;
+        sideState.influence = stepInfluence(sideState.influence, 0, deltaSeconds, blendOutSeconds);
+        releaseReason = "contact-transfer";
+        sideState.transition = `release-${releaseReason}`;
+        sideState.blockedUntilLift = false;
+      } else {
+        if (anchorError !== null)
+          sideState.maxPreReleaseAnchorError = Math.max(sideState.maxPreReleaseAnchorError, anchorError);
+        if (!contactCandidate)
+          issues.push(`${sideInput.side}: planted contact held through non-lift contact classifier miss`);
+        if (driftLimitExceeded) {
+          issues.push(
+            `${sideInput.side}: planted anchor drift ${anchorError!.toFixed(4)}m exceeds ${maxPlantedDrift.toFixed(4)}m without source-backed lift`
+          );
+          sideState.transition = "hold-drift-limit";
+        }
+        sideState.influence = stepInfluence(
+          sideState.influence,
+          clamp01(sideInput.influence ?? 1),
+          deltaSeconds,
+          blendInSeconds
+        );
+      }
+    } else if (contactCandidate && !sideState.blockedUntilLift) {
+      sideState.active = true;
+      sideState.anchor = [...sole] as Vec3;
+      sideState.influence = stepInfluence(
+        sideState.influence,
+        clamp01(sideInput.influence ?? 1),
+        deltaSeconds,
+        blendInSeconds
+      );
+      sideState.maxSlide = 0;
+      sideState.totalSlide = 0;
+      sideState.reanchorCount += sideState.initialized ? 1 : 0;
+      acquireReason = "contact";
+      sideState.transition = "acquire-contact";
+      sideState.currentUnsupportedExpectedDuration = 0;
+    } else {
+      sideState.influence = stepInfluence(sideState.influence, 0, deltaSeconds, blendOutSeconds);
+    }
+
+    const active = sideState.active && sideState.anchor !== undefined && sideState.influence > 1e-5;
+    if (active || verticalSupport) verticalSupportCount += 1;
+    const verticalFloorGuardInput: FootPlantLegInput = {
+      id: sideInput.side,
+      hip: finiteVec3(sideInput.hip, [0, 0, 0]),
+      knee: finiteVec3(sideInput.knee, [0, 0, 0]),
+      ankle,
+      ground: {
+        point: [sole[0], floorY + soleClearanceBaseline, sole[2]],
+        normal: [0, 1, 0],
+        rayStart: [sole[0], floorY + soleClearanceBaseline + ankleToSoleHeight + 0.5, sole[2]]
+      },
+      footHeight: ankleToSoleHeight,
+      influence: clamp01(sideInput.influence ?? 1),
+      ...(options.pole ? { pole: options.pole } : {}),
+      ...(options.maxAnkleCorrection === undefined ? {} : { maxAnkleCorrection: options.maxAnkleCorrection }),
+      ...(options.maxStretch === undefined ? {} : { maxStretch: options.maxStretch })
+    };
+    floorGuardCandidates.push({ id: sideInput.side, height, input: verticalFloorGuardInput });
+    if (active) {
+      sideState.currentUnsupportedExpectedDuration = 0;
+      activeCount += 1;
+      requestedRoot[0] += (sideState.anchor![0] - sole[0]) * sideState.influence;
+      requestedRoot[2] += (sideState.anchor![2] - sole[2]) * sideState.influence;
+      footInput.push({
+        id: sideInput.side,
+        hip: finiteVec3(sideInput.hip, [0, 0, 0]),
+        knee: finiteVec3(sideInput.knee, [0, 0, 0]),
+        ankle,
+        ground: {
+          point: [sideState.anchor![0], floorY + soleClearanceBaseline, sideState.anchor![2]],
+          normal: [0, 1, 0],
+          rayStart: [
+            sideState.anchor![0],
+            floorY + soleClearanceBaseline + ankleToSoleHeight + 0.5,
+            sideState.anchor![2]
+          ]
+        },
+        footHeight: ankleToSoleHeight,
+        influence: sideState.influence,
+        ...(options.pole ? { pole: options.pole } : {}),
+        ...(options.maxAnkleCorrection === undefined ? {} : { maxAnkleCorrection: options.maxAnkleCorrection }),
+        ...(options.maxStretch === undefined ? {} : { maxStretch: options.maxStretch })
+      });
+    } else if (height < -1e-4) {
+      // Released transfer feet are not horizontal anchors, but they still need a vertical floor guard
+      // so intentional low shuffles do not visibly punch through the floor plane.
+      footInput.push(verticalFloorGuardInput);
+    } else if (sideInput.expected) {
+      sideState.unsupportedExpectedSamples += 1;
+      sideState.unsupportedExpectedSeconds += deltaSeconds;
+      sideState.currentUnsupportedExpectedDuration += deltaSeconds;
+      sideState.maxUnsupportedExpectedDuration = Math.max(
+        sideState.maxUnsupportedExpectedDuration,
+        sideState.currentUnsupportedExpectedDuration
+      );
+      issues.push(
+        `${sideInput.side}: expected stationary support did not acquire (${sideState.transition ?? (sideState.blockedUntilLift ? "blocked-until-lift" : "no-contact")})`
+      );
+    } else {
+      sideState.currentUnsupportedExpectedDuration = 0;
+    }
+
+    sideState.previousSole = sole;
+    sideState.previousHeight = height;
+    sideState.initialized = true;
+    sideTelemetry.set(sideInput.side, {
+      side: sideInput.side,
+      sole,
+      baselineHeight: ankleToSoleHeight,
+      ankleToSoleHeight,
+      soleClearanceBaseline,
+      height,
+      soleClearance,
+      horizontalVelocity,
+      verticalVelocity,
+      verticalSupport,
+      contact: active,
+      anchor: active ? ([...sideState.anchor!] as Vec3) : null,
+      anchorError:
+        active && sideState.anchor ? Math.hypot(sole[0] - sideState.anchor[0], sole[2] - sideState.anchor[2]) : null,
+      maxSlide: sideState.maxSlide,
+      totalSlide: sideState.totalSlide,
+      transition: sideState.transition ?? null,
+      blockedUntilLift: sideState.blockedUntilLift,
+      influence: sideState.influence,
+      reanchorCount: sideState.reanchorCount,
+      releaseReason,
+      acquireReason,
+      unsupportedExpectedDuration: sideState.unsupportedExpectedSeconds,
+      unsupportedExpectedSamples: sideState.unsupportedExpectedSamples,
+      maxUnsupportedExpectedDuration: sideState.maxUnsupportedExpectedDuration,
+      maxPreReleaseAnchorError: sideState.maxPreReleaseAnchorError
+    });
+  }
+
+  if (activeCount > 0) {
+    requestedRoot[0] /= activeCount;
+    requestedRoot[2] /= activeCount;
+  }
+
+  if (options.expectedSupport && verticalSupportCount === 0) {
+    for (const sideInput of sides) {
+      const sideState = state[sideInput.side];
+      if (!sideInput.expected) {
+        sideState.unsupportedExpectedSamples += 1;
+        sideState.unsupportedExpectedSeconds += deltaSeconds;
+        sideState.currentUnsupportedExpectedDuration += deltaSeconds;
+        sideState.maxUnsupportedExpectedDuration = Math.max(
+          sideState.maxUnsupportedExpectedDuration,
+          sideState.currentUnsupportedExpectedDuration
+        );
+      }
+      const telemetry = sideTelemetry.get(sideInput.side);
+      if (telemetry) {
+        telemetry.unsupportedExpectedDuration = sideState.unsupportedExpectedSeconds;
+        telemetry.unsupportedExpectedSamples = sideState.unsupportedExpectedSamples;
+        telemetry.maxUnsupportedExpectedDuration = sideState.maxUnsupportedExpectedDuration;
+      }
+    }
+    issues.push("expected stationary support did not acquire on either side");
+  }
+
+  const requestedLength = Math.hypot(requestedRoot[0], requestedRoot[2]);
+  const scale =
+    requestedLength > maxRootCompensation && requestedLength > 1e-6 ? maxRootCompensation / requestedLength : 1;
+  const rootCompensation: Vec3 = [requestedRoot[0] * scale, 0, requestedRoot[2] * scale];
+  if (requestedLength > maxRootCompensation + 1e-6)
+    issues.push(
+      `requested root compensation ${requestedLength.toFixed(4)}m exceeds ${maxRootCompensation.toFixed(4)}m`
+    );
+
+  const footPlantOptions: FootPlantOptions = {
+    footHeight: 0,
+    maxAnkleCorrection: finiteNonNegative(options.maxAnkleCorrection, 0.12),
+    maxPelvisOffset: finiteNonNegative(options.maxPelvisOffset, 0.08),
+    pelvisCompensation: clamp01(options.pelvisCompensation ?? 0.55),
+    ...(options.maxStretch === undefined ? {} : { maxStretch: options.maxStretch })
+  };
+  let footPlant = solveFootPlant(footInput, footPlantOptions);
+  const guardedIds = new Set(footInput.map((leg) => leg.id));
+  const pelvisLowering = Math.min(0, footPlant.pelvisOffset[1] ?? 0);
+  const pelvisFloorGuards =
+    pelvisLowering < -1e-6
+      ? floorGuardCandidates.filter(
+          (candidate) => !guardedIds.has(candidate.id) && candidate.height + pelvisLowering < -1e-4
+        )
+      : [];
+  if (pelvisFloorGuards.length > 0) {
+    for (const candidate of pelvisFloorGuards) footInput.push(candidate.input);
+    footPlant = solveFootPlant(footInput, footPlantOptions);
+  }
+  issues.push(...footPlant.issues);
+  const activeSides = sides
+    .filter((side) => state[side.side].active && state[side.side].influence > 1e-5)
+    .map((side) => side.side);
+  return {
+    state,
+    footPlant,
+    activeSides,
+    rootCompensation,
+    requestedRootCompensation: requestedRoot,
+    maxRootCompensation,
+    supportState:
+      activeSides.length === 2
+        ? "double-support"
+        : activeSides.length === 1
+          ? (`${activeSides[0]}-support` as "left-support" | "right-support")
+          : "released",
+    left: sideTelemetry.get("left")!,
+    right: sideTelemetry.get("right")!,
+    issues
+  };
+}
+
+function pushStationarySupportInterval(
+  side: StationarySupportContactSide,
+  current: { startTime: number; endTime: number; anchor: Vec3; maxSlide: number; sampleCount: number },
+  intervals: StationarySupportContactInterval[],
+  minContactSeconds: number
+): void {
+  const duration = Math.max(0, current.endTime - current.startTime);
+  if (duration + 1e-6 < minContactSeconds && current.sampleCount < 2) return;
+  intervals.push({
+    side,
+    startTime: current.startTime,
+    endTime: current.endTime,
+    duration,
+    anchor: current.anchor,
+    maxSlide: current.maxSlide,
+    sampleCount: current.sampleCount
+  });
+}
+
+function createStationarySupportStateSide(): StationarySupportStateSide {
+  return {
+    active: false,
+    initialized: false,
+    influence: 0,
+    maxSlide: 0,
+    totalSlide: 0,
+    reanchorCount: 0,
+    blockedUntilLift: false,
+    maxPreReleaseAnchorError: 0,
+    unsupportedExpectedSeconds: 0,
+    unsupportedExpectedSamples: 0,
+    maxUnsupportedExpectedDuration: 0,
+    currentUnsupportedExpectedDuration: 0
+  };
+}
+
+function cloneStationarySupportSolverState(
+  state: StationarySupportSolverState | undefined
+): StationarySupportSolverState {
+  const cloneSide = (side: StationarySupportStateSide | undefined): StationarySupportStateSide => ({
+    active: Boolean(side?.active),
+    ...(side?.anchor ? { anchor: finiteVec3(side.anchor, [0, 0, 0]) } : {}),
+    ...(side?.previousSole ? { previousSole: finiteVec3(side.previousSole, [0, 0, 0]) } : {}),
+    ...(side?.previousHeight === undefined ? {} : { previousHeight: finiteNumber(side.previousHeight, 0) }),
+    initialized: Boolean(side?.initialized),
+    influence: clamp01(side?.influence ?? 0),
+    maxSlide: finiteNonNegative(side?.maxSlide, 0),
+    totalSlide: finiteNonNegative(side?.totalSlide, 0),
+    reanchorCount: Math.max(0, Math.floor(finiteNonNegative(side?.reanchorCount, 0))),
+    blockedUntilLift: Boolean(side?.blockedUntilLift),
+    maxPreReleaseAnchorError: finiteNonNegative(side?.maxPreReleaseAnchorError, 0),
+    unsupportedExpectedSeconds: finiteNonNegative(side?.unsupportedExpectedSeconds, 0),
+    unsupportedExpectedSamples: Math.max(0, Math.floor(finiteNonNegative(side?.unsupportedExpectedSamples, 0))),
+    maxUnsupportedExpectedDuration: finiteNonNegative(side?.maxUnsupportedExpectedDuration, 0),
+    currentUnsupportedExpectedDuration: finiteNonNegative(side?.currentUnsupportedExpectedDuration, 0),
+    ...(side?.transition ? { transition: side.transition } : {})
+  });
+  return { left: cloneSide(state?.left), right: cloneSide(state?.right) };
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
 
 export function updateFootPlantStabilizer(
   previousState: FootPlantStabilizerState | undefined,

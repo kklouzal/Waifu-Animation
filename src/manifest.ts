@@ -58,7 +58,8 @@ export type RootMotionProvenance =
   | "not-authored"
   | "preserved-in-clip"
   | "stripped-during-conversion"
-  | "requires-runtime-stripping";
+  | "requires-runtime-stripping"
+  | "stationary-residual";
 export type RootMotionMetadata = {
   policy: RootMotionPolicy;
   provenance: RootMotionProvenance;
@@ -165,7 +166,7 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
     });
   }
   if (rootMotionPolicy === "stripped-to-in-place") {
-    if (movingRootCarrierTrack && !isDirectorOwnedResidualRootCarrier(entry)) {
+    if (movingRootCarrierTrack && !isIntentionalResidualRootCarrier(entry)) {
       issues.push({
         joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
         property: movingRootCarrierTrack.property,
@@ -270,16 +271,32 @@ export function readRequiredAnimationCoverage(entry: AnimationManifestEntry): Re
   };
 }
 
-function isDirectorOwnedResidualRootCarrier(entry: AnimationManifestEntry): boolean {
+function exactRootMotionAxes(value: unknown, expected: readonly string[]): boolean {
+  if (!Array.isArray(value) || value.some((axis) => typeof axis !== "string")) return false;
+  const actual = Array.from(new Set(value)).sort();
+  const sortedExpected = [...expected].sort();
+  return actual.length === sortedExpected.length && actual.every((axis, index) => axis === sortedExpected[index]);
+}
+
+function isIntentionalResidualRootCarrier(entry: AnimationManifestEntry): boolean {
   const rootMotion = entry.source?.rootMotion;
   if (typeof rootMotion !== "object" || rootMotion === null) return false;
   const metadata = rootMotion as Record<string, unknown>;
+  const verticalTransition =
+    metadata.owner === "director-xz" &&
+    metadata.support === "vertical-transition" &&
+    metadata.bakeMode === "reference" &&
+    exactRootMotionAxes(metadata.extractedAxes, ["x", "z"]) &&
+    exactRootMotionAxes(metadata.preservedAxes, ["y"]);
+  const residualTrajectory =
+    metadata.bakeMode === "remove-linear-trajectory" &&
+    (metadata.owner === "director-xz" ||
+      (metadata.owner === "none" && metadata.support === "contact-aware-stationary"));
   return (
     metadata.policy === "stripped-to-in-place" &&
-    metadata.owner === "director-xz" &&
     metadata.carrier === "hips" &&
     metadata.units === "meters-target-rest-offset" &&
-    metadata.bakeMode === "remove-linear-trajectory"
+    (verticalTransition || residualTrajectory)
   );
 }
 
@@ -346,7 +363,8 @@ function isRootMotionProvenance(value: unknown): value is RootMotionProvenance {
     value === "not-authored" ||
     value === "preserved-in-clip" ||
     value === "stripped-during-conversion" ||
-    value === "requires-runtime-stripping"
+    value === "requires-runtime-stripping" ||
+    value === "stationary-residual"
   );
 }
 

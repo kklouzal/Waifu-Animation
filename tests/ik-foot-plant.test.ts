@@ -7,6 +7,10 @@ import {
   applyThreeFootPlantResult,
   applyFootPlantStabilizedInfluence,
   applyTwoBoneIkLocalCorrections,
+  classifyStationarySupportContacts,
+  computeStationarySupportCompensation,
+  createStationarySupportSolverState,
+  estimateStationarySupportBaseline,
   assert,
   clearThreeFootPlantOffsets,
   clonePose,
@@ -23,6 +27,7 @@ import {
   rotateVec3ByQuat,
   solveAimIk,
   solveFootPlant,
+  solveStationarySupport,
   solveOzzFootIk,
   solveTwoBoneIk,
   solveTwoBoneIkCorrections,
@@ -966,6 +971,524 @@ export function runIkFootPlantTests(): void {
     ),
     "foot-plant stabilizer should sanitize cached ground contacts"
   );
+  const plantedStationaryContact = classifyStationarySupportContacts(
+    "left",
+    [
+      { time: 0, position: [0, 0.012, 0], height: 0.012 },
+      { time: 1 / 30, position: [0.001, 0.011, 0.001], height: 0.011 },
+      { time: 2 / 30, position: [0.002, 0.012, 0.001], height: 0.012 },
+      { time: 3 / 30, position: [0.002, 0.011, 0.002], height: 0.011 }
+    ],
+    { enterHeight: 0.025, exitHeight: 0.04, maxHorizontalVelocity: 0.08, maxVerticalVelocity: 0.12 }
+  );
+  assert.equal(plantedStationaryContact.intervals.length, 1);
+  assert.ok(
+    plantedStationaryContact.maxPlantedSlide < 0.004,
+    "stationary support classifier should accept continuous low, slow sole contact at centimeter scale"
+  );
+  const swingingStationaryContact = classifyStationarySupportContacts(
+    "right",
+    [
+      { time: 0, position: [0, 0.012, 0], height: 0.012 },
+      { time: 1 / 30, position: [0.18, 0.09, 0], height: 0.09 },
+      { time: 2 / 30, position: [0.36, 0.11, 0], height: 0.11 }
+    ],
+    { enterHeight: 0.025, exitHeight: 0.04, maxHorizontalVelocity: 0.08, maxVerticalVelocity: 0.12 }
+  );
+  assert.equal(
+    swingingStationaryContact.intervals.length,
+    0,
+    "stationary support classifier must not classify fast lifted steps as planted from height alone"
+  );
+  const standingStationaryBaseline = estimateStationarySupportBaseline(
+    [
+      { time: 0, sole: [0, -0.034, 0] },
+      { time: 1 / 60, sole: [0.001, -0.035, 0.001] }
+    ],
+    { floorY: -0.035, restSoleOffset: [0, -0.155, 0], initialWindowSeconds: 0.08 }
+  );
+  assert.ok(Math.abs(standingStationaryBaseline.ankleToSoleHeight - 0.155) < 1e-6);
+  assert.ok(standingStationaryBaseline.soleClearance <= 0.0011);
+  const crouchStationaryBaseline = estimateStationarySupportBaseline(
+    [
+      { time: 0, sole: [0.02, -0.0345, 0] },
+      { time: 1 / 60, sole: [0.021, -0.035, 0.001] }
+    ],
+    { floorY: -0.035, restSoleOffset: [0, -0.118, 0], initialWindowSeconds: 0.08 }
+  );
+  assert.ok(Math.abs(crouchStationaryBaseline.ankleToSoleHeight - 0.118) < 1e-6);
+  assert.ok(crouchStationaryBaseline.soleClearance <= 0.001);
+  const stationaryStandingSolve = solveStationarySupport(
+    {
+      state: createStationarySupportSolverState(),
+      left: {
+        side: "left",
+        hip: [-0.1, 0.8, 0],
+        knee: [-0.1, 0.35, 0],
+        ankle: [-0.1, 0.12, 0],
+        sole: [-0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.8, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.1, 0.12, 0],
+        sole: [0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      }
+    },
+    { floorY: -0.035, deltaSeconds: 1 / 60, enterHeight: 0.026, maxRootCompensation: 0.025 }
+  );
+  assert.equal(stationaryStandingSolve.supportState, "double-support");
+  assert.ok(Math.abs(stationaryStandingSolve.left.height) < 0.0011);
+  assert.ok(Math.abs(stationaryStandingSolve.left.ankleToSoleHeight - 0.155) < 1e-6);
+  assert.equal(stationaryStandingSolve.footPlant.plantedCount, 2);
+  const stationaryCrouchSolve = solveStationarySupport(
+    {
+      state: createStationarySupportSolverState(),
+      left: {
+        side: "left",
+        hip: [-0.1, 0.55, 0],
+        knee: [-0.1, 0.18, 0],
+        ankle: [-0.1, 0.083, 0],
+        sole: [-0.1, -0.035, 0],
+        baseline: crouchStationaryBaseline,
+        expected: true
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.55, 0],
+        knee: [0.1, 0.18, 0],
+        ankle: [0.1, 0.083, 0],
+        sole: [0.1, -0.035, 0],
+        baseline: crouchStationaryBaseline,
+        expected: true
+      }
+    },
+    { floorY: -0.035, deltaSeconds: 1 / 60, enterHeight: 0.026, maxRootCompensation: 0.025 }
+  );
+  assert.equal(stationaryCrouchSolve.supportState, "double-support");
+  assert.ok(Math.abs(stationaryCrouchSolve.left.height) < 0.001);
+  let driftState = stationaryStandingSolve.state;
+  const stationaryDriftSolve = solveStationarySupport(
+    {
+      state: driftState,
+      left: {
+        side: "left",
+        hip: [-0.1, 0.8, 0],
+        knee: [-0.1, 0.35, 0],
+        ankle: [-0.078, 0.12, 0],
+        sole: [-0.078, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.8, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.122, 0.12, 0],
+        sole: [0.122, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      }
+    },
+    { floorY: -0.035, deltaSeconds: 1 / 60, enterHeight: 0.026, maxPlantedDrift: 0.02, maxRootCompensation: 0.025 }
+  );
+  assert.equal(stationaryDriftSolve.supportState, "double-support", "correctable same-contact drift should not release support");
+  assert.ok(stationaryDriftSolve.left.maxPreReleaseAnchorError >= 0.021);
+  assert.ok(stationaryDriftSolve.issues.some((issue) => issue.includes("planted anchor drift")));
+  assert.ok(Math.hypot(stationaryDriftSolve.rootCompensation[0], stationaryDriftSolve.rootCompensation[2]) <= 0.025 + 1e-6);
+  assert.equal(stationaryDriftSolve.left.reanchorCount, 0, "same-contact drift must not reacquire/reanchor");
+  driftState = stationaryDriftSolve.state;
+  const stationaryLiftSolve = solveStationarySupport(
+    {
+      state: driftState,
+      left: {
+        side: "left",
+        hip: [-0.1, 0.8, 0],
+        knee: [-0.1, 0.35, 0],
+        ankle: [-0.078, 0.24, 0],
+        sole: [-0.078, 0.085, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.8, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.122, 0.12, 0],
+        sole: [0.122, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      }
+    },
+    { floorY: -0.035, deltaSeconds: 1 / 60, enterHeight: 0.026, maxPlantedDrift: 0.02, maxRootCompensation: 0.025 }
+  );
+  assert.equal(stationaryLiftSolve.left.releaseReason, "lift");
+  assert.equal(stationaryLiftSolve.supportState, "right-support");
+  assert.equal(stationaryLiftSolve.left.unsupportedExpectedSamples, 1);
+  assert.ok(stationaryLiftSolve.left.maxUnsupportedExpectedDuration >= 1 / 60);
+  const stationaryTransferState = stationaryStandingSolve.state;
+  const stationaryTransferSolve = solveStationarySupport(
+    {
+      state: stationaryTransferState,
+      left: {
+        side: "left",
+        hip: [-0.065, 0.8, 0],
+        knee: [-0.065, 0.35, 0],
+        ankle: [-0.065, 0.12, 0],
+        sole: [-0.065, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.8, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.1, 0.12, 0],
+        sole: [0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 1 / 60,
+      enterHeight: 0.026,
+      maxHorizontalVelocity: 0.16,
+      maxPlantedDrift: 0.02,
+      maxTransferDrift: 0.02,
+      releaseOnContactTransfer: true,
+      expectedSupport: true,
+      maxRootCompensation: 0.025
+    }
+  );
+  assert.equal(
+    stationaryTransferSolve.left.releaseReason,
+    "contact-transfer",
+    "opt-in stationary support should release side anchors on evidenced low/fast contact transfer"
+  );
+  assert.equal(stationaryTransferSolve.supportState, "right-support");
+  assert.equal(
+    stationaryTransferSolve.left.unsupportedExpectedSamples,
+    0,
+    "global stationary support should not count the released transfer side as unsupported while the other side supports"
+  );
+  assert.equal(stationaryTransferSolve.right.unsupportedExpectedSamples, 0);
+  assert.ok(
+    stationaryTransferSolve.left.maxPreReleaseAnchorError < 0.001,
+    "contact-transfer release should not be reported as a planted pre-release anchor error"
+  );
+  assert.ok(
+    !stationaryTransferSolve.issues.some((issue) => issue.includes("planted anchor drift")),
+    "contact-transfer release should not be diagnosed as held planted drift"
+  );
+  const stationaryVelocityTransferSolve = solveStationarySupport(
+    {
+      state: stationaryStandingSolve.state,
+      left: {
+        side: "left",
+        hip: [-0.1, 0.8, 0],
+        knee: [-0.1, 0.35, 0],
+        ankle: [-0.1, 0.12, 0],
+        sole: [-0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.8, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.125, 0.12, 0],
+        sole: [0.125, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 1 / 60,
+      enterHeight: 0.026,
+      maxHorizontalVelocity: 0.28,
+      maxTransferVelocity: 0.16,
+      maxPlantedDrift: 0.02,
+      maxTransferDrift: 0.02,
+      releaseOnContactTransfer: true,
+      expectedSupport: true,
+      maxRootCompensation: 0.025
+    }
+  );
+  assert.equal(
+    stationaryVelocityTransferSolve.right.releaseReason,
+    "contact-transfer",
+    "opt-in stationary support should release a drifting low foot when transfer velocity exceeds the stricter transfer gate"
+  );
+  assert.ok(
+    stationaryVelocityTransferSolve.right.maxPreReleaseAnchorError < 0.001,
+    "velocity transfer release should not become a planted pre-release anchor error"
+  );
+  const stationarySlowAsymmetricTransferSolve = solveStationarySupport(
+    {
+      state: stationaryStandingSolve.state,
+      left: {
+        side: "left",
+        hip: [-0.105, 0.8, 0],
+        knee: [-0.105, 0.35, 0],
+        ankle: [-0.105, 0.12, 0],
+        sole: [-0.105, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      },
+      right: {
+        side: "right",
+        hip: [0.13, 0.8, 0],
+        knee: [0.13, 0.35, 0],
+        ankle: [0.13, 0.12, 0],
+        sole: [0.13, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 1,
+      enterHeight: 0.026,
+      maxHorizontalVelocity: 0.28,
+      maxTransferVelocity: 0.16,
+      maxPlantedDrift: 0.02,
+      maxTransferDrift: 0.02,
+      releaseOnContactTransfer: true,
+      expectedSupport: true,
+      maxRootCompensation: 0.025
+    }
+  );
+  assert.equal(stationarySlowAsymmetricTransferSolve.left.contact, true);
+  assert.equal(
+    stationarySlowAsymmetricTransferSolve.right.releaseReason,
+    "contact-transfer",
+    "slow low foot motion should transfer away from the materially more stable contralateral anchor"
+  );
+  assert.equal(stationarySlowAsymmetricTransferSolve.supportState, "left-support");
+  const stationarySlowSymmetricDriftSolve = solveStationarySupport(
+    {
+      state: stationaryStandingSolve.state,
+      left: {
+        side: "left",
+        hip: [-0.13, 0.8, 0],
+        knee: [-0.13, 0.35, 0],
+        ankle: [-0.13, 0.12, 0],
+        sole: [-0.13, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      },
+      right: {
+        side: "right",
+        hip: [0.13, 0.8, 0],
+        knee: [0.13, 0.35, 0],
+        ankle: [0.13, 0.12, 0],
+        sole: [0.13, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 1,
+      enterHeight: 0.026,
+      maxHorizontalVelocity: 0.28,
+      maxTransferVelocity: 0.16,
+      maxPlantedDrift: 0.02,
+      maxTransferDrift: 0.02,
+      releaseOnContactTransfer: true,
+      expectedSupport: true,
+      maxRootCompensation: 0.025
+    }
+  );
+  assert.equal(
+    stationarySlowSymmetricDriftSolve.supportState,
+    "double-support",
+    "equal slow planted drift should remain anchored instead of selecting an arbitrary transfer side"
+  );
+  assert.equal(stationarySlowSymmetricDriftSolve.left.releaseReason, null);
+  assert.equal(stationarySlowSymmetricDriftSolve.right.releaseReason, null);
+  const stationaryDoubleTransferSolve = solveStationarySupport(
+    {
+      state: stationaryStandingSolve.state,
+      left: {
+        side: "left",
+        hip: [-0.065, 0.8, 0],
+        knee: [-0.065, 0.35, 0],
+        ankle: [-0.065, 0.125, 0],
+        sole: [-0.065, -0.03, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      },
+      right: {
+        side: "right",
+        hip: [0.065, 0.8, 0],
+        knee: [0.065, 0.35, 0],
+        ankle: [0.065, 0.125, 0],
+        sole: [0.065, -0.03, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 1 / 60,
+      enterHeight: 0.026,
+      exitHeight: 0.048,
+      releaseHeight: 0.075,
+      maxHorizontalVelocity: 0.16,
+      maxTransferVelocity: 0.16,
+      maxPlantedDrift: 0.02,
+      maxTransferDrift: 0.02,
+      releaseOnContactTransfer: true,
+      expectedSupport: true,
+      maxRootCompensation: 0.025
+    }
+  );
+  assert.equal(stationaryDoubleTransferSolve.supportState, "released");
+  assert.deepEqual(stationaryDoubleTransferSolve.activeSides, []);
+  assert.equal(stationaryDoubleTransferSolve.left.releaseReason, "contact-transfer");
+  assert.equal(stationaryDoubleTransferSolve.right.releaseReason, "contact-transfer");
+  assert.equal(stationaryDoubleTransferSolve.left.contact, false);
+  assert.equal(stationaryDoubleTransferSolve.right.contact, false);
+  assert.equal(stationaryDoubleTransferSolve.left.verticalSupport, true);
+  assert.equal(stationaryDoubleTransferSolve.right.verticalSupport, true);
+  assert.equal(stationaryDoubleTransferSolve.left.unsupportedExpectedSamples, 0);
+  assert.equal(stationaryDoubleTransferSolve.right.unsupportedExpectedSamples, 0);
+  assert.equal(stationaryDoubleTransferSolve.left.maxUnsupportedExpectedDuration, 0);
+  assert.equal(stationaryDoubleTransferSolve.right.maxUnsupportedExpectedDuration, 0);
+  assert.equal(stationaryDoubleTransferSolve.left.reanchorCount, 0);
+  assert.equal(stationaryDoubleTransferSolve.right.reanchorCount, 0);
+  assert.ok(stationaryDoubleTransferSolve.left.maxSlide >= 0.034);
+  assert.ok(stationaryDoubleTransferSolve.right.maxSlide >= 0.034);
+  assert.ok(
+    !stationaryDoubleTransferSolve.issues.some((issue) => issue.includes("expected stationary support did not acquire")),
+    "low contact transfer without horizontal anchors should not be counted as globally unsupported"
+  );
+  const stationaryAirborneUnsupportedSolve = solveStationarySupport(
+    {
+      state: stationaryStandingSolve.state,
+      left: {
+        side: "left",
+        hip: [-0.1, 0.92, 0],
+        knee: [-0.1, 0.48, 0],
+        ankle: [-0.1, 0.235, 0],
+        sole: [-0.1, 0.08, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.92, 0],
+        knee: [0.1, 0.48, 0],
+        ankle: [0.1, 0.235, 0],
+        sole: [0.1, 0.08, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 1 / 60,
+      enterHeight: 0.026,
+      exitHeight: 0.048,
+      releaseHeight: 0.075,
+      maxHorizontalVelocity: 0.16,
+      maxTransferVelocity: 0.16,
+      maxPlantedDrift: 0.02,
+      maxTransferDrift: 0.02,
+      releaseOnContactTransfer: true,
+      expectedSupport: true,
+      maxRootCompensation: 0.025
+    }
+  );
+  assert.equal(stationaryAirborneUnsupportedSolve.supportState, "released");
+  assert.equal(stationaryAirborneUnsupportedSolve.left.releaseReason, "lift");
+  assert.equal(stationaryAirborneUnsupportedSolve.right.releaseReason, "lift");
+  assert.equal(stationaryAirborneUnsupportedSolve.left.verticalSupport, false);
+  assert.equal(stationaryAirborneUnsupportedSolve.right.verticalSupport, false);
+  assert.equal(stationaryAirborneUnsupportedSolve.left.unsupportedExpectedSamples, 1);
+  assert.equal(stationaryAirborneUnsupportedSolve.right.unsupportedExpectedSamples, 1);
+  assert.ok(stationaryAirborneUnsupportedSolve.left.maxUnsupportedExpectedDuration >= 1 / 60);
+  assert.ok(stationaryAirborneUnsupportedSolve.right.maxUnsupportedExpectedDuration >= 1 / 60);
+  assert.ok(
+    stationaryAirborneUnsupportedSolve.issues.some((issue) => issue.includes("expected stationary support did not acquire on either side")),
+    "both feet above the support band should still be counted as globally unsupported"
+  );
+  const stationaryFloorGuardState = stationaryStandingSolve.state;
+  const stationaryFloorGuardSolve = solveStationarySupport(
+    {
+      state: stationaryFloorGuardState,
+      left: {
+        side: "left",
+        hip: [-0.1, 0.78, 0],
+        knee: [-0.1, 0.35, 0],
+        ankle: [-0.1, 0.117, 0],
+        sole: [-0.1, -0.038, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.76, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.1, 0.115, 0],
+        sole: [0.1, -0.04, 0],
+        baseline: standingStationaryBaseline,
+        expected: false
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 1 / 60,
+      enterHeight: 0.026,
+      maxPlantedDrift: 0.02,
+      releaseOnContactTransfer: true,
+      expectedSupport: true,
+      maxRootCompensation: 0.025,
+      maxAnkleCorrection: 0.13,
+      maxPelvisOffset: 0.07,
+      pelvisCompensation: 0.5
+    }
+  );
+  assert.equal(stationaryFloorGuardSolve.footPlant.plantedCount, 2);
+  assert.ok(
+    stationaryFloorGuardSolve.footPlant.legs.every((leg) => leg.planted),
+    "stationary support floor guard should include the opposite low foot when pelvis compensation would otherwise push it through the floor"
+  );
+  const compensatedSupport = computeStationarySupportCompensation({
+    left: plantedStationaryContact,
+    right: plantedStationaryContact,
+    pelvisOffset: [0.05, 0.02, -0.03],
+    maxCompensation: 0.12,
+    influence: 1
+  });
+  assert.equal(compensatedSupport.supportCount, 2);
+  assert.ok(
+    vectorNearlyEqual(compensatedSupport.rootOffset, [-0.05, 0, 0.03], 1e-6),
+    "double-support compensation should counter horizontal pelvis residual without zeroing vertical COM motion"
+  );
+  assert.equal(compensatedSupport.pelvisOffset[1], 0.02);
+  const anchoredErrorCompensation = computeStationarySupportCompensation({
+    left: plantedStationaryContact,
+    right: plantedStationaryContact,
+    pelvisOffset: [0.2, 0.02, 0.1],
+    leftError: [0.012, 0, -0.006],
+    rightError: [0.008, 0, -0.004],
+    maxCompensation: 0.12,
+    influence: 1
+  });
+  assert.ok(
+    vectorNearlyEqual(anchoredErrorCompensation.rootOffset, [0.01, 0, -0.005], 1e-6),
+    "stationary support compensation should prefer measured sole anchor errors when provided instead of blindly canceling pelvis COM"
+  );
+
   const stabilizedInputs = applyFootPlantStabilizedInfluence(
     [
       {
