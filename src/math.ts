@@ -35,7 +35,7 @@ export function clamp01(value: number): number {
 }
 
 export function euclideanModulo(value: number, divisor: number): number {
-  if (divisor <= 0) return 0;
+  if (!Number.isFinite(value) || !Number.isFinite(divisor) || divisor <= 0) return 0;
   return ((value % divisor) + divisor) % divisor;
 }
 
@@ -48,11 +48,13 @@ export function finiteSigned(value: number | undefined, fallback: number): numbe
 }
 
 export function smoothPulse(progress: number): number {
+  if (!Number.isFinite(progress)) return 0;
   if (progress < 0 || progress > 1) return 0;
   return Math.sin(progress * Math.PI);
 }
 
 export function smoothStep(edge0: number, edge1: number, value: number): number {
+  if (!Number.isFinite(value)) return 0;
   if (edge0 === edge1) return value < edge0 ? 0 : 1;
   const t = clamp01((value - edge0) / (edge1 - edge0));
   return t * t * (3 - 2 * t);
@@ -125,7 +127,7 @@ export function lengthVec3(value: Vec3): number {
 }
 
 function cloneFiniteNormalFallbackVec3(fallback: Vec3): Vec3 {
-  if (!fallback.every(isFiniteNumber)) return [0, 0, 1];
+  if (!hasFiniteComponents(fallback, 3)) return [0, 0, 1];
   const length = lengthVec3(fallback);
   return Number.isFinite(length) && length > EPSILON
     ? [fallback[0] / length, fallback[1] / length, fallback[2] / length]
@@ -133,7 +135,7 @@ function cloneFiniteNormalFallbackVec3(fallback: Vec3): Vec3 {
 }
 
 export function normalizeVec3(value: Vec3, fallback: Vec3 = [0, 0, 1]): Vec3 {
-  if (!value.every(isFiniteNumber)) return cloneFiniteNormalFallbackVec3(fallback);
+  if (!hasFiniteComponents(value, 3)) return cloneFiniteNormalFallbackVec3(fallback);
   const length = lengthVec3(value);
   return Number.isFinite(length) && length > EPSILON
     ? [value[0] / length, value[1] / length, value[2] / length]
@@ -158,14 +160,14 @@ export function cloneNormalizedQuat(value: ArrayLike<number> | undefined, fallba
 }
 
 function normalizeFiniteFallbackQuat(fallback: Quat): Quat {
-  if (!fallback.every(isFiniteNumber)) return cloneQuat(IDENTITY_QUAT);
+  if (!hasFiniteComponents(fallback, 4)) return cloneQuat(IDENTITY_QUAT);
   const length = Math.hypot(fallback[0], fallback[1], fallback[2], fallback[3]);
   if (!Number.isFinite(length) || length <= EPSILON) return cloneQuat(IDENTITY_QUAT);
   return [fallback[0] / length, fallback[1] / length, fallback[2] / length, fallback[3] / length];
 }
 
 export function normalizeQuat(value: Quat, fallback: Quat = IDENTITY_QUAT): Quat {
-  if (!value.every(isFiniteNumber)) return normalizeFiniteFallbackQuat(fallback);
+  if (!hasFiniteComponents(value, 4)) return normalizeFiniteFallbackQuat(fallback);
   const length = Math.hypot(value[0], value[1], value[2], value[3]);
   if (!Number.isFinite(length) || length <= EPSILON) return normalizeFiniteFallbackQuat(fallback);
   return [value[0] / length, value[1] / length, value[2] / length, value[3] / length];
@@ -297,9 +299,13 @@ export function lerpTransform(a: Transform, b: Transform, t: number): Transform 
 }
 
 export function scaleRatio(numerator: number, denominator: number): number {
-  if (!Number.isFinite(denominator)) return numerator / EPSILON;
-  if (Math.abs(denominator) > EPSILON) return numerator / denominator;
-  return numerator / (denominator < 0 || Object.is(denominator, -0) ? -EPSILON : EPSILON);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator)) return 0;
+  const resolvedDenominator =
+    Math.abs(denominator) > EPSILON ? denominator : denominator < 0 || Object.is(denominator, -0) ? -EPSILON : EPSILON;
+  const ratio = numerator / resolvedDenominator;
+  if (Number.isFinite(ratio)) return ratio;
+  if (numerator === 0) return 0;
+  return Math.sign(numerator) * Math.sign(resolvedDenominator) < 0 ? -Number.MAX_VALUE : Number.MAX_VALUE;
 }
 
 export function transformDelta(rest: Transform, sample: Transform): Transform {
@@ -415,9 +421,17 @@ export function transformPoint(matrix: Mat4, point: Vec3): Vec3 {
 
 export function isFiniteTransform(transform: Transform): boolean {
   return (
-    transform.translation.every(isFiniteNumber) &&
-    transform.rotation.every(isFiniteNumber) &&
-    transform.scale.every(isFiniteNumber) &&
-    Math.hypot(...transform.rotation) > EPSILON
+    hasFiniteComponents(transform.translation, 3) &&
+    hasFiniteComponents(transform.rotation, 4) &&
+    hasFiniteComponents(transform.scale, 3) &&
+    Math.hypot(transform.rotation[0], transform.rotation[1], transform.rotation[2], transform.rotation[3]) > EPSILON
   );
+}
+
+function hasFiniteComponents(value: ArrayLike<number> | undefined, count: number): boolean {
+  if (!value || value.length !== count) return false;
+  for (let index = 0; index < count; index += 1) {
+    if (!Number.isFinite(value[index])) return false;
+  }
+  return true;
 }

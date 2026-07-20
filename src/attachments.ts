@@ -1,4 +1,5 @@
 import { type Mat4, type Transform, cloneTransform, composeMat4, multiplyMat4 } from "./math.js";
+import { cloneRequiredFiniteMat4 } from "./numeric-helpers.js";
 import { type HumanoidBoneName, type Skeleton, resolveJointIndex } from "./skeleton.js";
 
 export type AttachmentJointTarget = number | string;
@@ -59,11 +60,14 @@ export function resolveAttachmentJointIndex(skeleton: Skeleton, joint: Attachmen
 
   const index = resolveJointIndex(skeleton, joint);
   if (index < 0) throw new Error(`attachment joint ${joint} was not found`);
+  if (!Number.isInteger(index) || index >= skeleton.joints.length) {
+    throw new Error(`attachment joint ${joint} resolved to invalid index ${index}`);
+  }
   return index;
 }
 
 export function attachmentOffsetMatrix(offset: AttachmentOffset | undefined): Mat4 {
-  if (offset instanceof Float32Array) return cloneFiniteMat4(offset, "attachment offset matrix");
+  if (offset instanceof Float32Array) return cloneRequiredFiniteMat4(offset, "attachment offset matrix");
   return composeMat4(cloneTransform(offset));
 }
 
@@ -106,7 +110,7 @@ export function computeAttachmentTransform(input: AttachmentTransformInput): Mat
   const jointModel = input.modelPose[input.jointIndex];
   if (!jointModel) throw new Error(`attachment joint index ${input.jointIndex} has no model matrix`);
   return multiplyMat4(
-    cloneFiniteMat4(jointModel, `attachment joint ${input.jointIndex} model matrix`),
+    cloneRequiredFiniteMat4(jointModel, `attachment joint ${input.jointIndex} model matrix`),
     attachmentOffsetMatrix(input.offset)
   );
 }
@@ -127,8 +131,8 @@ export function computeBoundAttachmentTransform(input: BoundAttachmentTransformI
   const jointModel = input.modelPose[jointIndex];
   if (!jointModel) throw new Error(`attachment binding joint index ${jointIndex} has no model matrix`);
   return multiplyMat4(
-    cloneFiniteMat4(jointModel, `attachment binding joint ${jointIndex} model matrix`),
-    cloneFiniteMat4(input.binding.offsetMatrix, `attachment binding joint ${jointIndex} offset matrix`)
+    cloneRequiredFiniteMat4(jointModel, `attachment binding joint ${jointIndex} model matrix`),
+    cloneRequiredFiniteMat4(input.binding.offsetMatrix, `attachment binding joint ${jointIndex} offset matrix`)
   );
 }
 
@@ -141,10 +145,4 @@ export function computeBoundAttachmentTransforms(input: BoundAttachmentTransform
     };
     return result;
   });
-}
-
-function cloneFiniteMat4(matrix: Mat4, label: string): Mat4 {
-  if (matrix.length !== 16) throw new Error(`${label} must contain 16 values`);
-  if (!Array.from(matrix).every(Number.isFinite)) throw new Error(`${label} values must be finite`);
-  return new Float32Array(matrix);
 }

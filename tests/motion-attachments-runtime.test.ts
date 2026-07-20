@@ -20,6 +20,7 @@ import {
   createSkeleton,
   createThreeAnimationClip,
   createThreeLocomotionUpperBodyTargets,
+  resolveAttachmentJointIndex,
   identityTransform,
   localToModelPose,
   multiplyMat4,
@@ -48,12 +49,32 @@ export async function runMotionAttachmentTests(): Promise<void> {
     scale: [1, 2, 1]
   });
   const expectedAttachment = multiplyMat4(models[2]!, attachmentOffset);
+  const evaluatedAttachment = computeAttachmentTransform({
+    modelPose: models,
+    jointIndex: 2,
+    offset: attachmentOffset
+  });
   assertMat4NearlyEqual(
-    computeAttachmentTransform({ modelPose: models, jointIndex: 2, offset: attachmentOffset }),
+    evaluatedAttachment,
     expectedAttachment,
     1e-6,
     "attachment transform should concatenate joint model matrix then offset matrix"
   );
+  attachmentOffset[12] = 999;
+  assertMat4NearlyEqual(
+    evaluatedAttachment,
+    multiplyMat4(
+      models[2]!,
+      composeMat4({
+        translation: [0.25, 0.5, -0.75],
+        rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4),
+        scale: [1, 2, 1]
+      })
+    ),
+    1e-6,
+    "attachment transform should clone Float32Array offsets and ignore later caller mutation"
+  );
+  attachmentOffset[12] = 0.25;
   assertMat4NearlyEqual(
     computeSkeletonAttachmentTransform({ skeleton, modelPose: models, joint: "head", offset: attachmentOffset }),
     expectedAttachment,
@@ -64,6 +85,18 @@ export async function runMotionAttachmentTests(): Promise<void> {
   assert.equal(boundHeadAttachment.jointIndex, 2, "attachment binding should resolve joint names once");
   assert.equal(boundHeadAttachment.jointName, "head", "attachment binding should retain resolved joint metadata");
   assert.equal(boundHeadAttachment.id, "hat", "attachment binding should retain stable ids");
+  attachmentOffset[13] = 999;
+  assertMat4NearlyEqual(
+    boundHeadAttachment.offsetMatrix,
+    composeMat4({
+      translation: [0.25, 0.5, -0.75],
+      rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 4),
+      scale: [1, 2, 1]
+    }),
+    1e-6,
+    "attachment bindings should own a cloned offset matrix rather than aliasing caller data"
+  );
+  attachmentOffset[13] = 0.5;
   assertMat4NearlyEqual(
     computeBoundAttachmentTransform({ modelPose: models, binding: boundHeadAttachment }),
     expectedAttachment,
@@ -138,6 +171,16 @@ export async function runMotionAttachmentTests(): Promise<void> {
     /attachment joint index 99 is out of range/,
     "out-of-range numeric attachment bindings should fail during binding"
   );
+  assert.throws(
+    () => resolveAttachmentJointIndex({ ...skeleton, joints: [] }, 0),
+    /attachment joint index 0 is out of range/,
+    "numeric attachment bindings should validate against the current skeleton joint array"
+  );
+  assert.throws(
+    () => resolveAttachmentJointIndex({ ...skeleton, nameToIndex: new Map([["ghost", 99]]) }, "ghost"),
+    /attachment joint ghost resolved to invalid index 99/,
+    "named attachment bindings should reject stale skeleton lookup maps"
+  );
   const staleBoundAttachment = createAttachmentBinding({ skeleton, joint: "head" });
   const shortModelPose = models.slice(0, 2);
   assert.throws(
@@ -206,6 +249,25 @@ export async function runMotionAttachmentTests(): Promise<void> {
     () => createAttachmentBinding({ skeleton, joint: "head", offset: nonFiniteOffsetMatrix }),
     /attachment offset matrix values must be finite/,
     "attachment bindings should reject non-finite offset matrices"
+  );
+  assert.throws(
+    () => createAttachmentBinding({ skeleton, joint: "head", offset: new Float32Array(15) }),
+    /attachment offset matrix must contain 16 values/,
+    "attachment bindings should reject short matrix offsets instead of padding them"
+  );
+  const shortJointModels = [...models];
+  shortJointModels[2] = new Float32Array(15);
+  assert.throws(
+    () => computeAttachmentTransform({ modelPose: shortJointModels, jointIndex: 2 }),
+    /attachment joint 2 model matrix must contain 16 values/,
+    "attachment transforms should reject short joint model matrices"
+  );
+  const shortBoundAttachment = createAttachmentBinding({ skeleton, joint: "head", offset: attachmentOffset });
+  (shortBoundAttachment as { offsetMatrix: Float32Array }).offsetMatrix = new Float32Array(15);
+  assert.throws(
+    () => computeBoundAttachmentTransform({ modelPose: models, binding: shortBoundAttachment }),
+    /attachment binding joint 2 offset matrix must contain 16 values/,
+    "bound attachment evaluation should reject offset matrices replaced after binding with short data"
   );
   const mutatedBoundAttachment = createAttachmentBinding({ skeleton, joint: "head", offset: attachmentOffset });
   mutatedBoundAttachment.offsetMatrix[0] = Number.NaN;

@@ -1,14 +1,19 @@
-import type { RawUserTrack } from "./test-api.js";
+import type { RawUserTrack, Transform } from "./test-api.js";
 import {
   assert,
   buildUserTrack,
   clamp01,
+  applyTransformDelta,
+  composeMat4,
   createRawAnimation,
+  euclideanModulo,
   extractRawRootMotion,
   finiteSigned,
   getRawUserTrackStats,
   identityTransform,
   invertQuat,
+  isFiniteTransform,
+  multiplyMat4,
   normalizeAdditiveReferenceImportConfig,
   normalizeAnimationOptimizationImportConfig,
   normalizeBakedImportConfig,
@@ -19,21 +24,26 @@ import {
   normalizeVec3,
   optimizeRawUserTrack,
   quatFromAxisAngle,
+  scaleRatio,
   sampleRawUserTrack,
   sampleUserTrack,
   sanitizeQuaternionTrackValues,
+  smoothPulse,
+  smoothStep,
   toAdditiveAnimationOptions,
   toAnimationOptimizerOptions,
   toBakedCameraJointOptions,
   toRawRootMotionExtractionOptions,
   toRigidInstanceMatrixOptions,
+  transformDelta,
+  transformPoint,
   triggerFloatTrackEdges,
   tryBuildUserTrack,
   tryOptimizeRawAnimation,
   validateRawUserTrack,
   validateUserTrack
 } from "./test-api.js";
-import { quaternionNearlyEqual, skeleton } from "./test-helpers.js";
+import { assertMat4NearlyEqual, quaternionNearlyEqual, vectorNearlyEqual, skeleton } from "./test-helpers.js";
 
 export async function runCoreMathTrackTests(): Promise<void> {
   assert.equal(clamp01(2), 1);
@@ -49,6 +59,98 @@ export async function runCoreMathTrackTests(): Promise<void> {
   assert.deepEqual(normalizeQuat([Infinity, 0, 0, 1], [0, 0, 0, 2]), [0, 0, 0, 1]);
   assert.deepEqual(normalizeQuat([0, 0, 0, 0], [Number.NaN, 0, 0, 0]), [0, 0, 0, 1]);
   assert.deepEqual(invertQuat([Number.POSITIVE_INFINITY, 0, 0, 1]), [0, 0, 0, 1]);
+  assert.equal(euclideanModulo(Number.NaN, 1), 0, "NaN modulo inputs should resolve deterministically");
+  assert.equal(euclideanModulo(1, Number.POSITIVE_INFINITY), 0, "infinite modulo divisors should not leak NaN");
+  assert.equal(euclideanModulo(5, -2), 0, "non-positive modulo divisors should stay clamped to zero");
+  assert.equal(smoothPulse(Number.NaN), 0, "NaN pulse progress should not produce NaN output");
+  assert.equal(smoothStep(0, 1, Number.NaN), 0, "NaN smooth-step values should not produce NaN output");
+  assert.deepEqual(
+    normalizeVec3([1, 0] as unknown as [number, number, number], [0, 1, 0]),
+    [0, 1, 0],
+    "short vector tuples should fall back instead of normalizing missing components"
+  );
+  assert.deepEqual(
+    normalizeVec3([0, 0, 0], [0, 2] as unknown as [number, number, number]),
+    [0, 0, 1],
+    "short vector fallbacks should resolve to the default normal"
+  );
+  assert.ok(
+    quaternionNearlyEqual(
+      normalizeQuat([0, 0, 0] as unknown as [number, number, number, number], [0, 1, 0, 1]),
+      [0, Math.SQRT1_2, 0, Math.SQRT1_2],
+      1e-12
+    ),
+    "short quaternion tuples should use normalized finite fallbacks"
+  );
+  assert.deepEqual(
+    normalizeQuat([0, 0, 0, 0], [0, 0, 1] as unknown as [number, number, number, number]),
+    [0, 0, 0, 1],
+    "short quaternion fallbacks should resolve to identity"
+  );
+  assert.equal(scaleRatio(Number.NaN, 1), 0, "non-finite scale numerators should resolve to zero");
+  assert.equal(scaleRatio(1, Number.POSITIVE_INFINITY), 0, "non-finite scale denominators should resolve to zero");
+  assert.equal(scaleRatio(3, 0), 3 / 1e-8, "positive zero scale denominators should use +EPSILON");
+  assert.equal(scaleRatio(3, -0), -3 / 1e-8, "negative zero scale denominators should use -EPSILON");
+  assert.equal(
+    scaleRatio(Number.MAX_VALUE, 0),
+    Number.MAX_VALUE,
+    "overflowing positive scale ratios should saturate to a finite maximum"
+  );
+  assert.equal(
+    scaleRatio(Number.MAX_VALUE, -0),
+    -Number.MAX_VALUE,
+    "overflowing negative scale ratios should saturate to a finite minimum"
+  );
+  const zeroScaleRest: Transform = { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [0, -0, 1] };
+  const zeroScaleSample: Transform = { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [3, 4, -2] };
+  assert.deepEqual(
+    transformDelta(zeroScaleRest, zeroScaleSample).scale,
+    [3 / 1e-8, -4 / 1e-8, -2],
+    "transform scale deltas should preserve signed zero denominator semantics"
+  );
+  const saturatedSubtractiveDelta = applyTransformDelta(
+    { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [Number.MAX_VALUE, -Number.MAX_VALUE, 2] },
+    { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [0, 0, 1] },
+    -1
+  );
+  assert.deepEqual(
+    saturatedSubtractiveDelta.scale,
+    [Number.MAX_VALUE, -Number.MAX_VALUE, 2],
+    "subtractive zero scale factors should remain finite instead of producing infinities"
+  );
+  const malformedShapeTransform: Transform = {
+    translation: [0, 0] as unknown as [number, number, number],
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1]
+  };
+  assert.equal(
+    isFiniteTransform(malformedShapeTransform),
+    false,
+    "finite transforms should reject short vector shapes"
+  );
+  const parentMatrix = composeMat4({
+    translation: [1, 2, 3],
+    rotation: quatFromAxisAngle([0, 0, 1], Math.PI / 2),
+    scale: [2, -3, 4]
+  });
+  const childMatrix = composeMat4({ translation: [1, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] });
+  const composedMatrix = multiplyMat4(parentMatrix, childMatrix);
+  assert.ok(
+    vectorNearlyEqual(transformPoint(composedMatrix, [0, 0, 0]), [1, 4, 3], 1e-6),
+    "matrix multiplication should compose parent * child in column-major transform order"
+  );
+  assertMat4NearlyEqual(
+    multiplyMat4(composeMat4(identityTransform()), parentMatrix),
+    parentMatrix,
+    0,
+    "left identity matrix multiplication should preserve the operand exactly"
+  );
+  assertMat4NearlyEqual(
+    multiplyMat4(parentMatrix, composeMat4(identityTransform())),
+    parentMatrix,
+    0,
+    "right identity matrix multiplication should preserve the operand exactly"
+  );
   assert.deepEqual(
     Array.from(sanitizeQuaternionTrackValues([0, 0, 0, 1, 0, 0, 0, -1])),
     [0, 0, 0, 1, -0, -0, -0, 1],

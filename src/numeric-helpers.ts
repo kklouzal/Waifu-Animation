@@ -18,6 +18,14 @@ export function cloneFiniteMat4(matrix: NumericArray | undefined, options: Clone
   return new Float32Array(IDENTITY_MAT4_VALUES);
 }
 
+export function cloneRequiredFiniteMat4(matrix: NumericArray | undefined, label: string): Mat4 {
+  if (!matrix || matrix.length !== 16) throw new Error(`${label} must contain 16 values`);
+  for (let index = 0; index < 16; index += 1) {
+    if (!Number.isFinite(matrix[index])) throw new Error(`${label} values must be finite`);
+  }
+  return cloneMat4(matrix);
+}
+
 export function isFiniteMat4(
   matrix: NumericArray | undefined,
   options: FiniteMat4Options = {}
