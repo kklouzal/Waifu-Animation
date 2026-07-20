@@ -25,6 +25,7 @@
 - `debug` and `validation`: rotation/translation/scale pose delta metrics, invalid pose reports, and deterministic input checks.
 - `character-controller`: deterministic engine-agnostic controller core for avatar locomotion intent, facing/yaw, gait speed, posture/locomotion phases, jump buffering/coyote timing, world-adapter boundaries, clip-agnostic animation parameters/events, and snapshot/restore.
 - `character-animation-graph`: deterministic controller-to-animation request graph. It consumes `CharacterAnimationState` plus controller transitions/events and emits semantic, clip-agnostic playback, blend, transition, and action requests for locomotion gaits, posture/crouch, jump/rise/fall/landing, and action forwarding.
+- `character-animation-binding`: deterministic semantic binding registry/resolver. It validates and freezes caller-owned clip asset ids and maps graph playback/blend/transition/action request ids to opaque clip ids plus runtime lane, layer, mask, priority, fade, loop, blend-mode, weight, and playback-speed policy metadata without importing Three/browser/VRM code or sampling clips.
 - `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, base/overlay/debug runtime clip construction for Three `AnimationMixer`, skinned/debug geometry and rigid-instance upload adapters, and sanitized app-facing runtime clip snapshots/influence diagnostics.
 
 ### 2026-07-20 character controller foundation
@@ -34,12 +35,14 @@
 - Animation remains clip-agnostic. The controller emits `CharacterAnimationState` parameters/events for the separate animation graph; it does not choose clip names or write bones.
 - The foundation intentionally stops before traversal polish, interaction/equipment execution, reach/IK coordination, multi-actor protocols, root-motion authority policies, and Waifu app integration. See `docs/character-controller.md` for usage and roadmap boundaries.
 
-### 2026-07-20 character animation graph slice
+### 2026-07-20 character animation graph and binding slices
 
 - `CharacterAnimationGraph` is exported as a reusable deterministic layer above `CharacterController`. It has validated frozen config, deterministic snapshot/restore, optional output-buffer reuse, bounded event/transition scanning, finite input hardening, and no Three/browser/VRM imports.
-- Request ids are semantic contracts, not asset names. Defaults are `locomotion:idle`, `locomotion:gait:<gaitId>`, `posture:standing`, `posture:crouching`, `airborne:rise`, `airborne:fall`, `airborne:landing`, and `action:<kind>`, all configurable by id/prefix. Waifu or another consumer still owns mapping those ids to authored clips and masks.
+- Request ids are semantic contracts, not asset names. Defaults are `locomotion:idle`, `locomotion:gait:<gaitId>`, `posture:standing`, `posture:crouching`, `airborne:rise`, `airborne:fall`, `airborne:landing`, and `action:<kind>`, all configurable by id/prefix.
+- `CharacterAnimationBindingRegistry` is the next reusable layer. Callers configure opaque `clips[]` and semantic `bindings[]`; the registry validates duplicates/missing clip references/invalid runtime policy, freezes accepted entries, and resolves graph output to configured clip ids plus runtime lane/layer/mask/loop/fade/priority/blend/playback metadata.
+- Binding resolution is truthful and deterministic: unbound semantic ids, layer mismatches, malformed graph records, hostile non-finite fields, and bounded scans are reported in `issues`; the resolver does not substitute arbitrary fallback clips. Optional `createCharacterAnimationBindingOutputBuffer()` lets callers reuse output arrays on hot paths.
 - Transition precedence is action forwarding first, then airborne, posture, and locomotion transitions in output order; `primaryRequestId` prefers airborne requests over locomotion while jump/fall/landing is active. Locomotion uses start/stop speed-ratio hysteresis, airborne rise-to-fall uses a `minRiseSeconds` debounce, and landing can be held for a short deterministic handoff window.
-- The graph intentionally stops before clip selection, skeletal pose sampling, root-motion authority, IK/reach execution, or Waifu app integration.
+- These layers intentionally stop before runtime layer mutation, clip sampling, skeletal pose evaluation, root-motion authority, IK/reach execution, or Waifu app integration.
 
 ### 2026-06-08 hardening update
 

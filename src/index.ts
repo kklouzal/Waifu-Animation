@@ -7,6 +7,7 @@ export * from "./tracks.js";
 export * from "./motion.js";
 export * from "./character-controller.js";
 export * from "./character-animation-graph.js";
+export * from "./character-animation-binding.js";
 export * from "./skinning.js";
 export * from "./baked.js";
 export * from "./binary.js";

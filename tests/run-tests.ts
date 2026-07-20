@@ -1,3 +1,4 @@
+import { runCharacterAnimationBindingTests } from "./character-animation-binding.test.js";
 import { runCharacterAnimationGraphTests } from "./character-animation-graph.test.js";
 import { runCharacterControllerTests } from "./character-controller.test.js";
 import { runCoreDataTests } from "./core-data.test.js";
@@ -7,6 +8,7 @@ import { runThreeRuntimeTests } from "./three-runtime.test.js";
 
 runCharacterControllerTests();
 runCharacterAnimationGraphTests();
+runCharacterAnimationBindingTests();
 await runCoreDataTests();
 await runMotionRuntimeTests();
 await runRetargetingIkFacialTests();

@@ -23,8 +23,13 @@ Public API exported from `src/index.ts`:
 - `CharacterAnimationGraph`
 - `resolveCharacterAnimationGraphConfig`
 - `createCharacterAnimationGraphOutputBuffer`
+- `CharacterAnimationBindingRegistry`
+- `createCharacterAnimationBindingRegistry`
+- `resolveCharacterAnimationBindings`
+- `createCharacterAnimationBindingOutputBuffer`
 - controller config/input/snapshot/world-adapter/event/animation-state types
 - animation graph config/snapshot/request/output/issue types
+- animation binding registry/config/resolved-output/issue types
 - item/socket/interaction/actor identifier aliases for future interaction/equipment contracts
 - `CHARACTER_CONTROLLER_COORDINATE_SYSTEM` and `CHARACTER_CONTROLLER_SCHEMA_VERSION`
 
@@ -87,7 +92,60 @@ Default semantic request ids are:
 - `airborne:rise`, `airborne:fall`, and `airborne:landing`
 - `action:<controller action kind>`
 
-These ids are intentionally not clip names. Consumers map them to project-specific clip assets, masks, runtime lanes, or overlay policies outside this package. The ids/prefixes are configurable for projects that want a different semantic namespace.
+These ids are intentionally not clip names. The ids/prefixes are configurable for projects that want a different semantic namespace.
+
+## Semantic binding registry
+
+`src/character-animation-binding.ts` is the reusable adapter between graph semantics and caller-owned clip/runtime policy. It still does not import Three/browser/VRM APIs, sample clips, mutate runtime layers, or choose Waifu-specific assets.
+
+Key surfaces:
+
+- `CharacterAnimationBindingRegistry` / `createCharacterAnimationBindingRegistry(config)` validates and freezes `clips[]` plus `bindings[]`.
+- `resolveCharacterAnimationBindings(registry, graphOutput)` and `registry.resolve(graphOutput)` convert graph playback/blend/transition/action arrays into configured clip ids and runtime metadata.
+- `createCharacterAnimationBindingOutputBuffer()` supports caller-owned output reuse; arrays are cleared and reused.
+
+Bindings map a semantic `requestId` to an opaque `clipId`, expected graph `layer`, and optional runtime policy:
+
+- `laneId` and `layerId` for caller-owned runtime lanes/layers;
+- `maskId` as an opaque mask/policy key (for `JointMask`, track policy, or renderer-specific masks owned by the consumer);
+- `blendMode`, `priority`, `fadeSeconds`, `loop`, `playbackSpeedScale`, playback-speed clamps, and `weightScale`.
+
+The resolver is truthful about missing or incompatible config: unbound request ids, layer mismatches, duplicate bindings, invalid clip ids, unknown clip references, malformed graph records, non-finite values, and bounded scans are reported in `issues`. It does not silently substitute an idle/walk clip for an unbound gait or action.
+
+```ts
+import {
+  CharacterAnimationGraph,
+  createCharacterAnimationBindingRegistry,
+  createFlatGroundCharacterWorld,
+  CharacterController
+} from "waifu-animation";
+
+const registry = createCharacterAnimationBindingRegistry({
+  clips: [
+    { id: "clip-idle", loop: true },
+    { id: "clip-walk", loop: true },
+    { id: "clip-pickup", loop: false }
+  ],
+  bindings: [
+    { requestId: "locomotion:idle", clipId: "clip-idle", layer: "locomotion", runtime: { laneId: "base" } },
+    { requestId: "locomotion:gait:walk", clipId: "clip-walk", layer: "locomotion", runtime: { laneId: "base" } },
+    {
+      requestId: "action:pickup",
+      clipId: "clip-pickup",
+      layer: "action",
+      runtime: { laneId: "overlay", maskId: "upper-body", blendMode: "additive" }
+    }
+  ]
+});
+
+const controller = new CharacterController({}, createFlatGroundCharacterWorld());
+const graph = new CharacterAnimationGraph();
+const controllerResult = controller.update(1 / 60, { movement: { planarDirection: [0, 0, 1], magnitude: 1 } });
+const graphOutput = graph.update(controllerResult.animation, { deltaSeconds: 1 / 60 });
+const resolved = registry.resolve(graphOutput);
+
+console.log(resolved.playback, resolved.actions, resolved.issues);
+```
 
 Transition precedence is explicit and stable:
 
@@ -136,7 +194,7 @@ Not implemented in this slice:
 - full traversal: stairs/steps, slope slide, wall sliding, ledge vaulting, moving-platform transform parenting, crouch clearance, root-motion authority policies;
 - action execution: pickup/carry/drop/use/equip/unequip/sit/stand state machines, hand sockets, reach reservations, multi-actor coordination;
 - IK/reach solving integration: the controller only defines item/socket/interaction identifiers and future coordination boundaries;
-- app-specific clip selection/binding: the graph emits semantic request ids only; consumers still map those ids to authored clips, runtime lanes, masks, and asset policies;
+- runtime mutation/execution: the binding adapter resolves metadata but does not call `AnimationRuntime.setLayer/crossfade`, sample clips, execute actions, or apply root motion;
 - Waifu app integration: `/Warehouse/Waifu` will later own Three/VRM loading, browser input, scene/world/game behavior, physics-engine adapters, and visual gates.
 
-Recommended next slice: bind the semantic graph requests to a reusable clip-registry/runtime-lane adapter, still outside `/Warehouse/Waifu`, then validate the adapter against representative locomotion/posture/airborne/action fixtures before any Waifu app integration.
+Recommended next slice: add a small runtime-application helper that consumes `CharacterAnimationBindingOutput` and caller-supplied clip/mask lookup tables to call the renderer-agnostic `AnimationRuntime` layer/crossfade APIs, still outside `/Warehouse/Waifu`, before any Waifu app integration.
