@@ -93,6 +93,65 @@ export async function runMotionRootMotionTests(): Promise<void> {
     quaternionNearlyEqual(largeLoopingMotionDelta.delta.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 2), 1e-5),
     "large looping clip-carrier motion intervals should compose full-loop rotations deterministically"
   );
+  const safeMultiLoopingMotionDelta = sampleMotionIntervalDelta(
+    motionSkeleton,
+    motionClip,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    { loop: true }
+  );
+  assert.deepEqual(
+    safeMultiLoopingMotionDelta.delta.translation,
+    [90071992547409920, 0, 0],
+    "safe integer clip-carrier loop counts should preserve binary exponentiation behavior"
+  );
+  const hugeForwardLoopingMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0, 1e16, {
+    loop: true
+  });
+  assert.deepEqual(
+    hugeForwardLoopingMotionDelta.delta.translation,
+    [1e17, 0, 0],
+    "positive finite integral clip-carrier loop counts should preserve represented forward displacement"
+  );
+  assert.ok(
+    hugeForwardLoopingMotionDelta.delta.translation.every(Number.isFinite) &&
+      hugeForwardLoopingMotionDelta.delta.rotation.every(Number.isFinite),
+    "unsafe finite forward clip-carrier intervals should remain deterministic and finite"
+  );
+  const hugeReverseLoopingMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 1e16, 0, {
+    loop: true
+  });
+  assert.deepEqual(
+    hugeReverseLoopingMotionDelta.delta.translation,
+    [-1e17, 0, 0],
+    "positive finite integral clip-carrier loop counts should preserve represented reverse displacement"
+  );
+  assert.ok(
+    hugeReverseLoopingMotionDelta.delta.translation.every(Number.isFinite) &&
+      hugeReverseLoopingMotionDelta.delta.rotation.every(Number.isFinite),
+    "unsafe finite reverse clip-carrier intervals should remain deterministic and finite"
+  );
+  const subnormalDurationMotionClip: AnimationClip = {
+    id: "subnormal-duration-motion",
+    duration: Number.MIN_VALUE,
+    loop: true,
+    tracks: [
+      {
+        joint: "root",
+        property: "translation",
+        times: toFloat32Array([0, Number.MIN_VALUE]),
+        values: toFloat32Array([0, 0, 0, 10, 0, 0])
+      }
+    ]
+  };
+  const quotientOverflowMotionDelta = sampleMotionIntervalDelta(motionSkeleton, subnormalDurationMotionClip, 0, 1, {
+    loop: true
+  });
+  assert.deepEqual(
+    quotientOverflowMotionDelta.delta.translation,
+    [Number.MAX_VALUE, 0, 0],
+    "finite clip-carrier intervals whose loop quotient overflows should saturate instead of returning identity"
+  );
   const signedScaleMotionClip: AnimationClip = {
     id: "signed-scale-motion",
     duration: 1,
@@ -375,6 +434,58 @@ export async function runMotionRootMotionTests(): Promise<void> {
   assert.ok(
     largeExtractedDelta.delta.rotation.every(Number.isFinite),
     "large looping motion intervals should keep finite rotations"
+  );
+  const safeMultiLoopExtractedDelta = sampleMotionTracksIntervalDelta(
+    extractedRootMotion.motion,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    { loop: true }
+  );
+  assert.deepEqual(
+    safeMultiLoopExtractedDelta.delta.translation,
+    [90071992547409920, 0, 45035996273704960],
+    "safe integer motion-track loop counts should preserve binary exponentiation behavior"
+  );
+  const hugeForwardExtractedDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 0, 1e16, {
+    loop: true
+  });
+  assert.deepEqual(
+    hugeForwardExtractedDelta.delta.translation,
+    [1e17, 0, 5e16],
+    "positive finite integral motion-track loop counts should preserve represented forward displacement"
+  );
+  assert.ok(
+    hugeForwardExtractedDelta.delta.translation.every(Number.isFinite) &&
+      hugeForwardExtractedDelta.delta.rotation.every(Number.isFinite),
+    "unsafe finite forward motion-track intervals should remain deterministic and finite"
+  );
+  const hugeReverseExtractedDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 1e16, 0, {
+    loop: true
+  });
+  assert.deepEqual(
+    hugeReverseExtractedDelta.delta.translation,
+    [-1e17, 0, -5e16],
+    "positive finite integral motion-track loop counts should preserve represented reverse displacement"
+  );
+  assert.ok(
+    hugeReverseExtractedDelta.delta.translation.every(Number.isFinite) &&
+      hugeReverseExtractedDelta.delta.rotation.every(Number.isFinite),
+    "unsafe finite reverse motion-track intervals should remain deterministic and finite"
+  );
+  const quotientOverflowTrackDelta = sampleMotionTracksIntervalDelta(
+    {
+      duration: Number.MIN_VALUE,
+      loop: true,
+      position: extractedRootMotion.motion.position
+    },
+    0,
+    1,
+    { loop: true }
+  );
+  assert.deepEqual(
+    quotientOverflowTrackDelta.delta.translation,
+    [Number.MAX_VALUE, 0, Number.MAX_VALUE],
+    "finite motion-track intervals whose loop quotient overflows should saturate instead of returning identity"
   );
   const clampedBackwardDelta = sampleMotionTracksIntervalDelta(extractedRootMotion.motion, 0.75, 0.25, { loop: false });
   assert.ok(

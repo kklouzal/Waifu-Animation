@@ -694,7 +694,8 @@ function sampleLoopingIntervalDelta(
   if (duration - startLocal <= EPSILON) startLocal = 0;
 
   const firstSpan = Math.min(remaining, duration - startLocal);
-  if (firstSpan > EPSILON) {
+  const remainingAfterFirstSpan = remaining - firstSpan;
+  if (firstSpan > EPSILON && remainingAfterFirstSpan < remaining) {
     const endLocal = startLocal + firstSpan;
     accumulated = composeCarrierDelta(
       accumulated,
@@ -708,11 +709,13 @@ function sampleLoopingIntervalDelta(
         )
       )
     );
-    remaining -= firstSpan;
+    remaining = remainingAfterFirstSpan;
   }
 
   if (remaining > EPSILON) {
-    const fullLoops = Math.floor((remaining + EPSILON) / duration);
+    const loopQuotient = remaining / duration;
+    const fullLoops =
+      loopQuotient === Number.POSITIVE_INFINITY ? Number.MAX_VALUE : Math.floor((remaining + EPSILON) / duration);
     if (fullLoops > 0) {
       accumulated = composeCarrierDelta(
         accumulated,
@@ -724,7 +727,7 @@ function sampleLoopingIntervalDelta(
           fullLoops
         )
       );
-      remaining -= fullLoops * duration;
+      remaining = remainingAfterRepeatedLoops(remaining, duration, fullLoops);
     }
   }
 
@@ -751,15 +754,25 @@ function sampleClipCarrierAtLocalTime(
 }
 
 function composeCarrierDelta(a: Transform, b: Transform): Transform {
+  const scaleX = a.scale[0] * b.scale[0];
+  const scaleY = a.scale[1] * b.scale[1];
+  const scaleZ = a.scale[2] * b.scale[2];
   return {
     translation: [
-      a.translation[0] + b.translation[0],
-      a.translation[1] + b.translation[1],
-      a.translation[2] + b.translation[2]
+      finiteCarrierComponent(a.translation[0] + b.translation[0]),
+      finiteCarrierComponent(a.translation[1] + b.translation[1]),
+      finiteCarrierComponent(a.translation[2] + b.translation[2])
     ],
     rotation: multiplyQuat(a.rotation, b.rotation),
-    scale: [a.scale[0] * b.scale[0], a.scale[1] * b.scale[1], a.scale[2] * b.scale[2]]
+    scale: [finiteCarrierComponent(scaleX), finiteCarrierComponent(scaleY), finiteCarrierComponent(scaleZ)]
   };
+}
+
+function finiteCarrierComponent(value: number): number {
+  if (Number.isFinite(value)) return value === 0 ? 0 : value;
+  if (value === Number.NEGATIVE_INFINITY) return -Number.MAX_VALUE;
+  if (value === Number.POSITIVE_INFINITY) return Number.MAX_VALUE;
+  return 0;
 }
 
 function resolveTranslationExtraction(options: ExtractRootMotionOptions): ResolvedTranslationExtraction | null {
@@ -1273,7 +1286,8 @@ function sampleLoopingMotionTracksIntervalDelta(
   if (duration - startLocal <= EPSILON) startLocal = 0;
 
   const firstSpan = Math.min(remaining, duration - startLocal);
-  if (firstSpan > EPSILON) {
+  const remainingAfterFirstSpan = remaining - firstSpan;
+  if (firstSpan > EPSILON && remainingAfterFirstSpan < remaining) {
     const endLocal = startLocal + firstSpan;
     accumulated = composeCarrierDelta(
       accumulated,
@@ -1282,11 +1296,13 @@ function sampleLoopingMotionTracksIntervalDelta(
         sampleMotionTracksAtLocalTime(motion, Math.abs(endLocal - duration) <= EPSILON ? duration : endLocal)
       )
     );
-    remaining -= firstSpan;
+    remaining = remainingAfterFirstSpan;
   }
 
   if (remaining > EPSILON) {
-    const fullLoops = Math.floor((remaining + EPSILON) / duration);
+    const loopQuotient = remaining / duration;
+    const fullLoops =
+      loopQuotient === Number.POSITIVE_INFINITY ? Number.MAX_VALUE : Math.floor((remaining + EPSILON) / duration);
     if (fullLoops > 0) {
       accumulated = composeCarrierDelta(
         accumulated,
@@ -1298,7 +1314,7 @@ function sampleLoopingMotionTracksIntervalDelta(
           fullLoops
         )
       );
-      remaining -= fullLoops * duration;
+      remaining = remainingAfterRepeatedLoops(remaining, duration, fullLoops);
     }
   }
 
@@ -1313,7 +1329,12 @@ function sampleLoopingMotionTracksIntervalDelta(
 }
 
 function repeatCarrierDelta(delta: Transform, count: number): Transform {
-  let remaining = Number.isSafeInteger(count) && count > 0 ? count : 0;
+  let remaining =
+    count === Number.POSITIVE_INFINITY
+      ? Number.MAX_VALUE
+      : Number.isFinite(count) && Number.isInteger(count) && count > 0
+        ? count
+        : 0;
   let result = identityTransform();
   let power = sanitizeMotionTransform(delta);
   while (remaining > 0) {
@@ -1322,6 +1343,14 @@ function repeatCarrierDelta(delta: Transform, count: number): Transform {
     if (remaining > 0) power = composeCarrierDelta(power, power);
   }
   return sanitizeMotionTransform(result);
+}
+
+function remainingAfterRepeatedLoops(remaining: number, duration: number, repeatedLoops: number): number {
+  if (!Number.isFinite(repeatedLoops)) return 0;
+  const representedDuration = repeatedLoops * duration;
+  if (!Number.isFinite(representedDuration)) return 0;
+  const rest = remaining - representedDuration;
+  return Number.isFinite(rest) && rest > 0 ? rest : 0;
 }
 
 function invertCarrierDelta(delta: Transform): Transform {
@@ -1342,5 +1371,23 @@ function finiteMotionDuration(duration: number): number {
 }
 
 function sanitizeMotionTransform(transform: Transform): Transform {
-  return cloneTransform(transform);
+  const sanitized = cloneTransform(transform);
+  return {
+    translation: [
+      finiteCarrierComponent(sanitized.translation[0]),
+      finiteCarrierComponent(sanitized.translation[1]),
+      finiteCarrierComponent(sanitized.translation[2])
+    ],
+    rotation: [
+      finiteCarrierComponent(sanitized.rotation[0]),
+      finiteCarrierComponent(sanitized.rotation[1]),
+      finiteCarrierComponent(sanitized.rotation[2]),
+      finiteCarrierComponent(sanitized.rotation[3])
+    ],
+    scale: [
+      finiteCarrierComponent(sanitized.scale[0]),
+      finiteCarrierComponent(sanitized.scale[1]),
+      finiteCarrierComponent(sanitized.scale[2])
+    ]
+  };
 }
