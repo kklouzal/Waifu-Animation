@@ -46,6 +46,7 @@ npm test
 - `character-controller`: deterministic, engine-agnostic avatar controller foundation for fixed-step movement intent, facing, gait speed, posture/locomotion phases, jump buffering/coyote timing, world-adapter boundaries, animation-facing parameters/events, and snapshot/restore.
 - `character-animation-graph`: deterministic, clip-agnostic request graph that turns controller animation state/events into semantic locomotion, posture, airborne, and action playback/blend/transition requests with hysteresis, debouncing, bounds, and snapshot/restore.
 - `character-animation-binding`: reusable semantic binding registry/resolver that maps graph request ids to opaque clip asset ids plus runtime lane, layer, mask, loop, fade, priority, blend-mode, and playback policy metadata without importing Three/VRM APIs or choosing app-specific assets.
+- `character-animation-runtime-applier`: stateful renderer-agnostic bridge from resolved graph bindings to `AnimationRuntime` layers with owned layer namespacing, caller-supplied clip/mask lookup, stale layer retirement, one-shot action identity tracking, and no root-motion authority decisions.
 - `pose`: rest pose creation, blending, additive layers, masks, pose validation.
 - `skinning`: reusable matrix-palette skinning for positions, normals, and tangents.
 - `baked`: Ozz baked-sample style camera-joint, rigid-instance matrix, and bounds helpers.

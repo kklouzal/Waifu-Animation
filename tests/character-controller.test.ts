@@ -466,7 +466,11 @@ function runTraversalStepTests(): void {
   });
   assert.ok(nearlyEqual(stepped.state.position[1], 0.25, 1e-9), "step-up should move to adapter support");
   assert.equal(stepped.state.grounded.surfaceId, "stair-top");
-  assert.ok(stepped.events.some((event) => event.type === "step-up" && event.stepKind === "step-up"));
+  assert.deepEqual(
+    stepped.events.filter((event) => event.type === "step-up").map((event) => event.stepKind),
+    ["step-up"],
+    "accepted step-up should emit one step-up event for the adapter resolution"
+  );
 
   const tooHighWorld: CharacterWorldAdapter = {
     queryGround(query) {
@@ -527,7 +531,11 @@ function runTraversalStepTests(): void {
   });
   assert.ok(nearlyEqual(steppedDown.state.position[1], -0.25, 1e-9), "step-down should snap to support");
   assert.equal(steppedDown.state.grounded.surfaceId, "lower-step");
-  assert.ok(steppedDown.events.some((event) => event.type === "step-down" && event.stepKind === "step-down"));
+  assert.deepEqual(
+    steppedDown.events.filter((event) => event.type === "step-down").map((event) => event.stepKind),
+    ["step-down"],
+    "accepted step-down should emit one step-down event for the adapter resolution"
+  );
 }
 
 function runContactSlideAndPlatformTests(): void {
