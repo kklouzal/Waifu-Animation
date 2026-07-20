@@ -43,16 +43,16 @@ The foundation supports:
 - validated finite configuration, including capsule height/radius/step/probe consistency and a hard `maxSubSteps` safety ceiling;
 - deterministic fixed-step update with bounded catch-up (`fixedStepSeconds`, `maxSubSteps`). `cappedDeltaSeconds` is the capped accumulator budget for this call; catch-up time beyond `maxSubSteps` is discarded and reported with `catch-up-capped`;
 - movement intent with planar direction, magnitude, facing policy, and gait/speed request;
-- explicit standing/crouching posture state plus entering/exiting crouch transition progress;
+- explicit standing/crouching posture state plus entering/exiting crouch transition progress and adapter-gated standing clearance when `checkCapsuleClearance` is supplied;
 - grounded/rising/falling/landing locomotion phases;
 - controller-owned velocity, acceleration/deceleration, gravity, yaw turning, jump buffering, and coyote timing;
 - edge-triggered jump/action command identity so future pickup/equip/sit/use commands do not repeat every frame;
-- world adapter boundaries for ground queries, capsule sweeps, high-level resolution, slopes, steps, and platform velocity;
+- world adapter boundaries for ground queries, capsule sweeps, high-level resolution, explicit step-up/step-down negotiation, wall-plane contacts, steep-slope slide planning, standing clearance, and moving-platform velocity carry;
 - deterministic events/transitions ordered as input-edge events before fixed-step locomotion/posture events;
 - executable flat-ground test adapter for replay and integration tests;
-- snapshot/restore for deterministic save/load/replay.
+- snapshot/restore for deterministic save/load/replay, including schema-versioned blocked-stand state.
 
-Input-edge events are sanitized before fixed substeps. Action, jump-buffer, and posture-transition-start events can therefore appear on an update that runs zero substeps; movement, facing, jump start, landing, and posture progress only advance on completed fixed substeps. `jumpBufferSeconds: 0` disables timer persistence, not the immediate grounded/coyote jump on the next fixed substep; the transient pending jump edge is included in snapshots until that substep runs.
+Input-edge events are sanitized before fixed substeps. Action, jump-buffer, and crouch-enter `posture-transition-start` events can therefore appear on an update that runs zero substeps; standing/exit `posture-transition-start` waits for the first fixed substep with valid capsule clearance. A zero-substep standing request from crouch is snapshotted as a pending crouched state (`crouchTarget: "standing"`, `standBlocked: false`) until clearance runs. Movement, facing, jump start, landing, and posture progress only advance on completed fixed substeps. `jumpBufferSeconds: 0` disables timer persistence, not the immediate grounded/coyote jump on the next fixed substep; the transient pending jump edge is included in snapshots until that substep runs.
 
 ## Minimal usage
 
@@ -204,9 +204,16 @@ graph.restore(savedGraph);
 
 Adapters can implement one or more methods:
 
-- `queryGround(query)` returns finite Y-up support data, slope, surface id, and platform velocity. A valid post-move `queryGround` result is authoritative when present.
-- `sweepCapsule(query)` returns a finite swept capsule hit, travel fraction, optional support `ground`, or a walkable hit `normal` from which the core can derive support when `queryGround` is absent.
-- `resolveMovement(query)` returns a final finite position and optional velocity/ground hit. A valid movement-resolved ground is preserved when no valid post-move ground query overrides it.
+- `queryGround(query)` returns finite Y-up support data, slope, surface id, and platform velocity. A valid post-move walkable `queryGround` result is authoritative when present.
+- `resolveStepUp(query)` and `resolveStepDown(query)` are explicit traversal contracts for stairs/curbs. Accepted step-up positions are rejected if they rise above `stepHeight`; accepted step-down positions are rejected if they drop below `stepHeight + groundProbeDistance`. Accepted steps must return walkable support. Rejected steps can return an adapter-resolved blocked position/velocity and emit deterministic `step-rejected` events.
+- `sweepCapsule(query)` is the low-level sweep path. It returns a finite swept capsule impact `position` and/or `travelFraction`, optional separate support `ground`, or a hit `normal` from which the core can derive support when `queryGround` is absent. For an explicit wall hit, the sweep position/fraction is treated as impact data and the core may project remaining displacement along the wall plane.
+- `resolveMovement(query)` is the high-level resolver path. Its finite `position` is final and authoritative for the fixed step; if it also reports a wall `hit`, the core projects velocity onto the wall plane without appending additional remaining displacement. A valid movement-resolved ground is preserved when no valid post-move ground query overrides it.
+- `resolveSteepSlopeSlide(query)` is called for adapter-reported non-walkable/too-steep support from `queryGround`, movement-resolved ground, or explicit sweep/movement hits with `contactKind: "steep-slope"`. Explicit steep-slope hits require finite `point` and `normal`; missing/invalid contact fields emit `world-adapter-failed` and are not grounded from their normal. The core emits exactly one `steep-slope`, never marks that support grounded, respects valid walkable `queryGround`, and applies the finite adapter slide position/displacement/velocity at most once for the chosen contact.
+- `checkCapsuleClearance(query)` gates crouch exit. When this method exists, a blocked/invalid/throwing result keeps the controller crouched with `standBlocked: true` and emits `posture-blocked` once for the blocked episode; `posture-transition-start` for standing is emitted only after a valid clear result. When the method is absent, clearance defaults to clear and standing exit starts on the next fixed substep.
+
+Movement and sweep queries separate `controllerDisplacement`, `platformVelocity`, `platformDisplacement`, and total `displacement`. The core applies moving-platform carry exactly once from the previously accepted support for the fixed step; adapter-returned `velocity` is interpreted as controller/self velocity, not platform carry. Ground `surfaceId` changes while staying grounded emit `surface-changed`.
+
+Wall slides are driven by explicit adapter contacts: a sweep/movement `hit` with `contactKind: "wall"` and a finite `normal` projects velocity onto that plane with no speed gain. Low-level `sweepCapsule` hits may also have remaining displacement projected from the impact point; high-level `resolveMovement.position` remains final. The core does not infer wall geometry without an adapter contact, and an explicit wall normal is not treated as walkable ground unless a separate `ground` result is supplied.
 
 Adapter exceptions or non-finite adapter data produce `world-adapter-failed` events and the core falls back to deterministic integration where possible. Explicit optional adapter fields are validated when present: `point`, `normal`, `distance`, `slopeAngleRadians`, `platformVelocity`, `surfaceId`, sweep `position`, and sweep `travelFraction` must be finite/in-range/non-empty as applicable. Invalid optional data is rejected rather than silently replacing it with a default.
 
@@ -216,7 +223,7 @@ Returned `surfaceId` values must be non-empty strings. Resolved controller confi
 
 Not implemented in this slice:
 
-- full traversal: stairs/steps, slope slide, wall sliding, ledge vaulting, moving-platform transform parenting, crouch clearance, root-motion authority policies;
+- ledge vaulting/mantling, moving-platform transform parenting, root-motion authority policies, and physics-engine-specific collision ownership;
 - action/equipment execution: the runtime applier can start/fade animation layers for action commands, but pickup/carry/drop/use/equip/unequip/sit/stand state machines, hand sockets, reach reservations, and multi-actor coordination remain consumer-owned;
 - IK/reach solving integration: the controller only defines item/socket/interaction identifiers and future coordination boundaries;
 - root-motion authority: the runtime can compute root-motion intervals, but this controller/applier slice does not choose carriers, integrate displacement, or decide physics-vs-animation authority;

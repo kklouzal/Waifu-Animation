@@ -22,6 +22,10 @@ export function runCharacterControllerTests(): void {
   runCrouchProgressionTests();
   runInvalidConfigAndInputTests();
   runAdapterGroundingContractTests();
+  runTraversalStepTests();
+  runContactSlideAndPlatformTests();
+  runCrouchClearanceTests();
+  runTraversalAdapterFailureTests();
   runAdapterFailureAndBoundsTests();
   runStateRestoreTests();
   runConfigSnapshotAndImmutabilityTests();
@@ -49,6 +53,19 @@ function runDeterministicReplayAndSubdivisionTests(): void {
 
   assertSnapshotNearlyEqual(a.snapshot(), b.snapshot(), 1e-10, "subdivision should match fixed steps");
   assert.deepEqual(a.snapshot(), c.snapshot(), "replay with identical fixed inputs should be byte-stable");
+
+  const platformWorld = createFlatGroundCharacterWorld({ y: 0, platformVelocity: [0.5, 0, 0], surfaceId: "belt" });
+  const platformStepwise = new CharacterController({ fixedStepSeconds: 0.05, maxSubSteps: 4 }, platformWorld);
+  const platformSubdivided = new CharacterController({ fixedStepSeconds: 0.05, maxSubSteps: 4 }, platformWorld);
+  platformStepwise.update(0.05, {});
+  platformStepwise.update(0.05, {});
+  platformSubdivided.update(0.1, {});
+  assertSnapshotNearlyEqual(
+    platformStepwise.snapshot(),
+    platformSubdivided.snapshot(),
+    1e-12,
+    "moving-platform contact carry should subdivide deterministically"
+  );
 }
 
 function runMovementTurningAndStopTests(): void {
@@ -401,6 +418,561 @@ function runAdapterGroundingContractTests(): void {
   assert.ok(Number.isFinite(hostile.state.position[1]), "hostile optional ground data should not poison state");
 }
 
+function runTraversalStepTests(): void {
+  const stepConfig = {
+    fixedStepSeconds: 0.1,
+    stepHeight: 0.35,
+    groundProbeDistance: 0.05,
+    acceleration: 20,
+    deceleration: 20,
+    gaits: [{ id: "walk", speed: 1, acceleration: 20, deceleration: 20 }]
+  };
+
+  const stepUpWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      const groundY = query.position[2] >= 0.05 ? 0.25 : 0;
+      const distance = query.position[1] - groundY;
+      return {
+        grounded: distance <= query.probeDistance && distance >= -query.stepHeight,
+        point: [query.position[0], groundY, query.position[2]],
+        normal: [0, 1, 0],
+        distance,
+        slopeAngleRadians: 0,
+        surfaceId: groundY > 0 ? "stair-top" : "floor"
+      };
+    },
+    resolveStepUp(query) {
+      if (query.desiredPosition[2] < 0.05) return null;
+      return {
+        accepted: true,
+        position: [query.desiredPosition[0], 0.25, query.desiredPosition[2]],
+        velocity: query.velocity,
+        ground: {
+          grounded: true,
+          point: [query.desiredPosition[0], 0.25, query.desiredPosition[2]],
+          normal: [0, 1, 0],
+          distance: 0,
+          slopeAngleRadians: 0,
+          surfaceId: "stair-top"
+        }
+      };
+    },
+    resolveMovement(query) {
+      return { position: query.desiredPosition, velocity: query.velocity };
+    }
+  };
+  const stepped = new CharacterController(stepConfig, stepUpWorld).update(0.1, {
+    movement: { planarDirection: [0, 0, 1], magnitude: 1 }
+  });
+  assert.ok(nearlyEqual(stepped.state.position[1], 0.25, 1e-9), "step-up should move to adapter support");
+  assert.equal(stepped.state.grounded.surfaceId, "stair-top");
+  assert.ok(stepped.events.some((event) => event.type === "step-up" && event.stepKind === "step-up"));
+
+  const tooHighWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      return {
+        grounded: query.position[1] <= query.probeDistance,
+        point: [query.position[0], 0, query.position[2]],
+        normal: [0, 1, 0],
+        distance: query.position[1],
+        slopeAngleRadians: 0
+      };
+    },
+    resolveStepUp(query) {
+      if (query.desiredPosition[2] < 0.05) return null;
+      return { accepted: false, position: query.from, velocity: [0, 0, 0], reason: "step exceeds limit" };
+    }
+  };
+  const rejected = new CharacterController(stepConfig, tooHighWorld).update(0.1, {
+    movement: { planarDirection: [0, 0, 1], magnitude: 1 }
+  });
+  assert.ok(nearlyEqual(rejected.state.position[2], 0, 1e-9), "rejected step should keep adapter-resolved position");
+  assert.ok(rejected.events.some((event) => event.type === "step-rejected" && event.stepKind === "step-up"));
+
+  const stepDownWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      const groundY = query.position[2] >= 0.05 ? -0.25 : 0;
+      const distance = query.position[1] - groundY;
+      return {
+        grounded: distance <= query.probeDistance && distance >= -query.stepHeight,
+        point: [query.position[0], groundY, query.position[2]],
+        normal: [0, 1, 0],
+        distance,
+        slopeAngleRadians: 0,
+        surfaceId: groundY < 0 ? "lower-step" : "floor"
+      };
+    },
+    resolveStepDown(query) {
+      if (query.desiredPosition[2] < 0.05) return null;
+      return {
+        accepted: true,
+        position: [query.desiredPosition[0], -0.25, query.desiredPosition[2]],
+        velocity: query.velocity,
+        ground: {
+          grounded: true,
+          point: [query.desiredPosition[0], -0.25, query.desiredPosition[2]],
+          normal: [0, 1, 0],
+          distance: 0,
+          slopeAngleRadians: 0,
+          surfaceId: "lower-step"
+        }
+      };
+    },
+    resolveMovement(query) {
+      return { position: query.desiredPosition, velocity: query.velocity };
+    }
+  };
+  const steppedDown = new CharacterController(stepConfig, stepDownWorld).update(0.1, {
+    movement: { planarDirection: [0, 0, 1], magnitude: 1 }
+  });
+  assert.ok(nearlyEqual(steppedDown.state.position[1], -0.25, 1e-9), "step-down should snap to support");
+  assert.equal(steppedDown.state.grounded.surfaceId, "lower-step");
+  assert.ok(steppedDown.events.some((event) => event.type === "step-down" && event.stepKind === "step-down"));
+}
+
+function runContactSlideAndPlatformTests(): void {
+  const steepNormal: Vec3 = [0, Math.cos(Math.PI * 0.4), -Math.sin(Math.PI * 0.4)];
+  const steepWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      return {
+        grounded: true,
+        point: [query.position[0], query.position[1], query.position[2]],
+        normal: steepNormal,
+        distance: 0,
+        slopeAngleRadians: Math.PI * 0.4,
+        surfaceId: "steep"
+      };
+    },
+    resolveSteepSlopeSlide() {
+      return { displacement: [0.02, -0.01, 0], velocity: [0.2, -0.1, 0], reason: "down-slope" };
+    }
+  };
+  const steep = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    steepWorld
+  ).update(0.1, {});
+  assert.equal(steep.state.grounded.grounded, false, "steep support must not mark grounded");
+  assert.ok(steep.events.some((event) => event.type === "steep-slope"));
+  assert.ok(steep.events.some((event) => event.type === "steep-slope-slide"));
+  assert.ok(nearlyEqual(steep.state.position[0], 0.02, 1e-9));
+
+  let sweepSlideCalls = 0;
+  const sweepSteepWorld: CharacterWorldAdapter = {
+    sweepCapsule(query) {
+      const desiredPosition: Vec3 = [
+        query.from[0] + query.displacement[0],
+        query.from[1] + query.displacement[1],
+        query.from[2] + query.displacement[2]
+      ];
+      return {
+        travelFraction: 1,
+        contactKind: "steep-slope",
+        point: desiredPosition,
+        normal: steepNormal,
+        surfaceId: "sweep-steep"
+      };
+    },
+    resolveSteepSlopeSlide() {
+      sweepSlideCalls += 1;
+      return { displacement: [0.01, -0.02, 0], velocity: [0.1, -0.2, 0] };
+    }
+  };
+  const sweepSteep = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    sweepSteepWorld
+  ).update(0.1, {});
+  assert.equal(sweepSteep.state.grounded.grounded, false, "explicit sweep steep contacts must not ground");
+  assert.equal(sweepSlideCalls, 1, "sweep steep contact should apply slide exactly once");
+  assert.ok(
+    sweepSteep.events.some(
+      (event) => event.type === "steep-slope" && event.field === "sweepCapsule" && event.surfaceId === "sweep-steep"
+    ),
+    "low-level sweep steep contact should emit its source field"
+  );
+
+  let movementSlideCalls = 0;
+  const movementSteepWorld: CharacterWorldAdapter = {
+    resolveMovement(query) {
+      return {
+        position: query.desiredPosition,
+        velocity: query.velocity,
+        hit: {
+          contactKind: "steep-slope",
+          point: [query.desiredPosition[0], query.desiredPosition[1], query.desiredPosition[2]],
+          normal: steepNormal,
+          surfaceId: "resolver-steep"
+        }
+      };
+    },
+    resolveSteepSlopeSlide() {
+      movementSlideCalls += 1;
+      return { displacement: [0, -0.01, 0] };
+    }
+  };
+  const movementSteep = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    movementSteepWorld
+  ).update(0.1, {});
+  assert.equal(movementSteep.state.grounded.grounded, false, "movement hit steep contacts must not ground");
+  assert.equal(movementSlideCalls, 1, "movement hit steep contact should apply slide exactly once");
+  assert.ok(
+    movementSteep.events.some(
+      (event) =>
+        event.type === "steep-slope" && event.field === "resolveMovement.hit" && event.surfaceId === "resolver-steep"
+    ),
+    "high-level movement steep contact should preserve its source field"
+  );
+
+  const missingSteepNormalWorld: CharacterWorldAdapter = {
+    resolveMovement(query) {
+      return {
+        position: query.desiredPosition,
+        hit: { contactKind: "steep-slope", point: [0, 0, 0] }
+      };
+    }
+  };
+  const missingSteepNormal = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    missingSteepNormalWorld
+  ).update(0.1, {});
+  assert.ok(
+    missingSteepNormal.events.some(
+      (event) => event.type === "world-adapter-failed" && event.field === "resolveMovement.hit.normal"
+    ),
+    "explicit steep contacts require a deterministic normal failure"
+  );
+  assert.ok(!missingSteepNormal.events.some((event) => event.type === "steep-slope"));
+
+  const invalidSteepPointWorld: CharacterWorldAdapter = {
+    sweepCapsule() {
+      return { travelFraction: 1, contactKind: "steep-slope", point: [0, Number.NaN, 0] as Vec3, normal: steepNormal };
+    }
+  };
+  const invalidSteepPoint = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    invalidSteepPointWorld
+  ).update(0.1, {});
+  assert.ok(
+    invalidSteepPoint.events.some(
+      (event) => event.type === "world-adapter-failed" && event.field === "sweepCapsule.point"
+    ),
+    "invalid steep contact points should be rejected deterministically"
+  );
+
+  const invalidSteepSurfaceWorld: CharacterWorldAdapter = {
+    resolveMovement(query) {
+      return {
+        position: query.desiredPosition,
+        hit: { contactKind: "steep-slope", point: [0, 0, 0], normal: steepNormal, surfaceId: "" }
+      };
+    }
+  };
+  const invalidSteepSurface = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    invalidSteepSurfaceWorld
+  ).update(0.1, {});
+  assert.ok(
+    invalidSteepSurface.events.some(
+      (event) => event.type === "world-adapter-failed" && event.field === "resolveMovement.hit.surfaceId"
+    ),
+    "invalid steep contact surface ids should be rejected deterministically"
+  );
+
+  let authoritativeSlideCalls = 0;
+  const authoritativeGroundWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      return {
+        grounded: true,
+        point: [query.position[0], 0, query.position[2]],
+        normal: [0, 1, 0],
+        distance: query.position[1],
+        slopeAngleRadians: 0,
+        surfaceId: "walkable-floor"
+      };
+    },
+    resolveMovement(query) {
+      return {
+        position: query.desiredPosition,
+        velocity: query.velocity,
+        hit: {
+          contactKind: "steep-slope",
+          point: [query.desiredPosition[0], query.desiredPosition[1], query.desiredPosition[2]],
+          normal: steepNormal,
+          surfaceId: "ignored-steep"
+        }
+      };
+    },
+    resolveSteepSlopeSlide() {
+      authoritativeSlideCalls += 1;
+      return { displacement: [1, 0, 0] };
+    }
+  };
+  const authoritative = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    authoritativeGroundWorld
+  ).update(0.1, {});
+  assert.equal(authoritative.state.grounded.grounded, true, "valid queryGround support should stay authoritative");
+  assert.equal(authoritative.state.grounded.surfaceId, "walkable-floor");
+  assert.equal(authoritativeSlideCalls, 0, "walkable queryGround should suppress duplicate steep slide application");
+  assert.ok(
+    !authoritative.events.some((event) => event.type === "steep-slope"),
+    "walkable queryGround should suppress stale steep contact events"
+  );
+
+  const invalidSlideWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      return {
+        grounded: true,
+        point: [query.position[0], query.position[1], query.position[2]],
+        normal: steepNormal,
+        distance: 0,
+        slopeAngleRadians: Math.PI * 0.4
+      };
+    },
+    resolveSteepSlopeSlide() {
+      return { velocity: [Number.NaN, 0, 0] as Vec3 };
+    }
+  };
+  const invalidSlide = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    invalidSlideWorld
+  ).update(0.1, {});
+  assert.ok(invalidSlide.events.some((event) => event.type === "steep-slope"));
+  assert.ok(
+    invalidSlide.events.some(
+      (event) => event.type === "world-adapter-failed" && event.field === "resolveSteepSlopeSlide.velocity"
+    ),
+    "invalid steep slide data should be surfaced"
+  );
+  assert.ok(
+    !invalidSlide.events.some((event) => event.type === "steep-slope-slide"),
+    "invalid steep slide data should not emit a slide application"
+  );
+  assert.ok(Number.isFinite(invalidSlide.state.position[0]), "invalid slide data should not poison position");
+
+  const throwingSlideWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      return {
+        grounded: true,
+        point: [query.position[0], query.position[1], query.position[2]],
+        normal: steepNormal,
+        distance: 0,
+        slopeAngleRadians: Math.PI * 0.4
+      };
+    },
+    resolveSteepSlopeSlide() {
+      throw new Error("slide exploded");
+    }
+  };
+  const throwingSlide = new CharacterController(
+    { fixedStepSeconds: 0.1, maxSlopeAngleRadians: Math.PI / 4 },
+    throwingSlideWorld
+  ).update(0.1, {});
+  assert.ok(
+    throwingSlide.events.some(
+      (event) => event.type === "world-adapter-failed" && event.field === "resolveSteepSlopeSlide"
+    ),
+    "throwing steep slide adapters should be surfaced"
+  );
+
+  const wallWorld: CharacterWorldAdapter = {
+    sweepCapsule() {
+      return { travelFraction: 0.5, normal: [1, 0, 0], contactKind: "wall", surfaceId: "east-wall" };
+    }
+  };
+  const wall = new CharacterController(
+    { fixedStepSeconds: 0.1, acceleration: 20, gaits: [{ id: "walk", speed: 1, acceleration: 20 }] },
+    wallWorld
+  ).update(0.1, { movement: { planarDirection: [1, 0, 1], magnitude: 1 } });
+  assert.ok(wall.events.some((event) => event.type === "wall-slide"));
+  assert.ok(nearlyEqual(wall.state.velocity[0], 0, 1e-9), "wall slide should remove into-wall velocity");
+  assert.ok(planarSpeed(wall.state.velocity) <= 1 + 1e-9, "wall slide must not gain speed");
+  assert.ok(wall.state.position[2] > wall.state.position[0], "remaining displacement should project along the wall");
+  assert.equal(wall.state.grounded.grounded, false, "explicit wall contacts must not be inferred as ground");
+
+  const highLevelWallWorld: CharacterWorldAdapter = {
+    resolveMovement(query) {
+      return {
+        position: [0.25, 0, 0.4],
+        velocity: query.velocity,
+        hit: { travelFraction: 0.25, normal: [1, 0, 0], contactKind: "wall", surfaceId: "resolver-wall" }
+      };
+    }
+  };
+  const highLevelWall = new CharacterController(
+    { fixedStepSeconds: 0.1, acceleration: 20, gaits: [{ id: "walk", speed: 1, acceleration: 20 }] },
+    highLevelWallWorld
+  ).update(0.1, { movement: { planarDirection: [1, 0, 1], magnitude: 1 } });
+  assert.ok(highLevelWall.events.some((event) => event.type === "wall-slide"));
+  assert.ok(
+    vecNearlyEqual(highLevelWall.state.position, [0.25, 0, 0.4], 1e-12),
+    "resolveMovement final position is authoritative"
+  );
+  assert.ok(nearlyEqual(highLevelWall.state.velocity[0], 0, 1e-9), "high-level wall hit should project velocity");
+  assert.ok(planarSpeed(highLevelWall.state.velocity) <= 1 + 1e-9, "high-level wall slide must not gain speed");
+
+  let platformSurface = "platform-a";
+  const platformWorld: CharacterWorldAdapter = {
+    queryGround(query) {
+      return {
+        grounded: true,
+        point: [query.position[0], 0, query.position[2]],
+        normal: [0, 1, 0],
+        distance: query.position[1],
+        slopeAngleRadians: 0,
+        platformVelocity: platformSurface === "platform-a" ? [1, 0, 0] : [2, 0, 0],
+        surfaceId: platformSurface
+      };
+    },
+    resolveMovement(query) {
+      return { position: query.desiredPosition, velocity: query.velocity };
+    }
+  };
+  const platform = new CharacterController({ fixedStepSeconds: 0.1 }, platformWorld);
+  platform.update(0.1, {});
+  const carried = platform.update(0.1, {});
+  assert.ok(nearlyEqual(carried.state.position[0], 0.1, 1e-9), "platform velocity should carry exactly once");
+  platformSurface = "platform-b";
+  const switched = platform.update(0.1, {});
+  assert.ok(nearlyEqual(switched.state.position[0], 0.2, 1e-9), "surface switch should not double-count carry");
+  assert.ok(
+    switched.events.some(
+      (event) => event.type === "surface-changed" && event.from === "platform-a" && event.to === "platform-b"
+    )
+  );
+}
+
+function runCrouchClearanceTests(): void {
+  let clear = false;
+  const world: CharacterWorldAdapter = {
+    ...createFlatGroundCharacterWorld(),
+    checkCapsuleClearance() {
+      return clear ? { clear: true } : { clear: false, reason: "ceiling" };
+    }
+  };
+  const controller = new CharacterController({ fixedStepSeconds: 0.1, crouchDurationSeconds: 0.1 }, world);
+  controller.update(0.1, { posture: { crouch: true } });
+  const blocked = controller.update(0.1, { posture: { crouch: false } });
+  assert.equal(blocked.state.posture, "crouching", "blocked stand should remain crouched");
+  assert.equal(blocked.state.standBlocked, true, "blocked stand should persist in snapshot state");
+  assert.ok(blocked.events.some((event) => event.type === "posture-blocked" && event.code === "standing-clearance"));
+  assert.ok(
+    !blocked.events.some((event) => event.type === "posture-transition-start"),
+    "blocked stand should not emit a false exit start"
+  );
+
+  const zeroStep = new CharacterController({ fixedStepSeconds: 0.1, crouchDurationSeconds: 0.1 }, world);
+  zeroStep.update(0.1, { posture: { crouch: true } });
+  const pendingStand = zeroStep.update(0.05, { posture: { crouch: false } });
+  assert.equal(pendingStand.substeps, 0, "zero-substep standing request should not query clearance yet");
+  assert.deepEqual(
+    pendingStand.events.map((event) => event.type),
+    [],
+    "pending standing should not emit a false edge"
+  );
+  assert.equal(pendingStand.state.posturePhase, "crouching");
+  assert.equal(pendingStand.state.crouchTarget, "standing", "standing request should persist as pending state");
+  assert.equal(pendingStand.state.standBlocked, false, "pending standing is not blocked before clearance runs");
+  const restoredPending = new CharacterController({ fixedStepSeconds: 0.1, crouchDurationSeconds: 0.1 }, world);
+  restoredPending.restore(pendingStand.state);
+  const firstBlocked = zeroStep.update(0.05, {});
+  const replayBlocked = restoredPending.update(0.05, {});
+  assert.deepEqual(
+    firstBlocked.events.map((event) => event.type),
+    ["posture-blocked"],
+    "first blocked fixed substep should emit posture-blocked once"
+  );
+  assert.deepEqual(
+    replayBlocked.events.map((event) => event.type),
+    firstBlocked.events.map((event) => event.type),
+    "blocked standing event replay should survive snapshot/restore"
+  );
+  assert.deepEqual(replayBlocked.state, firstBlocked.state, "blocked standing snapshot replay should be deterministic");
+  const stillBlocked = zeroStep.update(0.1, {});
+  assert.ok(
+    !stillBlocked.events.some((event) => event.type === "posture-blocked"),
+    "continued blocked standing should not duplicate posture-blocked"
+  );
+
+  clear = true;
+  const stood = controller.update(0.1, { posture: { crouch: false } });
+  assert.equal(stood.state.posture, "standing", "standing should complete once clearance succeeds");
+  assert.equal(stood.state.standBlocked, false);
+  assert.ok(stood.events.some((event) => event.type === "posture-transition-start"));
+  assert.ok(stood.events.some((event) => event.type === "posture-transition-complete"));
+
+  const invalidClearanceWorld: CharacterWorldAdapter = {
+    ...createFlatGroundCharacterWorld(),
+    checkCapsuleClearance() {
+      return { clear: "yes" as never };
+    }
+  };
+  const invalidClearance = new CharacterController(
+    { fixedStepSeconds: 0.1, crouchDurationSeconds: 0.1 },
+    invalidClearanceWorld
+  );
+  invalidClearance.update(0.1, { posture: { crouch: true } });
+  const invalidBlocked = invalidClearance.update(0.1, { posture: { crouch: false } });
+  assert.equal(invalidBlocked.state.standBlocked, true, "invalid clearance should block standing");
+  assert.ok(
+    invalidBlocked.events.some(
+      (event) => event.type === "world-adapter-failed" && event.field === "checkCapsuleClearance"
+    ),
+    "invalid clearance result should be surfaced"
+  );
+  assert.ok(invalidBlocked.events.some((event) => event.type === "posture-blocked"));
+  assert.ok(!invalidBlocked.events.some((event) => event.type === "posture-transition-start"));
+
+  const throwingClearanceWorld: CharacterWorldAdapter = {
+    ...createFlatGroundCharacterWorld(),
+    checkCapsuleClearance() {
+      throw new Error("clearance exploded");
+    }
+  };
+  const throwingClearance = new CharacterController(
+    { fixedStepSeconds: 0.1, crouchDurationSeconds: 0.1 },
+    throwingClearanceWorld
+  );
+  throwingClearance.update(0.1, { posture: { crouch: true } });
+  const throwingBlocked = throwingClearance.update(0.1, { posture: { crouch: false } });
+  assert.equal(throwingBlocked.state.standBlocked, true, "throwing clearance should block standing");
+  assert.ok(
+    throwingBlocked.events.some(
+      (event) => event.type === "world-adapter-failed" && event.field === "checkCapsuleClearance"
+    ),
+    "throwing clearance result should be surfaced"
+  );
+  assert.ok(throwingBlocked.events.some((event) => event.type === "posture-blocked"));
+  assert.ok(!throwingBlocked.events.some((event) => event.type === "posture-transition-start"));
+}
+
+function runTraversalAdapterFailureTests(): void {
+  const hostileWorld: CharacterWorldAdapter = {
+    queryGround() {
+      return { grounded: false };
+    },
+    resolveStepUp() {
+      return {
+        accepted: true,
+        position: [0, Number.NaN, 0] as Vec3,
+        ground: { grounded: true, point: [0, 0, 0], normal: [0, 1, 0] }
+      };
+    },
+    resolveStepDown() {
+      throw new Error("stepdown exploded");
+    }
+  };
+  const result = new CharacterController(
+    { fixedStepSeconds: 0.1, acceleration: 20, gaits: [{ id: "walk", speed: 1, acceleration: 20 }] },
+    hostileWorld
+  ).update(0.1, { movement: { planarDirection: [0, 0, 1], magnitude: 1 } });
+  assert.ok(
+    result.events.some((event) => event.type === "world-adapter-failed" && event.field === "resolveStepUp.position")
+  );
+  assert.ok(result.events.some((event) => event.type === "world-adapter-failed" && event.field === "resolveStepDown"));
+  assert.ok(Number.isFinite(result.state.position[0]) && Number.isFinite(result.state.position[1]));
+}
+
 function runAdapterFailureAndBoundsTests(): void {
   const throwingWorld: CharacterWorldAdapter = {
     resolveMovement() {
@@ -563,6 +1135,7 @@ function assertSnapshotNearlyEqual(
   assert.equal(a.locomotionPhase, b.locomotionPhase, message);
   assert.equal(a.posturePhase, b.posturePhase, message);
   assert.ok(nearlyEqual(a.crouchAlpha, b.crouchAlpha, epsilon), `${message}: crouch`);
+  assert.equal(a.standBlocked, b.standBlocked, message);
 }
 
 function vecNearlyEqual(a: Vec3, b: Vec3, epsilon: number): boolean {
