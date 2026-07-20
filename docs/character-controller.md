@@ -27,9 +27,14 @@ Public API exported from `src/index.ts`:
 - `createCharacterAnimationBindingRegistry`
 - `resolveCharacterAnimationBindings`
 - `createCharacterAnimationBindingOutputBuffer`
+- `CharacterAnimationRuntimeApplier`
+- `createCharacterAnimationRuntimeApplier`
+- `resolveCharacterAnimationRuntimeApplierConfig`
+- `createCharacterAnimationRuntimeApplyResultBuffer`
 - controller config/input/snapshot/world-adapter/event/animation-state types
 - animation graph config/snapshot/request/output/issue types
 - animation binding registry/config/resolved-output/issue types
+- runtime applier config/snapshot/apply-result/issue types
 - item/socket/interaction/actor identifier aliases for future interaction/equipment contracts
 - `CHARACTER_CONTROLLER_COORDINATE_SYSTEM` and `CHARACTER_CONTROLLER_SCHEMA_VERSION`
 
@@ -147,6 +152,26 @@ const resolved = registry.resolve(graphOutput);
 console.log(resolved.playback, resolved.actions, resolved.issues);
 ```
 
+## Runtime application helper
+
+`src/character-animation-runtime-applier.ts` is the reusable bridge from resolved character animation bindings into `AnimationRuntime`. It still stays renderer-agnostic: no Three, browser, VRM, app clip-name conventions, action/equipment state machines, or root-motion authority policy.
+
+Key surfaces:
+
+- `CharacterAnimationRuntimeApplier` / `createCharacterAnimationRuntimeApplier(config)` for stateful owned-layer application.
+- `applier.apply(runtime, bindingOutput, { clips, masks }, { deltaSeconds, output })` where `clips` and `masks` are caller-owned maps/records/resolvers for `AnimationClip` and `JointMask` data.
+- `createCharacterAnimationRuntimeApplyResultBuffer()` for caller-owned result reuse.
+- `snapshot()` / `restore(snapshot)` for deterministic replay of applier ownership/action identity state; callers still own the matching `AnimationRuntime` state.
+
+Runtime semantics:
+
+- Final runtime layer ids are namespaced as `namespace:laneId:layerId` (actions append a stable action identity suffix), so stale cleanup only touches layers the applier previously owned.
+- Graph blends are collapsed with matching playback metadata into one runtime command per owned layer; playback records covered by blend endpoints are not double-applied.
+- `fadeSeconds`, target weights, priorities, blend modes, loop flags, playback speed, phase-derived local time, and masks are passed into the existing runtime `crossfade`/`fadeOut`/`removeLayer` APIs. `crossfade` is called with runtime-wide auto-fade disabled so unrelated layers at the same priority are not touched.
+- Missing clips/masks, malformed resolved records, layer-id conflicts, duplicate action command identities, and bounded input/issue limits are reported in the apply result. The applier never substitutes arbitrary clips or masks.
+- `deltaSeconds` is only used for bounded applier-owned one-shot action retirement timers. The runtime remains responsible for layer time advancement, sampling, blending, `update()`, and `evaluate()`.
+- Root-motion authority remains unresolved here: the applier does not select `MotionCarrier`s, collect runtime root-motion deltas, or apply world displacement.
+
 Transition precedence is explicit and stable:
 
 1. Controller `action-command` events are forwarded as action requests with the highest priority, but they do not replace locomotion/posture output.
@@ -192,9 +217,9 @@ Returned `surfaceId` values must be non-empty strings. Resolved controller confi
 Not implemented in this slice:
 
 - full traversal: stairs/steps, slope slide, wall sliding, ledge vaulting, moving-platform transform parenting, crouch clearance, root-motion authority policies;
-- action execution: pickup/carry/drop/use/equip/unequip/sit/stand state machines, hand sockets, reach reservations, multi-actor coordination;
+- action/equipment execution: the runtime applier can start/fade animation layers for action commands, but pickup/carry/drop/use/equip/unequip/sit/stand state machines, hand sockets, reach reservations, and multi-actor coordination remain consumer-owned;
 - IK/reach solving integration: the controller only defines item/socket/interaction identifiers and future coordination boundaries;
-- runtime mutation/execution: the binding adapter resolves metadata but does not call `AnimationRuntime.setLayer/crossfade`, sample clips, execute actions, or apply root motion;
-- Waifu app integration: `/Warehouse/Waifu` will later own Three/VRM loading, browser input, scene/world/game behavior, physics-engine adapters, and visual gates.
+- root-motion authority: the runtime can compute root-motion intervals, but this controller/applier slice does not choose carriers, integrate displacement, or decide physics-vs-animation authority;
+- Waifu app integration: `/Warehouse/Waifu` will later own Three/VRM loading, browser input, scene/world/game behavior, physics-engine adapters, visual gates, and any app-specific clip/mask lookup tables.
 
-Recommended next slice: add a small runtime-application helper that consumes `CharacterAnimationBindingOutput` and caller-supplied clip/mask lookup tables to call the renderer-agnostic `AnimationRuntime` layer/crossfade APIs, still outside `/Warehouse/Waifu`, before any Waifu app integration.
+Recommended next slice: wire the exported graph→binding→runtime-applier path into a consumer adapter with real clip/mask tables and visual gates, still keeping root-motion authority and interaction/equipment state machines explicit.

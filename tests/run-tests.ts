@@ -1,5 +1,6 @@
 import { runCharacterAnimationBindingTests } from "./character-animation-binding.test.js";
 import { runCharacterAnimationGraphTests } from "./character-animation-graph.test.js";
+import { runCharacterAnimationRuntimeApplierTests } from "./character-animation-runtime-applier.test.js";
 import { runCharacterControllerTests } from "./character-controller.test.js";
 import { runCoreDataTests } from "./core-data.test.js";
 import { runMotionRuntimeTests } from "./motion-runtime.test.js";
@@ -9,6 +10,7 @@ import { runThreeRuntimeTests } from "./three-runtime.test.js";
 runCharacterControllerTests();
 runCharacterAnimationGraphTests();
 runCharacterAnimationBindingTests();
+runCharacterAnimationRuntimeApplierTests();
 await runCoreDataTests();
 await runMotionRuntimeTests();
 await runRetargetingIkFacialTests();
