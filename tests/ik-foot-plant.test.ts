@@ -679,6 +679,52 @@ export function runIkFootPlantTests(): void {
   assert.ok(footPlant.legs.every((leg) => leg.ik && Number.isFinite(leg.ik.joint[1])));
   assert.ok(footPlant.legs.every((leg) => leg.ik && Math.abs(Math.hypot(...leg.ik.rootCorrection) - 1) < 1e-5));
 
+  const fullInfluencePelvisPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.18, 0],
+        ground: { point: [0, 0, 0], normal: [0, 1, 0] },
+        influence: 1
+      }
+    ],
+    { footHeight: 0.08, pelvisCompensation: 1, maxPelvisOffset: 1 }
+  );
+  const quarterInfluencePelvisPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.18, 0],
+        ground: { point: [0, 0, 0], normal: [0, 1, 0] },
+        influence: 0.25
+      }
+    ],
+    { footHeight: 0.08, pelvisCompensation: 1, maxPelvisOffset: 1 }
+  );
+  const zeroInfluencePelvisPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 1, 0],
+        knee: [0, 0.5, 0],
+        ankle: [0, 0.18, 0],
+        ground: { point: [0, 0, 0], normal: [0, 1, 0] },
+        influence: 0
+      }
+    ],
+    { footHeight: 0.08, pelvisCompensation: 1, maxPelvisOffset: 1 }
+  );
+  assert.ok(fullInfluencePelvisPlant.pelvisOffset[1] < -0.095);
+  assert.ok(
+    Math.abs(quarterInfluencePelvisPlant.pelvisOffset[1] - fullInfluencePelvisPlant.pelvisOffset[1] * 0.25) < 1e-6,
+    "foot-plant pelvis compensation should scale with per-leg influence so release fades cannot pop pelvis correction"
+  );
+  assert.deepEqual(zeroInfluencePelvisPlant.pelvisOffset, [0, 0, 0]);
+
   const fullReachFootPlant = solveFootPlant(
     [
       {
@@ -1974,6 +2020,44 @@ export function runIkFootPlantTests(): void {
     "Three foot plant damping should treat non-finite delta time as zero elapsed time"
   );
   assert.deepEqual(nonFiniteDeltaFootPlant.pelvisOffsetLocal, [0, 0, 0]);
+  const smoothReleasePelvis = new Object3D();
+  smoothReleasePelvis.name = "hips";
+  const smoothReleaseFirst = applyThreeFootPlantResult(
+    { pelvisOffset: [0, -0.08, 0], plantedCount: 1, lowestCorrection: 0.08, legs: [], issues: [] },
+    {
+      resolveBone: (bone) => (bone === "hips" ? smoothReleasePelvis : null),
+      pelvis: "hips",
+      legs: [],
+      deltaSeconds: 1 / 60,
+      speed: 30,
+      applyPelvis: true,
+      applyLegIk: false
+    }
+  );
+  const smoothReleaseFirstY = smoothReleasePelvis.position.y;
+  assert.equal(smoothReleaseFirst.pelvisApplied, true);
+  assert.ok(smoothReleaseFirstY < 0 && smoothReleaseFirstY > -0.08);
+  const smoothReleaseSecond = applyThreeFootPlantResult(
+    { pelvisOffset: [0, 0, 0], plantedCount: 0, lowestCorrection: 0, legs: [], issues: [] },
+    {
+      resolveBone: (bone) => (bone === "hips" ? smoothReleasePelvis : null),
+      pelvis: "hips",
+      legs: [],
+      deltaSeconds: 1 / 60,
+      speed: 30,
+      applyPelvis: true,
+      applyLegIk: false
+    }
+  );
+  assert.equal(
+    smoothReleaseSecond.pelvisApplied,
+    true,
+    "Three foot-plant pelvis application should fade a removed target instead of clearing a material offset in one frame"
+  );
+  assert.ok(
+    smoothReleasePelvis.position.y < 0 && Math.abs(smoothReleasePelvis.position.y) < Math.abs(smoothReleaseFirstY),
+    "Three foot-plant pelvis application should move toward zero continuously during release"
+  );
   const scaledRoot = new Object3D();
   scaledRoot.name = "scaledRoot";
   scaledRoot.scale.set(2, 2, 2);

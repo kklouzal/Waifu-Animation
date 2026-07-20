@@ -1138,9 +1138,12 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   }
 
   let lowestCorrection = 0;
-  for (const result of legs) {
+  for (let i = 0; i < legs.length; i += 1) {
+    const result = legs[i]!;
     if (!result.planted) continue;
-    lowestCorrection = Math.max(lowestCorrection, Math.max(0, dotVec3(result.ankleOffset, down)));
+    const leg = sanitizedInput[i]!;
+    const influence = clamp01(leg.influence ?? defaultInfluence);
+    lowestCorrection = Math.max(lowestCorrection, Math.max(0, dotVec3(result.ankleOffset, down)) * influence);
   }
 
   const pelvisCorrection = Math.max(lowestCorrection * pelvisCompensation, reachPelvisCorrection);

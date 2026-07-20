@@ -1041,14 +1041,23 @@ export function applyThreeFootPlantResult(
   if (applyPelvis && options.pelvis) {
     const pelvis = options.resolveBone(options.pelvis);
     if (pelvis) {
+      const previousOffset = getPreviousFootPlantPelvisOffset(pelvis)?.clone() ?? new Vector3();
       clearPreviousFootPlantPelvisOffset(pelvis);
       const offsetLength = lengthVec3(result.pelvisOffset);
-      if (amount > 0 && offsetLength > 1e-6) {
-        pelvisOffsetLocal = worldOffsetToLocal(pelvis, result.pelvisOffset, amount);
-        pelvis.position.add(tmpWorldDirection.set(pelvisOffsetLocal[0], pelvisOffsetLocal[1], pelvisOffsetLocal[2]));
+      const targetOffsetLocal = offsetLength > 1e-6 ? worldOffsetToLocal(pelvis, result.pelvisOffset, influence) : ([0, 0, 0] as Vec3);
+      const smoothingAmount = dampedInfluenceAmount(1, speed, options.deltaSeconds);
+      const nextOffset = previousOffset.lerp(
+        tmpWorldDirection.set(targetOffsetLocal[0], targetOffsetLocal[1], targetOffsetLocal[2]),
+        smoothingAmount
+      );
+      if (nextOffset.lengthSq() > 1e-12) {
+        pelvisOffsetLocal = [nextOffset.x, nextOffset.y, nextOffset.z];
+        pelvis.position.add(nextOffset);
         setPreviousFootPlantPelvisOffset(pelvis, pelvisOffsetLocal);
         pelvis.updateWorldMatrix(true, true);
         pelvisApplied = true;
+      } else {
+        setPreviousFootPlantPelvisOffset(pelvis, [0, 0, 0]);
       }
     } else {
       issues.push(`${options.pelvis}: missing pelvis bone`);
