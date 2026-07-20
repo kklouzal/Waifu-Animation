@@ -14,7 +14,6 @@ import {
   finiteNonNegative,
   invertQuat,
   lengthVec3,
-  lerpVec3,
   multiplyQuat,
   normalizeVec3,
   normalizeQuat,
@@ -246,39 +245,39 @@ export type HumanoidLookAtAimChainOptions = {
 
 export function solveAimIk(input: AimIkInput): AimIkResult {
   const joint = sanitizeAimJoint(input);
-  const forward = normalizeVec3(finiteVec3(input.forward, [1, 0, 0]), [1, 0, 0]);
-  const up = normalizeVec3(finiteVec3(input.up, [0, 1, 0]), fallbackPerpendicular(forward));
-  const offset = finiteVec3(input.offset, [0, 0, 0]);
+  const forwardLocal = normalizeVec3(finiteVec3(input.forward, [1, 0, 0]), [1, 0, 0]);
+  const upLocal = normalizeVec3(finiteVec3(input.up, [0, 1, 0]), fallbackPerpendicular(forwardLocal));
+  const offsetLocal = finiteVec3(input.offset, [0, 0, 0]);
   const pole = finiteVec3(input.pole, [0, 1, 0]);
   const weight = sanitizeUnitWeight(input.weight, 1);
   const twistAngle = finiteSignedAngle(input.twistAngle);
-  const targetLocal = resolveAimTargetLocal(input, joint, offset);
-  const targetLength = finiteLength(targetLocal, 0);
-  const targetDirection = normalizeVec3(targetLocal, forward);
-  const offsetted = computeOffsettedForward(forward, offset, targetLocal);
   const forwardModel = normalizeVec3(
-    transformAimVectorToModel(joint, forward),
-    rotateVec3ByQuat(joint.rotation, forward)
+    transformAimLinearVectorToModel(joint, forwardLocal),
+    rotateVec3ByQuat(joint.rotation, forwardLocal)
   );
-  const upModel = normalizeVec3(transformAimVectorToModel(joint, up), rotateVec3ByQuat(joint.rotation, up));
-  const targetDirectionModel = resolveAimTargetModelDirection(input, joint, targetDirection, forwardModel);
+  const upModel = normalizeVec3(
+    transformAimLinearVectorToModel(joint, upLocal),
+    rotateVec3ByQuat(joint.rotation, upLocal)
+  );
+  const offsetModel = transformAimLinearVectorToModel(joint, offsetLocal);
+  const targetVectorModel = resolveAimTargetModelVector(input, joint, offsetModel, forwardModel);
+  const targetLength = finiteLength(targetVectorModel, 0);
+  const targetDirectionModel = normalizeVec3(targetVectorModel, forwardModel);
+  const offsetted = computeOffsettedForward(forwardModel, offsetModel, targetVectorModel);
 
   if (!offsetted.reached || targetLength <= MIN_IK_REACH) {
     return aimResult(IDENTITY_QUAT, false, weight, targetDirectionModel, forwardModel, forwardModel, upModel);
   }
 
-  const offsettedForward = normalizeVec3(offsetted.forward, forward);
-  const aimCorrection = quatFromUnitVectors(offsettedForward, targetDirection, up);
-  const aimedUp = rotateVec3ByQuat(aimCorrection, up);
-  const poleLocal = transformAimVectorToLocal(joint, pole);
-  const poleCorrection = rotationAroundTargetAxis(aimedUp, poleLocal, targetDirection);
+  const offsettedForwardModel = normalizeVec3(offsetted.forward, forwardModel);
+  const aimCorrection = quatFromUnitVectors(offsettedForwardModel, targetDirectionModel, upModel);
+  const aimedUp = rotateVec3ByQuat(aimCorrection, upModel);
+  const poleCorrection = rotationAroundTargetAxis(aimedUp, pole, targetDirectionModel);
   const twistedCorrection =
     Math.abs(twistAngle) > EPSILON
-      ? multiplyQuat(quatFromAxisAngle(targetDirection, twistAngle), multiplyQuat(poleCorrection, aimCorrection))
+      ? multiplyQuat(quatFromAxisAngle(targetDirectionModel, twistAngle), multiplyQuat(poleCorrection, aimCorrection))
       : multiplyQuat(poleCorrection, aimCorrection);
-  const localCorrection = weightQuaternion(twistedCorrection, weight);
-  const jointCorrection = localCorrectionToModel(joint, localCorrection);
-  const offsettedForwardModel = normalizeVec3(transformAimVectorToModel(joint, offsettedForward), forwardModel);
+  const jointCorrection = weightQuaternion(twistedCorrection, weight);
   const correctedForward = normalizeVec3(rotateVec3ByQuat(jointCorrection, forwardModel), forwardModel);
   const correctedUp = normalizeVec3(rotateVec3ByQuat(jointCorrection, upModel), upModel);
   const correctedOffsetted = normalizeVec3(rotateVec3ByQuat(jointCorrection, offsettedForwardModel), correctedForward);
@@ -297,9 +296,32 @@ export function solveAimIk(input: AimIkInput): AimIkResult {
 }
 
 export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
+  const solved = solveTwoBoneIkInternal(input);
+  return {
+    root: solved.root,
+    joint: solved.joint,
+    end: solved.end,
+    targetReach: solved.targetReach,
+    solvedReach: solved.solvedReach,
+    reached: solved.reached,
+    clamped: solved.clamped,
+    stretchLimited: solved.stretchLimited
+  };
+}
+
+/**
+ * Solves the unweighted chain once, then applies Ozz-style correction weighting.
+ * Positions are reconstructed from the actual weighted quaternion corrections so
+ * the reported chain is exactly the chain callers get when applying corrections.
+ */
+function solveTwoBoneIkInternal(input: TwoBoneIkInput): TwoBoneIkCorrectionResult {
   const safeInput = sanitizeTwoBoneIkInput(input);
-  const upperLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(safeInput.joint, safeInput.root), MIN_IK_REACH));
-  const lowerLength = Math.max(MIN_IK_REACH, finiteLength(subVec3(safeInput.end, safeInput.joint), MIN_IK_REACH));
+  const originalUpperVector = subVec3(safeInput.joint, safeInput.root);
+  const originalLowerVector = subVec3(safeInput.end, safeInput.joint);
+  const upperLength = Math.max(MIN_IK_REACH, finiteLength(originalUpperVector, MIN_IK_REACH));
+  const lowerLength = Math.max(MIN_IK_REACH, finiteLength(originalLowerVector, MIN_IK_REACH));
+  const originalUpper = normalizeVec3(originalUpperVector, [0, -1, 0]);
+  const originalLower = normalizeVec3(originalLowerVector, [0, -1, 0]);
   const physicalMinReach = Math.abs(upperLength - lowerLength);
   const solveMinReach = Math.max(MIN_IK_REACH, physicalMinReach);
   const physicalMaxReach = upperLength + lowerLength;
@@ -314,7 +336,6 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const hardMaxReach = physicalMaxReach * Math.min(1, finiteNonNegative(safeInput.maxStretch, 1));
   const maxReach = Math.max(solveMinReach, hardMaxReach);
   const clampedDistance = clamp(softenedDistance, solveMinReach, maxReach);
-  const physicalReachDistance = clamp(targetDistance, physicalMinReach, physicalMaxReach);
   const physicalClamped = targetDistance < physicalMinReach - 1e-4 || targetDistance > physicalMaxReach + 1e-4;
   const stretchLimited =
     targetDistance > MIN_IK_REACH && !physicalClamped && Math.abs(clampedDistance - targetDistance) > 1e-4;
@@ -334,20 +355,44 @@ export function solveTwoBoneIk(input: TwoBoneIkInput): TwoBoneIkResult {
   const height = Math.sqrt(Math.max(0, upperLength * upperLength - along * along));
   const solvedJoint = addVec3(addVec3(safeInput.root, scaleVec3(direction, along)), scaleVec3(pole, height));
   const solvedEnd = addVec3(safeInput.root, scaleVec3(direction, clampedDistance));
+  const solvedUpper = normalizeVec3(subVec3(solvedJoint, safeInput.root), originalUpper);
+  const solvedLower = normalizeVec3(subVec3(solvedEnd, solvedJoint), originalLower);
+  const correctionPole = safeInput.pole ?? ([0, 0, 1] as Vec3);
+  const fullRootCorrection = quatFromUnitVectors(originalUpper, solvedUpper, correctionPole);
+  const fullRootCorrectedLower = normalizeVec3(rotateVec3ByQuat(fullRootCorrection, originalLower), originalLower);
+  const fullMidAxis =
+    safeInput.midAxis === undefined ? correctionPole : rotateVec3ByQuat(fullRootCorrection, safeInput.midAxis);
+  const fullJointCorrection = quatFromUnitVectors(fullRootCorrectedLower, solvedLower, fullMidAxis);
   const weight = sanitizeUnitWeight(safeInput.weight, 1);
-  const newJoint = weight >= 1 ? solvedJoint : lerpVec3(safeInput.joint, solvedJoint, weight);
-  const newEnd = weight >= 1 ? solvedEnd : lerpVec3(safeInput.end, solvedEnd, weight);
+  const rootCorrection = weightQuaternion(fullRootCorrection, weight);
+  const jointCorrection = weightQuaternion(fullJointCorrection, weight);
+  const weightedUpperVector = rotateVec3ByQuat(rootCorrection, originalUpperVector);
+  const newJoint = addVec3(safeInput.root, weightedUpperVector);
+  const weightedLowerVector = rotateVec3ByQuat(multiplyQuat(jointCorrection, rootCorrection), originalLowerVector);
+  const newEnd = addVec3(newJoint, weightedLowerVector);
+  const correctedUpper = normalizeVec3(weightedUpperVector, originalUpper);
+  const correctedLower = normalizeVec3(weightedLowerVector, originalLower);
   const solvedReach = targetDistance <= 1e-5 ? 0 : finiteLength(subVec3(newEnd, safeInput.root), 0) / targetDistance;
-  return {
+  const result: TwoBoneIkCorrectionResult = {
     root: safeInput.root,
     joint: newJoint,
     end: newEnd,
-    targetReach: targetDistance <= 1e-5 ? 0 : physicalClamped ? physicalReachDistance / targetDistance : 1,
+    targetReach:
+      targetDistance <= MIN_IK_REACH
+        ? 0
+        : physicalClamped
+          ? Math.min(1, clamp(targetDistance, physicalMinReach, physicalMaxReach) / targetDistance)
+          : 1,
     solvedReach,
     reached: targetDistance > MIN_IK_REACH && !physicalClamped && Math.abs(solvedReach - 1) <= 1e-4 && weight >= 1,
     clamped: physicalClamped,
-    stretchLimited
+    stretchLimited,
+    rootCorrection,
+    jointCorrection,
+    correctedUpperDirection: correctedUpper,
+    correctedLowerDirection: correctedLower
   };
+  return result;
 }
 
 function bendPlanePole(pole: Vec3, direction: Vec3): Vec3 {
@@ -367,25 +412,7 @@ function fallbackPerpendicular(direction: Vec3): Vec3 {
 }
 
 export function solveTwoBoneIkCorrections(input: TwoBoneIkInput): TwoBoneIkCorrectionResult {
-  const safeInput = sanitizeTwoBoneIkInput(input);
-  const solved = solveTwoBoneIk(safeInput);
-  const originalUpper = normalizeVec3(subVec3(safeInput.joint, safeInput.root), [0, -1, 0]);
-  const correctedUpper = normalizeVec3(subVec3(solved.joint, solved.root), originalUpper);
-  const pole = safeInput.pole ?? [0, 0, 1];
-  const rootCorrection = quatFromUnitVectors(originalUpper, correctedUpper, pole);
-
-  const originalLower = normalizeVec3(subVec3(safeInput.end, safeInput.joint), [0, -1, 0]);
-  const rootCorrectedLower = normalizeVec3(rotateVec3ByQuat(rootCorrection, originalLower), originalLower);
-  const correctedLower = normalizeVec3(subVec3(solved.end, solved.joint), rootCorrectedLower);
-  const jointCorrection = quatFromUnitVectors(rootCorrectedLower, correctedLower, safeInput.midAxis ?? pole);
-
-  return {
-    ...solved,
-    rootCorrection,
-    jointCorrection,
-    correctedUpperDirection: correctedUpper,
-    correctedLowerDirection: correctedLower
-  };
+  return solveTwoBoneIkInternal(input);
 }
 
 export function solveTwoBoneIkModel(input: TwoBoneIkModelInput): TwoBoneIkModelResult {
@@ -406,34 +433,21 @@ export function solveTwoBoneIkModel(input: TwoBoneIkModelInput): TwoBoneIkModelR
           transformLinearVector(midModel, finiteVec3(input.midAxis, [0, 0, 1])),
           transformLinearVector(midModel, [0, 0, 1])
         );
-  const solvedPosition = solveTwoBoneIk({
+  const solved = solveTwoBoneIkInternal({
     root,
     joint: mid,
     end,
     target,
     ...(pole === undefined ? {} : { pole }),
+    ...(midAxisModel === undefined ? {} : { midAxis: midAxisModel }),
     ...(input.twistAngle === undefined ? {} : { twistAngle: input.twistAngle }),
     ...(input.soften === undefined ? {} : { soften: input.soften }),
     ...(input.weight === undefined ? {} : { weight: input.weight }),
     ...(input.maxStretch === undefined ? {} : { maxStretch: input.maxStretch })
   });
-  const originalUpper = normalizeVec3(subVec3(mid, root), [0, -1, 0]);
-  const correctedUpper = normalizeVec3(subVec3(solvedPosition.joint, solvedPosition.root), originalUpper);
-  const correctionPole = pole ?? ([0, 0, 1] as Vec3);
-  const rootCorrection = quatFromUnitVectors(originalUpper, correctedUpper, correctionPole);
-  const originalLower = normalizeVec3(subVec3(end, mid), [0, -1, 0]);
-  const rootCorrectedLower = normalizeVec3(rotateVec3ByQuat(rootCorrection, originalLower), originalLower);
-  const correctedLower = normalizeVec3(subVec3(solvedPosition.end, solvedPosition.joint), rootCorrectedLower);
-  const rootedMidAxis = midAxisModel === undefined ? undefined : rotateVec3ByQuat(rootCorrection, midAxisModel);
-  const jointCorrection = quatFromUnitVectors(rootCorrectedLower, correctedLower, rootedMidAxis ?? correctionPole);
-  const solved: TwoBoneIkCorrectionResult = {
-    ...solvedPosition,
-    rootCorrection,
-    jointCorrection,
-    correctedUpperDirection: correctedUpper,
-    correctedLowerDirection: correctedLower
-  };
   const rootLocalCorrection = modelCorrectionToLocalPostCorrectionForRotation(rootModelRotation, solved.rootCorrection);
+  // The root correction rotates the middle joint model frame before its correction
+  // is applied; conjugate through that actual weighted frame.
   const rootCorrectedMidModelRotation = multiplyQuat(solved.rootCorrection, midModelRotation);
   const midLocalCorrection = modelCorrectionToLocalPostCorrectionForRotation(
     rootCorrectedMidModelRotation,
@@ -739,30 +753,14 @@ function sanitizeAimJoint(input: AimIkInput): AimJointSpace {
   return { position, rotation };
 }
 
-function resolveAimTargetLocal(input: AimIkInput, joint: AimJointSpace, offset: Vec3): Vec3 {
+function resolveAimTargetModelVector(input: AimIkInput, joint: AimJointSpace, offset: Vec3, fallback: Vec3): Vec3 {
   if (input.target !== undefined) {
-    return transformAimPointToLocal(joint, finiteVec3(input.target, joint.position));
+    return subVec3(finiteVec3(input.target, joint.position), joint.position);
   }
 
-  const direction = transformAimVectorToLocal(joint, finiteVec3(input.targetDirection, [1, 0, 0]));
+  const direction = finiteVec3(input.targetDirection, fallback);
   const offsetLength = finiteLength(offset, 0);
-  return scaleVec3(normalizeVec3(direction, [1, 0, 0]), Math.max(1, offsetLength + 1));
-}
-
-function resolveAimTargetModelDirection(
-  input: AimIkInput,
-  joint: AimJointSpace,
-  targetLocalDirection: Vec3,
-  fallback: Vec3
-): Vec3 {
-  if (input.target !== undefined) {
-    const target = finiteVec3(input.target, joint.position);
-    return normalizeVec3(subVec3(target, joint.position), fallback);
-  }
-  if (input.targetDirection !== undefined) {
-    return normalizeVec3(finiteVec3(input.targetDirection, fallback), fallback);
-  }
-  return normalizeVec3(transformAimVectorToModel(joint, targetLocalDirection), fallback);
+  return scaleVec3(normalizeVec3(direction, fallback), Math.max(1, offsetLength + 1));
 }
 
 function computeOffsettedForward(forward: Vec3, offset: Vec3, targetLocal: Vec3): { reached: boolean; forward: Vec3 } {
@@ -857,23 +855,8 @@ function angleBetweenUnit(a: Vec3, b: Vec3): number {
   return Math.acos(clamp(dotVec3(normalizeVec3(a), normalizeVec3(b)), -1, 1));
 }
 
-function transformAimPointToLocal(joint: AimJointSpace, point: Vec3): Vec3 {
-  if (joint.matrix) return inverseTransformPoint(joint.matrix, point);
-  return rotateVec3ByQuat(invertQuat(joint.rotation), subVec3(point, joint.position));
-}
-
-function transformAimVectorToLocal(joint: AimJointSpace, vector: Vec3): Vec3 {
-  if (joint.matrix) return inverseTransformVector(joint.matrix, vector);
-  return rotateVec3ByQuat(invertQuat(joint.rotation), vector);
-}
-
-function transformAimVectorToModel(joint: AimJointSpace, vector: Vec3): Vec3 {
-  if (joint.matrix) return transformLinearVector(joint.matrix, vector);
-  return rotateVec3ByQuat(joint.rotation, vector);
-}
-
-function localCorrectionToModel(joint: AimJointSpace, localCorrection: Quat): Quat {
-  return multiplyQuat(multiplyQuat(joint.rotation, localCorrection), invertQuat(joint.rotation));
+function transformAimLinearVectorToModel(joint: AimJointSpace, vector: Vec3): Vec3 {
+  return joint.matrix ? transformLinearVector(joint.matrix, vector) : rotateVec3ByQuat(joint.rotation, vector);
 }
 
 function rotationFromMat4(matrix: Mat4): Quat {

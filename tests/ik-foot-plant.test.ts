@@ -9,6 +9,7 @@ import {
   applyTwoBoneIkLocalCorrections,
   classifyStationarySupportContacts,
   computeStationarySupportCompensation,
+  computeAnkleTargetFromGround,
   createStationarySupportSolverState,
   estimateStationarySupportBaseline,
   assert,
@@ -23,6 +24,7 @@ import {
   modelCorrectionToLocalPostCorrection,
   multiplyQuat,
   normalizeVec3,
+  normalizeQuat,
   quatFromAxisAngle,
   rotateVec3ByQuat,
   solveAimIk,
@@ -36,6 +38,20 @@ import {
   updateLocalToModelPoseRange
 } from "./test-api.js";
 import { distance3, matrixDirection, modelPosition, quaternionNearlyEqual, vectorNearlyEqual } from "./test-helpers.js";
+
+function assertAllNumbersFinite(value: unknown, path: string): void {
+  if (typeof value === "number") {
+    assert.ok(Number.isFinite(value), `${path} must be finite`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertAllNumbersFinite(entry, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) assertAllNumbersFinite(entry, `${path}.${key}`);
+  }
+}
 
 export function runIkFootPlantTests(): void {
   const aim = solveAimIk({
@@ -140,6 +156,108 @@ export function runIkFootPlantTests(): void {
   assert.ok(
     vectorNearlyEqual(matrixCorrectedForward, [0, 1, 0], 1e-5),
     "matrix aim IK correction should pre-multiply the model joint rotation"
+  );
+  const nonUniformScaleJointAim = solveAimIk({
+    joint: composeMat4({ translation: [0, 0, 0], rotation: rotatedJointCorrection, scale: [2, 3, 4] }),
+    target: [0, 1, 0],
+    forward: [1, 0, 0],
+    up: [0, 1, 0],
+    pole: [0, 0, 1]
+  });
+  assert.ok(
+    nonUniformScaleJointAim.alignmentError < 1e-5 &&
+      vectorNearlyEqual(nonUniformScaleJointAim.correctedForward, [0, 1, 0], 1e-5),
+    "aim IK should solve a model-space rotation correction under non-uniform joint scale"
+  );
+  const diagonalNonUniformScaleJointAim = solveAimIk({
+    joint: composeMat4({ translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [2, 3, 4] }),
+    target: [0, 1, 0],
+    forward: normalizeVec3([1, 1, 0]),
+    up: [0, 1, 0],
+    pole: [0, 0, 1]
+  });
+  assert.ok(
+    diagonalNonUniformScaleJointAim.alignmentError < 1e-5 &&
+      vectorNearlyEqual(diagonalNonUniformScaleJointAim.correctedForward, [0, 1, 0], 1e-5),
+    "aim IK should include non-uniform scale when transforming non-axis-aligned local aim vectors"
+  );
+  const scaledOffsetMatrix = composeMat4({
+    translation: [0, 0, 0],
+    rotation: rotatedJointCorrection,
+    scale: [2, 3, 4]
+  });
+  const scaledOffsetLocal: [number, number, number] = [0.15, 0.2, -0.05];
+  const scaledOffsetTarget: [number, number, number] = [1.1, 1.4, 0.6];
+  const scaledOffsetAim = solveAimIk({
+    joint: scaledOffsetMatrix,
+    target: scaledOffsetTarget,
+    forward: normalizeVec3([1, 1, 0]),
+    offset: scaledOffsetLocal,
+    up: [0, 1, 0],
+    pole: [0, 0, 1]
+  });
+  const transformLinear = (vector: [number, number, number]): [number, number, number] => [
+    scaledOffsetMatrix[0]! * vector[0] + scaledOffsetMatrix[4]! * vector[1] + scaledOffsetMatrix[8]! * vector[2],
+    scaledOffsetMatrix[1]! * vector[0] + scaledOffsetMatrix[5]! * vector[1] + scaledOffsetMatrix[9]! * vector[2],
+    scaledOffsetMatrix[2]! * vector[0] + scaledOffsetMatrix[6]! * vector[1] + scaledOffsetMatrix[10]! * vector[2]
+  ];
+  const correctedScaledOffset = rotateVec3ByQuat(scaledOffsetAim.jointCorrection, transformLinear(scaledOffsetLocal));
+  const correctedScaledForward = rotateVec3ByQuat(
+    scaledOffsetAim.jointCorrection,
+    transformLinear(normalizeVec3([1, 1, 0]))
+  );
+  const scaledOffsetToTarget: [number, number, number] = [
+    scaledOffsetTarget[0] - correctedScaledOffset[0],
+    scaledOffsetTarget[1] - correctedScaledOffset[1],
+    scaledOffsetTarget[2] - correctedScaledOffset[2]
+  ];
+  assert.ok(
+    vectorNearlyEqual(normalizeVec3(correctedScaledForward), normalizeVec3(scaledOffsetToTarget), 1e-5),
+    "scaled aim offsets should use the joint affine transform and place the corrected offset ray through the target"
+  );
+  const scaledOffsetProbeMatrix = composeMat4({
+    translation: [1, 2, 0],
+    rotation: quatFromAxisAngle([0, 0, 1], Math.PI / 4),
+    scale: [2, 3, 4]
+  });
+  const scaledOffsetProbe = solveAimIk({
+    joint: scaledOffsetProbeMatrix,
+    target: [3, 5, 0],
+    forward: [1, 0, 0],
+    offset: [0, 1, 0],
+    up: [0, 1, 0],
+    pole: [0, 0, 1]
+  });
+  const probeLinear = (vector: [number, number, number]): [number, number, number] => [
+    scaledOffsetProbeMatrix[0]! * vector[0] +
+      scaledOffsetProbeMatrix[4]! * vector[1] +
+      scaledOffsetProbeMatrix[8]! * vector[2],
+    scaledOffsetProbeMatrix[1]! * vector[0] +
+      scaledOffsetProbeMatrix[5]! * vector[1] +
+      scaledOffsetProbeMatrix[9]! * vector[2],
+    scaledOffsetProbeMatrix[2]! * vector[0] +
+      scaledOffsetProbeMatrix[6]! * vector[1] +
+      scaledOffsetProbeMatrix[10]! * vector[2]
+  ];
+  const probeCorrectedForward = normalizeVec3(
+    rotateVec3ByQuat(scaledOffsetProbe.jointCorrection, probeLinear([1, 0, 0]))
+  );
+  const probeCorrectedOffset = rotateVec3ByQuat(scaledOffsetProbe.jointCorrection, probeLinear([0, 1, 0]));
+  const probeOffsetToTarget = normalizeVec3([
+    3 - (1 + probeCorrectedOffset[0]),
+    5 - (2 + probeCorrectedOffset[1]),
+    -probeCorrectedOffset[2]
+  ]);
+  assert.ok(
+    dotVec3(probeCorrectedForward, probeOffsetToTarget) > 0.999999 &&
+      Math.hypot(
+        ...[
+          probeCorrectedForward[1] * probeOffsetToTarget[2] - probeCorrectedForward[2] * probeOffsetToTarget[1],
+          probeCorrectedForward[2] * probeOffsetToTarget[0] - probeCorrectedForward[0] * probeOffsetToTarget[2],
+          probeCorrectedForward[0] * probeOffsetToTarget[1] - probeCorrectedForward[1] * probeOffsetToTarget[0]
+        ]
+      ) < 1e-6,
+    "scaled offset aim should align the physically transformed corrected ray, not only reported telemetry"
   );
 
   const directionAim = solveAimIk({
@@ -266,6 +384,21 @@ export function runIkFootPlantTests(): void {
     Math.hypot(minimumReachIk.end[0], minimumReachIk.end[1] + 0.5, minimumReachIk.end[2]) < 1e-6,
     "minimum-reach solves should keep the endpoint on the target"
   );
+  const belowMinimumReachIk = solveTwoBoneIk({
+    root: [0, 0, 0],
+    joint: [0, -2, 0],
+    end: [0, -3, 0],
+    target: [0, -0.5, 0],
+    pole: [0, 0, 1],
+    soften: 1
+  });
+  assert.equal(belowMinimumReachIk.clamped, true);
+  assert.equal(belowMinimumReachIk.reached, false);
+  assert.equal(
+    belowMinimumReachIk.targetReach,
+    1,
+    "minimum-reach clamping should never report that the chain reached beyond the requested target"
+  );
   const diagonalIk = solveTwoBoneIk({
     root: [0, 0, 0],
     joint: [0, -1, 0],
@@ -335,7 +468,8 @@ export function runIkFootPlantTests(): void {
     joint: [0, -1, 0],
     end: [0, -2, 0],
     target: [0.5, -1.5, 0],
-    pole: [0, 0, 1]
+    pole: [0, 0, 1],
+    midAxis: [0, 0, 1]
   });
   const correctedUpper = rotateVec3ByQuat(ikCorrections.rootCorrection, [0, -1, 0]);
   assert.ok(
@@ -382,10 +516,82 @@ export function runIkFootPlantTests(): void {
     midAxis: [0, 0, 1]
   });
   assert.ok(Math.abs(Math.hypot(...weightedIkCorrections.rootCorrection) - 1) < 1e-5);
+  const halfWeightCorrection = (correction: [number, number, number, number]) => {
+    const shortest = correction[3] < 0 ? correction.map((value) => -value) : correction;
+    return normalizeQuat([shortest[0]! * 0.5, shortest[1]! * 0.5, shortest[2]! * 0.5, 1 + (shortest[3]! - 1) * 0.5]);
+  };
+  assert.ok(
+    quaternionNearlyEqual(
+      weightedIkCorrections.rootCorrection,
+      halfWeightCorrection(ikCorrections.rootCorrection),
+      1e-6
+    ),
+    "two-bone root correction weight should nlerp the complete solve from identity like Ozz"
+  );
+  assert.ok(
+    quaternionNearlyEqual(
+      weightedIkCorrections.jointCorrection,
+      halfWeightCorrection(ikCorrections.jointCorrection),
+      1e-6
+    ),
+    "two-bone middle correction weight should nlerp the complete solve from identity like Ozz"
+  );
   assert.ok(
     Math.hypot(weightedIkCorrections.end[0], weightedIkCorrections.end[1] + 2, weightedIkCorrections.end[2]) <
       Math.hypot(ikCorrections.end[0], ikCorrections.end[1] + 2, ikCorrections.end[2]),
     "two-bone IK weight should blend the solved endpoint back toward the input pose"
+  );
+  const weightedReferenceInput = {
+    root: [0, 0, 0] as [number, number, number],
+    joint: [0, -1, 0] as [number, number, number],
+    end: [0, -2, 0] as [number, number, number],
+    target: [1.2, -0.8, 0.4] as [number, number, number],
+    pole: [0, 0, 1] as [number, number, number],
+    midAxis: [0, 0, 1] as [number, number, number],
+    soften: 1
+  };
+  const weightedReferenceFull = solveTwoBoneIkCorrections(weightedReferenceInput);
+  for (const weight of [0, 0.25, 0.5, 0.75, 1]) {
+    const result = solveTwoBoneIkCorrections({ ...weightedReferenceInput, weight });
+    const reconstructedUpper = rotateVec3ByQuat(result.rootCorrection, [0, -1, 0]);
+    const reconstructedLower = rotateVec3ByQuat(
+      multiplyQuat(result.jointCorrection, result.rootCorrection),
+      [0, -1, 0]
+    );
+    const reconstructedJoint: [number, number, number] = reconstructedUpper;
+    const reconstructedEnd: [number, number, number] = [
+      reconstructedJoint[0] + reconstructedLower[0],
+      reconstructedJoint[1] + reconstructedLower[1],
+      reconstructedJoint[2] + reconstructedLower[2]
+    ];
+    assert.ok(
+      vectorNearlyEqual(result.joint, reconstructedJoint, 1e-6) &&
+        vectorNearlyEqual(result.end, reconstructedEnd, 1e-6),
+      `weighted two-bone corrections should reconstruct reported geometry at weight ${weight}`
+    );
+    assert.ok(
+      Math.abs(distance3(result.root, result.joint) - 1) < 1e-6 &&
+        Math.abs(distance3(result.joint, result.end) - 1) < 1e-6,
+      `weighted two-bone corrections should preserve both bone lengths at weight ${weight}`
+    );
+  }
+  const weightedReferenceHalf = solveTwoBoneIkCorrections({ ...weightedReferenceInput, weight: 0.5 });
+  assert.ok(
+    quaternionNearlyEqual(
+      weightedReferenceHalf.rootCorrection,
+      halfWeightCorrection(weightedReferenceFull.rootCorrection),
+      1e-6
+    ) &&
+      quaternionNearlyEqual(
+        weightedReferenceHalf.jointCorrection,
+        halfWeightCorrection(weightedReferenceFull.jointCorrection),
+        1e-6
+      ),
+    "half-weight two-bone solve should nlerp both complete corrections from identity"
+  );
+  assert.ok(
+    distance3(weightedReferenceHalf.end, [0.6, -1.4, 0.2]) > 0.25,
+    "half-weight reported endpoint should reflect quaternion correction weighting, not Cartesian position lerp"
   );
 
   const ikApplicationSkeleton = createSkeleton([
@@ -441,6 +647,32 @@ export function runIkFootPlantTests(): void {
   assert.ok(
     vectorNearlyEqual(modelPosition(appliedIkModels[3]!), matrixIk.end, 1e-4),
     "local two-bone corrections should place the ankle at the solved model-space endpoint"
+  );
+  const partialMatrixIk = solveTwoBoneIkModel({
+    root: ikApplicationModels[1]!,
+    mid: ikApplicationModels[2]!,
+    end: ikApplicationModels[3]!,
+    target: ikApplicationTarget,
+    pole: [0, 0, 1],
+    midAxis: [0, 0, 1],
+    soften: 1,
+    weight: 0.5
+  });
+  const partialAppliedIkPose = clonePose(ikApplicationPose);
+  const partialAppliedIkModels = localToModelPose(ikApplicationSkeleton, partialAppliedIkPose);
+  applyTwoBoneIkLocalCorrections({
+    skeleton: ikApplicationSkeleton,
+    localPose: partialAppliedIkPose,
+    modelPose: partialAppliedIkModels,
+    rootJoint: 1,
+    midJoint: 2,
+    corrections: partialMatrixIk,
+    updateTo: 3
+  });
+  assert.ok(
+    vectorNearlyEqual(modelPosition(partialAppliedIkModels[2]!), partialMatrixIk.joint, 1e-4) &&
+      vectorNearlyEqual(modelPosition(partialAppliedIkModels[3]!), partialMatrixIk.end, 1e-4),
+    "weighted local two-bone corrections should reproduce reported mid/end positions under a rotated parent"
   );
 
   const wrongIkPose = clonePose(ikApplicationPose);
@@ -724,6 +956,70 @@ export function runIkFootPlantTests(): void {
     "foot-plant pelvis compensation should scale with per-leg influence so release fades cannot pop pelvis correction"
   );
   assert.deepEqual(zeroInfluencePelvisPlant.pelvisOffset, [0, 0, 0]);
+  const fullInfluenceReachPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 2, 0],
+        knee: [0, 1, 0],
+        ankle: [0, 0.2, 0],
+        ground: { point: [0, 0.1, 0], normal: [0, 1, 0] },
+        influence: 1,
+        maxStretch: 0.9
+      }
+    ],
+    { footHeight: 0, pelvisCompensation: 0, maxPelvisOffset: 1, maxStretch: 0.9 }
+  );
+  const tenthInfluenceReachPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 2, 0],
+        knee: [0, 1, 0],
+        ankle: [0, 0.2, 0],
+        ground: { point: [0, 0.1, 0], normal: [0, 1, 0] },
+        influence: 0.1,
+        maxStretch: 0.9
+      }
+    ],
+    { footHeight: 0, pelvisCompensation: 0, maxPelvisOffset: 1, maxStretch: 0.9 }
+  );
+  assert.ok(
+    Math.abs(tenthInfluenceReachPlant.pelvisOffset[1]) < Math.abs(fullInfluenceReachPlant.pelvisOffset[1]),
+    "reach compensation should fade with foot influence instead of amplifying a release weight into a full pelvis drop"
+  );
+  const hundredthInfluenceReachPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 2, 0],
+        knee: [0, 1, 0],
+        ankle: [0, 0.2, 0],
+        ground: { point: [0, 0.1, 0], normal: [0, 1, 0] },
+        influence: 0.01,
+        maxStretch: 0.9
+      }
+    ],
+    { footHeight: 0, pelvisCompensation: 0, maxPelvisOffset: 1, maxStretch: 0.9 }
+  );
+  const zeroInfluenceReachPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [0, 2, 0],
+        knee: [0, 1, 0],
+        ankle: [0, 0.2, 0],
+        ground: { point: [0, 0.1, 0], normal: [0, 1, 0] },
+        influence: 0,
+        maxStretch: 0.9
+      }
+    ],
+    { footHeight: 0, pelvisCompensation: 0, maxPelvisOffset: 1, maxStretch: 0.9 }
+  );
+  assert.ok(
+    Math.abs(hundredthInfluenceReachPlant.pelvisOffset[1]) < 0.002 && zeroInfluenceReachPlant.pelvisOffset[1] === 0,
+    "reach-driven pelvis compensation should converge continuously to zero with target influence"
+  );
 
   const fullReachFootPlant = solveFootPlant(
     [
@@ -806,6 +1102,31 @@ export function runIkFootPlantTests(): void {
     "zero max ankle correction should leave the ankle target unchanged"
   );
   assert.deepEqual(zeroMaxAnkleCorrectionPlant.pelvisOffset, [0, 0, 0]);
+  const customDownFootPlant = solveFootPlant(
+    [
+      {
+        id: "left",
+        hip: [1, 0, 0],
+        knee: [0.5, 0, 0],
+        ankle: [0.1, 0, 0],
+        ground: { point: [0, 0, 0] }
+      }
+    ],
+    { down: [-1, 0, 0], footHeight: 0.08, maxAnkleCorrection: 0.5 }
+  );
+  assert.ok(
+    vectorNearlyEqual(customDownFootPlant.legs[0]!.groundNormal, [1, 0, 0], 1e-6) &&
+      vectorNearlyEqual(customDownFootPlant.legs[0]!.targetAnkle, [0.08, 0, 0], 1e-6),
+    "missing contact normals and ray starts should default opposite the configured down direction"
+  );
+  const obliqueRayAnkleTarget = computeAnkleTargetFromGround(
+    { point: [0, 0, 0], normal: [0, 1, 0], rayStart: [1, 1, 0] },
+    0.1
+  );
+  assert.ok(
+    vectorNearlyEqual(obliqueRayAnkleTarget, [0.1, 0.1, 0], 1e-6),
+    "ankle target geometry should preserve the ray/plane offset for oblique contact rays"
+  );
   const moderateSlopeFootPlant = solveFootPlant(
     [
       {
@@ -957,6 +1278,17 @@ export function runIkFootPlantTests(): void {
     undefined,
     "blocked contacts should clear cached contacts immediately without missing-contact grace"
   );
+  const minimumInfluenceBlockedStabilizer = updateFootPlantStabilizer(
+    stabilizer.state,
+    [{ id: "left", planted: false, active: false, skippedReason: "ground-slope-too-steep" }],
+    { deltaSeconds: 0.1, minInfluence: 0.4 }
+  );
+  assert.equal(minimumInfluenceBlockedStabilizer.legs[0]!.influence, 0);
+  assert.equal(
+    minimumInfluenceBlockedStabilizer.legs[0]!.active,
+    false,
+    "minimum influence must not reactivate a blocked contact"
+  );
   const finiteStabilizer = updateFootPlantStabilizer(
     {
       legs: [
@@ -1017,6 +1349,82 @@ export function runIkFootPlantTests(): void {
     ),
     "foot-plant stabilizer should sanitize cached ground contacts"
   );
+  const omittedContactStabilizer = updateFootPlantStabilizer(cachedContactStabilizer.state, [], {
+    deltaSeconds: 0.025,
+    blendInSeconds: 0.1,
+    blendOutSeconds: 0.2,
+    contactGraceSeconds: 0.05
+  });
+  assert.equal(omittedContactStabilizer.legs.length, 1);
+  assert.equal(omittedContactStabilizer.legs[0]!.planted, true);
+  assert.deepEqual(
+    omittedContactStabilizer.legs[0]!.groundContact?.point,
+    [0, 0, 0],
+    "an omitted leg observation should advance through missing-contact grace instead of dropping cached contact state"
+  );
+  const omittedReleasedStabilizer = updateFootPlantStabilizer(
+    {
+      legs: [
+        {
+          ...cachedContactStabilizer.state.legs[0]!,
+          graceSecondsRemaining: 0
+        }
+      ]
+    },
+    [],
+    { deltaSeconds: 1, blendOutSeconds: 0.2, minInfluence: 0.4 }
+  );
+  assert.equal(omittedReleasedStabilizer.legs[0]!.influence, 0);
+  assert.equal(omittedReleasedStabilizer.legs[0]!.active, false);
+  assert.equal(omittedReleasedStabilizer.legs[0]!.planted, false);
+  assert.equal(
+    omittedReleasedStabilizer.legs[0]!.groundContact,
+    undefined,
+    "omitted contacts should be able to reach inactive zero below minInfluence and must clear unusable cached contacts"
+  );
+  const duplicateContactStabilizer = updateFootPlantStabilizer(
+    cachedContactStabilizer.state,
+    [
+      { id: "left", planted: true, groundContact: gracePlantedLegInput.ground },
+      { id: "left", planted: false, skippedReason: "missing-ground-contact" }
+    ],
+    { deltaSeconds: 0.025, blendInSeconds: 0.1, blendOutSeconds: 0.2, contactGraceSeconds: 0.05 }
+  );
+  assert.equal(
+    duplicateContactStabilizer.legs.length,
+    1,
+    "duplicate leg observations should be resolved deterministically instead of producing duplicate state entries"
+  );
+  assert.equal(
+    duplicateContactStabilizer.legs[0]!.planted,
+    true,
+    "duplicate leg observations use first-observation-wins ordering"
+  );
+  const omittedPostGraceStabilizer = updateFootPlantStabilizer(omittedContactStabilizer.state, [], {
+    deltaSeconds: 0.05,
+    blendOutSeconds: 0.2,
+    contactGraceSeconds: 0.05,
+    minInfluence: 0.4
+  });
+  assert.ok(
+    omittedPostGraceStabilizer.legs[0]!.influence > 0 && omittedPostGraceStabilizer.legs[0]!.influence < 1,
+    "an omitted contact should continue blending influence out after grace"
+  );
+  assert.equal(omittedPostGraceStabilizer.legs[0]!.planted, true);
+  assert.equal(omittedPostGraceStabilizer.legs[0]!.groundContact, undefined);
+  const omittedFullyReleasedStabilizer = updateFootPlantStabilizer(omittedPostGraceStabilizer.state, [], {
+    deltaSeconds: 1,
+    blendOutSeconds: 0.2,
+    contactGraceSeconds: 0.05,
+    minInfluence: 0.4
+  });
+  assert.equal(omittedFullyReleasedStabilizer.legs[0]!.influence, 0);
+  assert.equal(omittedFullyReleasedStabilizer.legs[0]!.active, false);
+  assert.equal(
+    omittedFullyReleasedStabilizer.legs[0]!.planted,
+    false,
+    "minimum influence should not keep an omitted leg active or planted after release"
+  );
   const plantedStationaryContact = classifyStationarySupportContacts(
     "left",
     [
@@ -1045,6 +1453,19 @@ export function runIkFootPlantTests(): void {
     swingingStationaryContact.intervals.length,
     0,
     "stationary support classifier must not classify fast lifted steps as planted from height alone"
+  );
+  const sanitizedStationaryContact = classifyStationarySupportContacts(
+    "left",
+    [
+      { time: 0, position: [0, Number.NaN, 0] },
+      { time: 1 / 60, position: [0, Number.NaN, 0] }
+    ],
+    { floorY: 0, enterHeight: 0.025 }
+  );
+  assert.equal(
+    sanitizedStationaryContact.intervals.length,
+    1,
+    "stationary support classifier height fallback should use the sanitized sample position"
   );
   const standingStationaryBaseline = estimateStationarySupportBaseline(
     [
@@ -1092,6 +1513,87 @@ export function runIkFootPlantTests(): void {
   assert.ok(Math.abs(stationaryStandingSolve.left.height) < 0.0011);
   assert.ok(Math.abs(stationaryStandingSolve.left.ankleToSoleHeight - 0.155) < 1e-6);
   assert.equal(stationaryStandingSolve.footPlant.plantedCount, 2);
+  const initialPausedStationaryStandingSolve = solveStationarySupport(
+    {
+      state: createStationarySupportSolverState(),
+      left: {
+        side: "left",
+        hip: [-0.1, 0.8, 0],
+        knee: [-0.1, 0.35, 0],
+        ankle: [-0.1, 0.12, 0],
+        sole: [-0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.8, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.1, 0.12, 0],
+        sole: [0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      }
+    },
+    {
+      floorY: -0.035,
+      deltaSeconds: 0,
+      enterHeight: 0.026,
+      maxRootCompensation: 0.025,
+      expectedSupport: true
+    }
+  );
+  for (const side of [initialPausedStationaryStandingSolve.left, initialPausedStationaryStandingSolve.right]) {
+    assert.equal(side.contact, false);
+    assert.equal(side.transition, null);
+    assert.equal(side.acquireReason, null);
+    assert.equal(side.unsupportedExpectedSamples, 0);
+    assert.equal(side.unsupportedExpectedDuration, 0);
+    assertAllNumbersFinite(side, `initial zero-delta ${side.side} telemetry`);
+  }
+  assert.equal(initialPausedStationaryStandingSolve.state.left.active, false);
+  assert.equal(initialPausedStationaryStandingSolve.state.right.active, false);
+  assert.equal(initialPausedStationaryStandingSolve.state.left.initialized, false);
+  assert.equal(initialPausedStationaryStandingSolve.state.right.initialized, false);
+  assert.ok(
+    initialPausedStationaryStandingSolve.issues.every(
+      (issue) => !issue.includes("expected stationary support did not acquire")
+    ),
+    "an initial zero-delta observation must not report a contradictory acquire/unsupported sample"
+  );
+  const pausedStationaryStandingSolve = solveStationarySupport(
+    {
+      state: stationaryStandingSolve.state,
+      left: {
+        side: "left",
+        hip: [-0.1, 0.8, 0],
+        knee: [-0.1, 0.35, 0],
+        ankle: [-0.1, 0.12, 0],
+        sole: [-0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      },
+      right: {
+        side: "right",
+        hip: [0.1, 0.8, 0],
+        knee: [0.1, 0.35, 0],
+        ankle: [0.1, 0.12, 0],
+        sole: [0.1, -0.035, 0],
+        baseline: standingStationaryBaseline,
+        expected: true
+      }
+    },
+    { floorY: -0.035, deltaSeconds: 0, enterHeight: 0.026, maxRootCompensation: 0.025 }
+  );
+  assert.equal(pausedStationaryStandingSolve.left.influence, stationaryStandingSolve.left.influence);
+  assert.equal(pausedStationaryStandingSolve.right.influence, stationaryStandingSolve.right.influence);
+  assert.equal(pausedStationaryStandingSolve.left.horizontalVelocity, null);
+  assert.equal(pausedStationaryStandingSolve.left.verticalVelocity, null);
+  assert.equal(
+    pausedStationaryStandingSolve.left.unsupportedExpectedDuration,
+    stationaryStandingSolve.left.unsupportedExpectedDuration,
+    "zero-delta stationary support updates should not advance duration or blend state"
+  );
   const stationaryCrouchSolve = solveStationarySupport(
     {
       state: createStationarySupportSolverState(),
@@ -1531,6 +2033,19 @@ export function runIkFootPlantTests(): void {
     "double-support compensation should counter horizontal pelvis residual without zeroing vertical COM motion"
   );
   assert.equal(compensatedSupport.pelvisOffset[1], 0.02);
+  const zeroInfluenceCompensatedSupport = computeStationarySupportCompensation({
+    left: plantedStationaryContact,
+    right: plantedStationaryContact,
+    pelvisOffset: [0.05, 0.02, -0.03],
+    influence: 0
+  });
+  assert.equal(
+    zeroInfluenceCompensatedSupport.supportCount,
+    2,
+    "supportCount should report classified support independently of compensation influence"
+  );
+  assert.deepEqual(zeroInfluenceCompensatedSupport.rootOffset, [0, 0, 0]);
+  assert.deepEqual(zeroInfluenceCompensatedSupport.pelvisOffset, [0.05, 0.02, -0.03]);
   const anchoredErrorCompensation = computeStationarySupportCompensation({
     left: plantedStationaryContact,
     right: plantedStationaryContact,
@@ -1543,6 +2058,17 @@ export function runIkFootPlantTests(): void {
   assert.ok(
     vectorNearlyEqual(anchoredErrorCompensation.rootOffset, [0.01, 0, -0.005], 1e-6),
     "stationary support compensation should prefer measured sole anchor errors when provided instead of blindly canceling pelvis COM"
+  );
+  const unsupportedErrorCompensation = computeStationarySupportCompensation({
+    left: plantedStationaryContact,
+    right: swingingStationaryContact,
+    pelvisOffset: [0, 0, 0],
+    leftError: [0.01, 0, -0.02],
+    rightError: [1, 0, 1]
+  });
+  assert.ok(
+    vectorNearlyEqual(unsupportedErrorCompensation.rootOffset, [0.01, 0, -0.02], 1e-6),
+    "stationary support compensation should ignore anchor errors from unsupported sides"
   );
 
   const stabilizedInputs = applyFootPlantStabilizedInfluence(

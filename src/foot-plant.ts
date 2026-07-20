@@ -370,11 +370,14 @@ export function classifyStationarySupportContacts(
   const maxVerticalVelocity = finiteNonNegative(options.maxVerticalVelocity, 0.12);
   const minContactSeconds = finiteNonNegative(options.minContactSeconds, 0.05);
   const sorted = samples
-    .map((sample) => ({
-      time: finiteNonNegative(sample.time, 0),
-      position: finiteVec3(sample.position, [0, 0, 0]),
-      height: finiteNumber(sample.height, sample.position[1] - floorY)
-    }))
+    .map((sample) => {
+      const position = finiteVec3(sample.position, [0, 0, 0]);
+      return {
+        time: finiteNonNegative(sample.time, 0),
+        position,
+        height: finiteNumber(sample.height, position[1] - floorY)
+      };
+    })
     .sort((a, b) => a.time - b.time);
   const intervals: StationarySupportContactInterval[] = [];
   let current: { startTime: number; endTime: number; anchor: Vec3; maxSlide: number; sampleCount: number } | null =
@@ -433,13 +436,16 @@ export function computeStationarySupportCompensation(
     return {
       rootOffset: [0, 0, 0],
       pelvisOffset: finiteVec3(input.pelvisOffset, [0, 0, 0]),
-      supportCount: 0,
+      supportCount,
       influence
     };
   }
   const pelvis = finiteVec3(input.pelvisOffset, [0, 0, 0]);
-  const errors = [input.leftError, input.rightError]
-    .filter((value): value is Vec3 => Array.isArray(value))
+  const errors = [
+    input.left?.intervals.length ? input.leftError : undefined,
+    input.right?.intervals.length ? input.rightError : undefined
+  ]
+    .filter((value): value is Vec3 => value !== undefined)
     .map((value) => finiteVec3(value, [0, 0, 0]));
   const desired: Vec3 =
     errors.length > 0
@@ -511,7 +517,8 @@ export function solveStationarySupport(
   options: StationarySupportSolveOptions = {}
 ): StationarySupportSolveResult {
   const state = cloneStationarySupportSolverState(input.state);
-  const deltaSeconds = Math.max(finiteNonNegative(options.deltaSeconds, 1 / 60), 1 / 240);
+  const deltaSeconds = finiteNonNegative(options.deltaSeconds, 1 / 60);
+  const velocityDeltaSeconds = Math.max(deltaSeconds, 1e-5);
   const floorY = finiteNumber(options.floorY, 0);
   const enterHeight = finiteNonNegative(options.enterHeight, 0.028);
   const exitHeight = Math.max(enterHeight, finiteNonNegative(options.exitHeight, 0.052));
@@ -551,7 +558,9 @@ export function solveStationarySupport(
     const sole = finiteVec3(sideInput.sole, addVec3(ankle, soleOffset));
     const height = sole[1] - floorY - soleClearanceBaseline;
     const verticalVelocity =
-      sideState.previousHeight === undefined ? null : Math.abs(height - sideState.previousHeight) / deltaSeconds;
+      sideState.previousHeight === undefined || deltaSeconds <= 0
+        ? null
+        : Math.abs(height - sideState.previousHeight) / velocityDeltaSeconds;
     const lift = height > releaseHeight || (verticalVelocity ?? 0) > maxVerticalVelocity * 2.5;
     transferEvidence.set(sideInput.side, {
       activeVerticalSupport: sideState.active && sideState.anchor !== undefined && !lift,
@@ -564,7 +573,10 @@ export function solveStationarySupport(
 
   for (const sideInput of sides) {
     const sideState = state[sideInput.side];
-    delete sideState.transition;
+    // A zero-delta update is an observation of the current frame, not a new
+    // timed sample. Preserve the contact state verbatim so an initial paused
+    // frame cannot acquire a contact with zero influence (or release one).
+    if (deltaSeconds > 0) delete sideState.transition;
     const ankle = finiteVec3(sideInput.ankle, [0, 0, 0]);
     const soleOffset = finiteVec3(sideInput.baseline.soleOffset, [0, 0, 0]);
     const ankleToSoleHeight = finiteNonNegative(sideInput.baseline.ankleToSoleHeight, Math.max(0, -soleOffset[1]));
@@ -575,11 +587,13 @@ export function solveStationarySupport(
     const soleClearance = sole[1] - floorY;
     const height = soleClearance - soleClearanceBaseline;
     const horizontalVelocity =
-      sideState.initialized && sideState.previousSole
-        ? Math.hypot(sole[0] - sideState.previousSole[0], sole[2] - sideState.previousSole[2]) / deltaSeconds
+      deltaSeconds > 0 && sideState.initialized && sideState.previousSole
+        ? Math.hypot(sole[0] - sideState.previousSole[0], sole[2] - sideState.previousSole[2]) / velocityDeltaSeconds
         : null;
     const verticalVelocity =
-      sideState.previousHeight === undefined ? null : Math.abs(height - sideState.previousHeight) / deltaSeconds;
+      sideState.previousHeight === undefined || deltaSeconds <= 0
+        ? null
+        : Math.abs(height - sideState.previousHeight) / velocityDeltaSeconds;
     const lowEnough = sideState.active ? height <= exitHeight : height <= enterHeight;
     const slowEnough =
       (horizontalVelocity ?? 0) <= maxHorizontalVelocity && (verticalVelocity ?? 0) <= maxVerticalVelocity;
@@ -610,8 +624,12 @@ export function solveStationarySupport(
     let acquireReason: string | null = null;
     let releaseReason: string | null = null;
 
-    if (sideState.blockedUntilLift && (!contactCandidate || lift)) sideState.blockedUntilLift = false;
-    if (sideState.active) {
+    if (deltaSeconds > 0 && sideState.blockedUntilLift && (!contactCandidate || lift))
+      sideState.blockedUntilLift = false;
+    if (deltaSeconds <= 0) {
+      // Classification below may still report vertical support, but all contact
+      // transitions, blends, anchors, and accumulated metrics preserve prior state.
+    } else if (sideState.active) {
       if (sideState.anchor) {
         sideState.maxSlide = Math.max(sideState.maxSlide, anchorError ?? 0);
         if (sideState.previousSole)
@@ -714,7 +732,7 @@ export function solveStationarySupport(
       // Released transfer feet are not horizontal anchors, but they still need a vertical floor guard
       // so intentional low shuffles do not visibly punch through the floor plane.
       footInput.push(verticalFloorGuardInput);
-    } else if (sideInput.expected) {
+    } else if (sideInput.expected && deltaSeconds > 0) {
       sideState.unsupportedExpectedSamples += 1;
       sideState.unsupportedExpectedSeconds += deltaSeconds;
       sideState.currentUnsupportedExpectedDuration += deltaSeconds;
@@ -729,9 +747,11 @@ export function solveStationarySupport(
       sideState.currentUnsupportedExpectedDuration = 0;
     }
 
-    sideState.previousSole = sole;
-    sideState.previousHeight = height;
-    sideState.initialized = true;
+    if (deltaSeconds > 0) {
+      sideState.previousSole = sole;
+      sideState.previousHeight = height;
+      sideState.initialized = true;
+    }
     sideTelemetry.set(sideInput.side, {
       side: sideInput.side,
       sole,
@@ -767,7 +787,7 @@ export function solveStationarySupport(
     requestedRoot[2] /= activeCount;
   }
 
-  if (options.expectedSupport && verticalSupportCount === 0) {
+  if (options.expectedSupport && verticalSupportCount === 0 && deltaSeconds > 0) {
     for (const sideInput of sides) {
       const sideState = state[sideInput.side];
       if (!sideInput.expected) {
@@ -919,9 +939,15 @@ export function updateFootPlantStabilizer(
   const previousById = new Map((previousState?.legs ?? []).map((leg) => [leg.id, sanitizeStabilizerLegState(leg)]));
   const nextState: FootPlantStabilizerLegState[] = [];
   const stabilized: FootPlantStabilizedLeg[] = [];
+  const seenIds = new Set<string>();
 
+  // Resolve duplicate observations in caller order: the first observation wins.
+  // This keeps state ordering stable and prevents contradictory later duplicates from
+  // making results depend on incidental map construction details.
   for (const observation of observations) {
     const id = String(observation.id);
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
     const previous = previousById.get(id) ?? {
       id,
       influence: 0,
@@ -959,11 +985,15 @@ export function updateFootPlantStabilizer(
             deltaSeconds,
             targetInfluence >= previous.influence ? blendInSeconds : blendOutSeconds
           );
-    const influence = clampRange(nextInfluence, minInfluence, maxInfluence);
-    const planted = (hasUsableContact || inGrace) && influence > 1e-5;
+    const influence = blockedContact
+      ? 0
+      : targetInfluence > 0 || inGrace
+        ? clampRange(nextInfluence, minInfluence, maxInfluence)
+        : Math.min(maxInfluence, clamp01(nextInfluence));
     const groundContact = blockedContact
       ? undefined
       : (observedGroundContact ?? (inGrace ? previous.groundContact : undefined));
+    const planted = (hasUsableContact || inGrace) && influence > 1e-5;
     const stateEntry: FootPlantStabilizerLegState = {
       id,
       influence,
@@ -976,7 +1006,39 @@ export function updateFootPlantStabilizer(
     stabilized.push({
       id,
       influence,
-      active: influence > 1e-5,
+      active: (hasUsableContact || inGrace) && influence > 1e-5,
+      planted,
+      contactConfidence: stateEntry.contactConfidence,
+      graceSecondsRemaining,
+      ...(groundContact === undefined ? {} : { groundContact })
+    });
+  }
+
+  // A caller may omit a leg for a transient frame instead of emitting an explicit
+  // missing-ground-contact observation. Advance that cached leg through the same grace
+  // and blend-out path so omission cannot clear state abruptly or freeze it forever.
+  for (const [id, previous] of previousById) {
+    if (seenIds.has(id)) continue;
+    const graceSecondsRemaining = Math.max(0, previous.graceSecondsRemaining - deltaSeconds);
+    const inGrace = graceSecondsRemaining > 0;
+    const influence = inGrace
+      ? clampRange(previous.influence, minInfluence, maxInfluence)
+      : Math.min(maxInfluence, stepInfluence(previous.influence, 0, deltaSeconds, blendOutSeconds));
+    const groundContact = inGrace ? previous.groundContact : undefined;
+    const planted = previous.planted && influence > 1e-5;
+    const stateEntry: FootPlantStabilizerLegState = {
+      id,
+      influence,
+      contactConfidence: inGrace ? previous.contactConfidence : 0,
+      graceSecondsRemaining,
+      planted,
+      ...(groundContact === undefined ? {} : { groundContact })
+    };
+    nextState.push(stateEntry);
+    stabilized.push({
+      id,
+      influence,
+      active: previous.planted && influence > 1e-5,
       planted,
       contactConfidence: stateEntry.contactConfidence,
       graceSecondsRemaining,
@@ -1049,7 +1111,7 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
   let reachPelvisCorrection = 0;
 
   for (const leg of sanitizedInput) {
-    const groundNormal = normalizeVec3(leg.ground?.normal ?? [0, 1, 0], [0, 1, 0]);
+    const groundNormal = normalizeVec3(leg.ground?.normal ?? up, up);
     if (!leg.ground) {
       legs.push(createSkippedFootPlantLegResult(leg, groundNormal, "missing-ground-contact"));
       issues.push(`${leg.id}: missing ground contact`);
@@ -1061,7 +1123,15 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
       continue;
     }
 
-    const rawTarget = computeAnkleTargetFromGround(leg.ground, finiteNonNegative(leg.footHeight, defaultFootHeight));
+    const footHeight = finiteNonNegative(leg.footHeight, defaultFootHeight);
+    const rawTarget = computeAnkleTargetFromGround(
+      {
+        ...leg.ground,
+        normal: groundNormal,
+        rayStart: leg.ground.rayStart ?? addVec3(leg.ground.point, scaleVec3(up, Math.max(0.001, footHeight + 0.5)))
+      },
+      footHeight
+    );
     const rawOffset = subVec3(rawTarget, leg.ankle);
     const rawDistance = finiteLength(rawOffset, 0);
     const allowedCorrection = Math.min(
@@ -1128,8 +1198,12 @@ export function solveFootPlant(input: readonly FootPlantLegInput[], options: Foo
       continue;
     }
     const maxDownDistance = Math.sqrt(Math.max(0, maxDownDistanceSquared));
-    const requiredPelvisCorrection = (downDistance - maxDownDistance) / influence;
-    if (rejectUnreachable && requiredPelvisCorrection > maxPelvisOffset + 1e-6) {
+    const targetReachDeficit = Math.max(0, downDistance - maxDownDistance);
+    // The target is already influence-weighted. Fade its total deficit once more for
+    // pelvis contribution so influence 1 fully corrects reach while near-zero influence
+    // cannot charge an authored maxStretch deficit as a full pelvis drop.
+    const requiredPelvisCorrection = targetReachDeficit * influence;
+    if (rejectUnreachable && targetReachDeficit > maxPelvisOffset + 1e-6) {
       result.skippedReason = "ik-target-unreachable";
       result.planted = false;
       issues.push(`${leg.id}: ik target unreachable`);
