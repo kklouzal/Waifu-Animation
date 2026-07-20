@@ -1,4 +1,4 @@
-import type { AnimationManifest } from "./test-api.js";
+import type { AnimationClip, AnimationManifest } from "./test-api.js";
 import {
   WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
@@ -133,6 +133,29 @@ export async function runCoreManifestValidationTests(): Promise<void> {
   assert.ok(
     malformedEntryAssetReport.entries[0]!.issues.some((issue) => issue.message === "manifest entry must be an object"),
     "asset report validation should reject malformed clip entries without aborting adjacent valid assets"
+  );
+  const sparseManifestClips = [] as unknown[];
+  sparseManifestClips[1] = {
+    id: "valid-after-hole",
+    label: "Valid After Hole",
+    url: "/valid-after-hole.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  };
+  const sparseManifestFetches: string[] = [];
+  const sparseManifestAssetReport = await validateAnimationManifestAssets(
+    { version: 1, clips: sparseManifestClips } as unknown as AnimationManifest,
+    async (url) => {
+      sparseManifestFetches.push(url);
+      return encodeAnimationBinary(nodClip);
+    },
+    { skeleton }
+  );
+  assert.deepEqual(sparseManifestFetches, ["/valid-after-hole.waifuanim.bin"]);
+  assert.equal(sparseManifestAssetReport.accepted, 1);
+  assert.equal(sparseManifestAssetReport.rejected, 1);
+  assert.ok(
+    sparseManifestAssetReport.entries[0]!.issues.some((issue) => issue.message === "manifest entry must be an object"),
+    "asset report validation should visit sparse manifest clip holes as rejected entries"
   );
   const malformedValidationStatusManifest = {
     version: 1,
@@ -486,6 +509,42 @@ export async function runCoreManifestValidationTests(): Promise<void> {
       (issue) => issue.message === "unsupported-format-asset has unsupported format json"
     ),
     "inspectAnimationAsset should reject manifest entries whose declared format cannot be decoded as waifuanim binaries"
+  );
+  const malformedClipAssetInspection = inspectAnimationAsset(
+    {
+      id: "malformed-clip",
+      label: "Malformed Clip",
+      url: "/malformed-clip.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
+    { id: "malformed-clip", duration: 1 } as unknown as AnimationClip,
+    skeleton
+  );
+  assert.equal(malformedClipAssetInspection.status, "rejected");
+  assert.equal(malformedClipAssetInspection.duration, 0);
+  assert.ok(
+    malformedClipAssetInspection.issues.some((issue) => issue.message === "clip tracks must be an array"),
+    "inspectAnimationAsset should return a rejected report for malformed clip containers instead of throwing"
+  );
+  const malformedRootCarrierClip = {
+    id: "malformed-root-carrier",
+    duration: 1,
+    tracks: [{ joint: "hips", property: "translation" }]
+  } as unknown as AnimationClip;
+  const malformedRootCarrierInspection = inspectAnimationAsset(
+    {
+      id: "malformed-root-carrier",
+      label: "Malformed Root Carrier",
+      url: "/malformed-root-carrier.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
+    malformedRootCarrierClip,
+    skeleton
+  );
+  assert.equal(malformedRootCarrierInspection.status, "rejected");
+  assert.ok(
+    malformedRootCarrierInspection.issues.some((issue) => issue.message === "track times must be a Float32Array"),
+    "root-carrier manifest helpers should ignore malformed runtime track buffers after validation reports them"
   );
   const structurallyRejectedAssetFetches: string[] = [];
   const structuralAssetValidationReport = await validateAnimationManifestAssets(

@@ -415,7 +415,7 @@ export function toAnimationOptimizerOptions(
 
 export function normalizeUserTrackImportSpecs(input: unknown): ImporterConfigNormalizationResult<UserTrackImportPlan> {
   const issues: ImporterConfigIssue[] = [];
-  const specs = findUserTrackSpecInputs(input);
+  const specs = findUserTrackSpecInputs(input, issues);
   const tracks: UserTrackImportSpec[] = [];
   specs.forEach(({ value, path, animationName }, index) => {
     const record = asRecord(value);
@@ -678,7 +678,11 @@ function normalizeMotionCarrier(
     });
     return undefined;
   }
-  if (typeof input === "string") return { joint: input };
+  if (typeof input === "string") {
+    if (input.length > 0) return { joint: input };
+    issues.push({ path, message: "motion carrier joint name must be non-empty; using root", value: input });
+    return undefined;
+  }
   const record = asRecord(input);
   if (!record) {
     issues.push({
@@ -950,25 +954,63 @@ function normalizeInterpolation(
   return fallback;
 }
 
-function findUserTrackSpecInputs(input: unknown): { value: unknown; path: string; animationName?: string }[] {
+function findUserTrackSpecInputs(
+  input: unknown,
+  issues: ImporterConfigIssue[]
+): { value: unknown; path: string; animationName?: string }[] {
   if (isUnknownArray(input)) return input.map((value, index) => ({ value, path: `userTracks[${index}]` }));
   const record = asRecord(input);
-  const direct = readFirstDefined(record, ["userTracks", "user_tracks", "properties"]);
-  if (isUnknownArray(direct)) return direct.map((value, index) => ({ value, path: `userTracks[${index}]` }));
+  const direct = readFirstDefinedEntry(record, ["userTracks", "user_tracks", "properties"]);
+  if (direct) {
+    if (isUnknownArray(direct.value)) {
+      const rootPath = direct.key === "properties" ? "properties" : "userTracks";
+      return direct.value.map((value, index) => ({ value, path: `${rootPath}[${index}]` }));
+    }
+    issues.push({ path: direct.key, message: "user track import specs must be an array", value: direct.value });
+    return [];
+  }
   const tracks = asRecord(readFirstDefined(record, ["tracks"]));
-  if (isUnknownArray(tracks?.properties))
-    return tracks.properties.map((value, index) => ({ value, path: `tracks.properties[${index}]` }));
+  if (tracks && "properties" in tracks) {
+    if (isUnknownArray(tracks.properties))
+      return tracks.properties.map((value, index) => ({ value, path: `tracks.properties[${index}]` }));
+    issues.push({
+      path: "tracks.properties",
+      message: "user track import specs must be an array",
+      value: tracks.properties
+    });
+    return [];
+  }
   const animations = readFirstDefined(record, ["animations"]);
-  if (!isUnknownArray(animations)) return [];
+  if (animations === undefined) return [];
+  if (!isUnknownArray(animations)) {
+    issues.push({ path: "animations", message: "animation import specs must be an array", value: animations });
+    return [];
+  }
   const specs: { value: unknown; path: string; animationName?: string }[] = [];
   animations.forEach((animation, animationIndex) => {
     const animationRecord = asRecord(animation);
+    if (!animationRecord) {
+      issues.push({
+        path: `animations[${animationIndex}]`,
+        message: "animation import spec must be an object",
+        value: animation
+      });
+      return;
+    }
     const animationName = readString(
       readFirstDefined(animationRecord, ["name", "filename", "animationName", "animation_name"])
     );
     const animationTracks = asRecord(readFirstDefined(animationRecord, ["tracks"]));
     const properties = animationTracks?.properties;
-    if (!isUnknownArray(properties)) return;
+    if (properties === undefined) return;
+    if (!isUnknownArray(properties)) {
+      issues.push({
+        path: `animations[${animationIndex}].tracks.properties`,
+        message: "user track import specs must be an array",
+        value: properties
+      });
+      return;
+    }
     properties.forEach((value, propertyIndex) => {
       const item: { value: unknown; path: string; animationName?: string } = {
         value,
@@ -984,7 +1026,11 @@ function findUserTrackSpecInputs(input: unknown): { value: unknown; path: string
 function normalizeBakedNodeTypes(input: unknown, issues: ImporterConfigIssue[]): BakedSkeletonNodeTypes {
   const output: BakedSkeletonNodeTypes = { ...DEFAULT_BAKED_NODE_TYPES };
   const record = asRecord(input);
-  if (!record) return output;
+  if (!record) {
+    if (input !== undefined && input !== null)
+      issues.push({ path: "baked.skeletonNodeTypes", message: "skeleton node types must be an object", value: input });
+    return output;
+  }
   for (const key of Object.keys(output) as (keyof BakedSkeletonNodeTypes)[]) {
     output[key] = readBoolean(record[key], output[key], issues, `baked.skeletonNodeTypes.${key}`);
   }
@@ -992,9 +1038,13 @@ function normalizeBakedNodeTypes(input: unknown, issues: ImporterConfigIssue[]):
 }
 
 function normalizeBakedCameraOptions(input: unknown, issues: ImporterConfigIssue[]): BakedCameraJointOptions {
+  if (input === undefined || input === null) return { includes: "camera" };
   if (typeof input === "string" && input.length > 0) return { includes: input };
   const record = asRecord(input);
-  if (!record) return { includes: "camera" };
+  if (!record) {
+    issues.push({ path: "baked.camera", message: "camera options must be a joint name or object", value: input });
+    return { includes: "camera" };
+  }
   const options: BakedCameraJointOptions = {};
   const joint = normalizeJointReference(
     readFirstDefined(record, ["joint", "jointName", "joint_name", "index", "jointIndex", "joint_index"]),
@@ -1024,7 +1074,15 @@ function normalizeBakedRigidInstances(
   const record = asRecord(input);
   const options: RigidInstanceMatrixOptions = {};
   const filters: BakedRigidInstanceJointFilters = { includes: [], excludes: [], caseSensitive: false };
-  if (record) {
+  if (!record) {
+    if (input !== undefined && input !== null) {
+      issues.push({
+        path: "baked.rigidInstances",
+        message: "rigid instance options must be an object",
+        value: input
+      });
+    }
+  } else {
     const jointIndices = normalizeJointIndices(
       readFirstDefined(record, ["jointIndices", "joint_indices", "indices"]),
       issues,
@@ -1065,7 +1123,11 @@ function normalizeJointReference(
   path: string
 ): JointReference | undefined {
   if (input === undefined || input === null) return undefined;
-  if (typeof input === "string") return input;
+  if (typeof input === "string") {
+    if (input.length > 0) return input;
+    issues.push({ path, message: "joint reference must be a non-empty name or integer index", value: input });
+    return undefined;
+  }
   if (typeof input === "number" && Number.isInteger(input) && input >= -1) return input;
   issues.push({ path, message: "joint reference must be a name or integer index", value: input });
   return undefined;
@@ -1194,6 +1256,18 @@ function readFirstDefined(record: Record<string, unknown> | null, keys: readonly
     if (value !== undefined) return value;
   }
   return undefined;
+}
+
+function readFirstDefinedEntry(
+  record: Record<string, unknown> | null,
+  keys: readonly string[]
+): { key: string; value: unknown } | null {
+  if (!record) return null;
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined) return { key, value };
+  }
+  return null;
 }
 
 function readFirstAnimationRecord(record: Record<string, unknown> | null): Record<string, unknown> | null {

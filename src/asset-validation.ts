@@ -92,7 +92,7 @@ export async function validateAnimationManifestAssets(
   }
   const structuralIssues = inspectManifestStructure(manifest);
   const entries = await Promise.all(
-    manifestClips.map((entry, index) =>
+    Array.from(manifestClips, (entry, index) =>
       validateAnimationManifestEntryWithStructure(entry, fetchAsset, options, structuralIssues.get(index) ?? [])
     )
   );
@@ -131,10 +131,14 @@ export function inspectAnimationAsset(
 ): AnimationAssetValidationEntry {
   if (!isRecord(entry)) return buildRejectedEntry(entry, inspectManifestEntryStructure(entry));
   const id = typeof entry.id === "string" && entry.id.length > 0 ? entry.id : "<unknown>";
+  const structuralIssues = inspectManifestEntryStructure(entry);
   const clipIssues = validateClip(clip, skeleton).map((issue) => toAssetIssue(id, issue));
+  if (!isInspectableManifestEntry(entry) || !isInspectableAnimationClip(clip)) {
+    return buildRejectedEntry(entry, dedupeIssues([...structuralIssues, ...clipIssues]));
+  }
   const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(id, issue));
   const issues = dedupeIssues([
-    ...inspectManifestEntryStructure(entry),
+    ...structuralIssues,
     ...clipIssues,
     ...manifestInspection,
     ...inspectSemanticAsset(entry, clip, skeleton)
@@ -220,11 +224,12 @@ function inspectLoopEndpointMismatches(
   if (!playbackWindow) return issues;
   for (let index = 0; index < clip.tracks.length; index += 1) {
     const track = clip.tracks[index]!;
+    if (!isRecord(track) || !(track.times instanceof Float32Array) || !(track.values instanceof Float32Array)) continue;
     if (track.times.length < 2) continue;
     const property = normalizedTrackProperty(track.property);
     if (!property) continue;
     const stride = trackStride(property);
-    if (track.values.length < track.times.length * stride) continue;
+    if (track.values.length !== track.times.length * stride) continue;
     const startSample = sampleTrack(track, playbackWindow.start);
     const endSample = sampleTrack(track, playbackWindow.end);
     const tolerance = property === "rotation" ? 0.24 : 0.18;
@@ -279,6 +284,7 @@ function rotationEndpointDelta(first: ArrayLike<number>, last: ArrayLike<number>
 function jointCoverage(clip: AnimationClip, skeleton?: Skeleton): string[] {
   const joints = new Set<string>();
   for (const track of clip.tracks) {
+    if (!isRecord(track)) continue;
     const name = track.humanBone ?? track.joint;
     if (!name) continue;
     if (!skeleton) {
@@ -371,7 +377,7 @@ function inspectManifestStructure(manifest: AnimationManifest): Map<number, Anim
 
 function inspectManifestEntryStructure(entry: AnimationManifestEntry): AnimationAssetValidationIssue[] {
   if (!isRecord(entry)) return [{ id: "<unknown>", severity: "error", message: "manifest entry must be an object" }];
-  const id = entry.id || "<unknown>";
+  const id = typeof entry.id === "string" && entry.id.length > 0 ? entry.id : "<unknown>";
   const issues: AnimationAssetValidationIssue[] = [];
   if (!entry.id) issues.push({ id, severity: "error", message: "manifest entry is missing id" });
   if (!entry.url) issues.push({ id, severity: "error", message: `${id} is missing url` });
@@ -443,7 +449,7 @@ function classifyPosture(entry: AnimationManifestEntry): string {
 }
 
 function manifestEntrySearchText(entry: AnimationManifestEntry, clip?: AnimationClip): string {
-  return `${readString(entry.id) ?? ""} ${readString(entry.label) ?? ""} ${readStringArray(entry.tags).join(" ")} ${clip?.name ?? ""}`.toLowerCase();
+  return `${readString(entry.id) ?? ""} ${readString(entry.label) ?? ""} ${readStringArray(entry.tags).join(" ")} ${readString(clip?.name) ?? ""}`.toLowerCase();
 }
 
 function readString(value: unknown): string | null {
@@ -521,6 +527,29 @@ function manifestEntry(id: string, label: string, url: string): AnimationManifes
 
 function readManifestAssetEntries(manifest: AnimationManifest): AnimationManifestEntry[] | null {
   return isRecord(manifest) && Array.isArray(manifest.clips) ? manifest.clips : null;
+}
+
+function isInspectableAnimationClip(value: unknown): value is AnimationClip {
+  if (!isRecord(value)) return false;
+  const clip = value as Partial<AnimationClip>;
+  return (
+    typeof clip.id === "string" &&
+    (clip.name === undefined || typeof clip.name === "string") &&
+    typeof clip.duration === "number" &&
+    Number.isFinite(clip.duration) &&
+    clip.duration > 0 &&
+    Array.isArray(clip.tracks)
+  );
+}
+
+function isInspectableManifestEntry(value: unknown): value is AnimationManifestEntry {
+  if (!isRecord(value)) return false;
+  const entry = value as Partial<AnimationManifestEntry>;
+  return (
+    (entry.id === undefined || typeof entry.id === "string") &&
+    (entry.label === undefined || typeof entry.label === "string") &&
+    (entry.url === undefined || typeof entry.url === "string")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

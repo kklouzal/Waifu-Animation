@@ -286,6 +286,7 @@ const RAW_ANIMATION_PROPERTY_RANK: Readonly<Record<NormalizedTrackProperty, numb
   rotation: 1,
   scale: 2
 };
+const MAX_RAW_ANIMATION_KEY_COUNT = 1_000_000;
 const MAX_FIXED_RATE_SAMPLE_COUNT = 1_000_000;
 
 export function createRawAnimation(definition: RawAnimationDefinition): RawAnimation {
@@ -342,13 +343,14 @@ export function validateRawAnimation(rawAnimation: RawAnimation, skeleton?: Skel
     issues.push({ message: "raw animation must be an object" });
     return issues;
   }
+  const duration = readRawAnimationDurationForValidation(rawAnimation.duration);
   if (typeof rawAnimation.id !== "string" || rawAnimation.id.length === 0) {
     issues.push({ message: "raw animation id is required" });
   }
   if (rawAnimation.name !== undefined && typeof rawAnimation.name !== "string") {
     issues.push({ message: "raw animation name must be a string" });
   }
-  if (!Number.isFinite(rawAnimation.duration) || rawAnimation.duration <= 0) {
+  if (duration === null) {
     issues.push({ message: "raw animation duration must be positive and finite" });
   }
   if (rawAnimation.loop !== undefined && typeof rawAnimation.loop !== "boolean") {
@@ -397,7 +399,7 @@ export function validateRawAnimation(rawAnimation: RawAnimation, skeleton?: Skel
           resolvedChannels.set(channelKey, { track: trackIndex, joint: target.name, property });
         }
       }
-      validateRawAnimationKeys(issues, keys, trackIndex, target.name, property, rawAnimation.duration);
+      validateRawAnimationKeys(issues, keys, trackIndex, target.name, property, duration);
       trackKeyCount += keys.length;
     }
     if (trackKeyCount === 0) {
@@ -728,6 +730,8 @@ function validateAnimationOptimizerSampleErrorOptions(
   if (sampleError.sampleTimes !== undefined) {
     if (!Array.isArray(sampleError.sampleTimes)) {
       issues.push({ message: "animation optimizer sampleError sampleTimes must be an array" });
+    } else if (sampleError.sampleTimes.length > MAX_FIXED_RATE_SAMPLE_COUNT) {
+      issues.push({ message: `animation optimizer sampleError sampleTimes exceeds ${MAX_FIXED_RATE_SAMPLE_COUNT}` });
     } else if (sampleError.sampleTimes.some((time) => !Number.isFinite(time))) {
       issues.push({ message: "animation optimizer sampleError sampleTimes must contain finite values" });
     }
@@ -918,11 +922,26 @@ function resolveAnimationOptimizerTolerance(
   const hierarchyWeight = options.hierarchyWeight ?? 0;
   const descendantCount = target.jointIndex >= 0 ? (descendantCounts[target.jointIndex] ?? 0) : 0;
   return {
-    effective: base / jointWeight / (1 + hierarchyWeight * descendantCount),
+    effective: finiteEffectiveOptimizerTolerance(base, jointWeight, hierarchyWeight, descendantCount),
     jointWeight,
     hierarchyWeight,
     descendantCount
   };
+}
+
+function finiteEffectiveOptimizerTolerance(
+  base: number,
+  jointWeight: number,
+  hierarchyWeight: number,
+  descendantCount: number
+): number {
+  const hierarchyScale = 1 + hierarchyWeight * descendantCount;
+  if (!Number.isFinite(hierarchyScale)) return 0;
+  const denominator = jointWeight * hierarchyScale;
+  if (!Number.isFinite(denominator)) return 0;
+  const effective = base / denominator;
+  if (Number.isFinite(effective)) return Math.max(0, effective);
+  return effective > 0 ? Number.MAX_VALUE : 0;
 }
 
 function readAnimationOptimizerJointTolerance(
@@ -1285,8 +1304,19 @@ function assertValidAnimationSampleSource(
 
 function isRawAnimationSampleSource(source: RawAnimation | AnimationClip): source is RawAnimation {
   return (
-    Array.isArray(source.tracks) &&
-    source.tracks.some((track) => "translations" in track || "rotations" in track || "scales" in track)
+    Array.isArray(source.tracks) && source.tracks.length > 0 && source.tracks.every(isRawAnimationSampleTrackShape)
+  );
+}
+
+function isRawAnimationSampleTrackShape(track: unknown): track is RawAnimationJointTrack {
+  return (
+    isRawAnimationJointTrackObject(track) &&
+    Array.isArray((track as Partial<RawAnimationJointTrack>).translations) &&
+    Array.isArray((track as Partial<RawAnimationJointTrack>).rotations) &&
+    Array.isArray((track as Partial<RawAnimationJointTrack>).scales) &&
+    !("property" in track) &&
+    !("times" in track) &&
+    !("values" in track)
   );
 }
 
@@ -1295,6 +1325,9 @@ function readAnimationSampleErrorTimes(
   options: AnimationSampleErrorOptions
 ): readonly number[] {
   if (options.sampleTimes !== undefined) {
+    if (options.sampleTimes.length > MAX_FIXED_RATE_SAMPLE_COUNT) {
+      throw new RangeError(`animation sample error sampleTimes exceeds ${MAX_FIXED_RATE_SAMPLE_COUNT}`);
+    }
     const times = Array.from(options.sampleTimes);
     if (times.some((time) => !Number.isFinite(time)))
       throw new Error("animation sample error sampleTimes must contain finite values");
@@ -1667,8 +1700,17 @@ function validateRawAnimationKeys(
   trackIndex: number,
   joint: string,
   property: NormalizedTrackProperty,
-  duration: number
+  duration: number | null
 ): void {
+  if (keys.length > MAX_RAW_ANIMATION_KEY_COUNT) {
+    issues.push({
+      track: trackIndex,
+      joint,
+      property,
+      message: `raw animation ${property} key count exceeds ${MAX_RAW_ANIMATION_KEY_COUNT}`
+    });
+    return;
+  }
   let previousTime = -Infinity;
   for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
     const key = keys[keyIndex] as RawAnimationVec3Key | RawAnimationQuaternionKey | undefined;
@@ -1691,7 +1733,7 @@ function validateRawAnimationKeys(
         message: "raw animation key time must be finite"
       });
     } else {
-      if (key.time < 0 || key.time > duration) {
+      if (key.time < 0 || (duration !== null && key.time > duration)) {
         issues.push({
           track: trackIndex,
           key: keyIndex,
@@ -1716,6 +1758,10 @@ function validateRawAnimationKeys(
       validateRawAnimationQuaternionValue(issues, key.value, trackIndex, keyIndex, joint, property);
     else validateRawAnimationVec3Value(issues, key.value, trackIndex, keyIndex, joint, property);
   }
+}
+
+function readRawAnimationDurationForValidation(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function validateRawAnimationVec3Value(

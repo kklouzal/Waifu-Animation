@@ -380,6 +380,16 @@ export async function runCoreMathTrackTests(): Promise<void> {
     invalidMotionImport.issues.length >= 3,
     "invalid motion config should report bad axes, references, and modes"
   );
+  const emptyCarrierMotionImport = normalizeRawMotionExtractionImportConfig({ carrier: "" });
+  assert.ok(
+    emptyCarrierMotionImport.issues.some((issue) => issue.path === "motion.carrier"),
+    "empty motion carrier strings should report a deterministic config path"
+  );
+  assert.equal(
+    "carrier" in emptyCarrierMotionImport.plan.options,
+    false,
+    "invalid motion carriers should fall back to the root carrier contract"
+  );
   const importMotionRaw = createRawAnimation({
     id: "import-motion",
     duration: 1,
@@ -473,6 +483,23 @@ export async function runCoreMathTrackTests(): Promise<void> {
     invalidUserTrackImport.issues.some((issue) => issue.path.endsWith(".type")),
     "unsupported user-channel types should report explicit type issues"
   );
+  const invalidUserTrackContainer = normalizeUserTrackImportSpecs({ userTracks: { type: "float" } });
+  assert.deepEqual(
+    invalidUserTrackContainer.issues.map((issue) => [issue.path, issue.message]),
+    [["userTracks", "user track import specs must be an array"]],
+    "malformed user track containers should not be silently ignored"
+  );
+  const invalidAnimationUserTrackContainer = normalizeUserTrackImportSpecs({
+    animations: [null, { filename: "robot_animation.ozz", tracks: { properties: { type: "float1" } } }]
+  });
+  assert.ok(
+    invalidAnimationUserTrackContainer.issues.some((issue) => issue.path === "animations[0]"),
+    "malformed animation user-track entries should report their array index"
+  );
+  assert.ok(
+    invalidAnimationUserTrackContainer.issues.some((issue) => issue.path === "animations[1].tracks.properties"),
+    "malformed animation user-track property containers should report their nested path"
+  );
   const bakedImport = normalizeBakedImportConfig({
     skeleton: { import: { types: { geometry: true, camera: true } } },
     camera: { includes: "Camera", caseSensitive: false },
@@ -500,6 +527,23 @@ export async function runCoreMathTrackTests(): Promise<void> {
   assert.ok(
     invalidBakedImport.issues.length >= 2,
     "invalid baked rigid options should report bad joint indices and matrices"
+  );
+  const malformedBakedImport = normalizeBakedImportConfig({
+    skeleton: { import: { types: "geometry" } },
+    camera: { joint: "" },
+    rigidInstances: 2
+  });
+  assert.ok(
+    malformedBakedImport.issues.some((issue) => issue.path === "baked.skeletonNodeTypes"),
+    "malformed baked node-type containers should report an explicit path"
+  );
+  assert.ok(
+    malformedBakedImport.issues.some((issue) => issue.path === "baked.camera.joint"),
+    "empty baked camera joint names should be rejected instead of becoming an unreachable target"
+  );
+  assert.ok(
+    malformedBakedImport.issues.some((issue) => issue.path === "baked.rigidInstances"),
+    "malformed baked rigid-instance sections should not be silently ignored"
   );
   const combinedImport = normalizeOzzOfflineImportConfig({
     source: { file: "robot.fbx" },

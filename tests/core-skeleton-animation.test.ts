@@ -744,6 +744,19 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     rawBuiltClip.tracks.length,
     "buildAnimationFromRawAnimation should expose the same builder path"
   );
+  const rawAugmentedRuntimeClip = {
+    ...rawBuiltClip,
+    tracks: rawBuiltClip.tracks.map((track) => ({ ...track, translations: [] }))
+  } as unknown as AnimationClip;
+  const rawAugmentedRuntimeError = compareAnimationSampleError(rawAugmentedRuntimeClip, rawBuiltClip, {
+    skeleton,
+    sampleTimes: [0, 1]
+  });
+  assert.equal(
+    rawAugmentedRuntimeError.translation.max,
+    0,
+    "runtime clips with harmless raw-shaped extension fields should still compare as AnimationClips"
+  );
 
   const rawOptimizerSource = createRawAnimation({
     id: "raw-optimizer",
@@ -1304,6 +1317,28 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     false,
     "tryOptimizeRawAnimation should reject invalid optimizer tolerances through structured issues"
   );
+  const oversizedSampleDiagnostics = tryOptimizeRawAnimation(rawOptimizerSource, {
+    skeleton,
+    sampleError: { sampleTimes: new Array(1_000_001) as number[] }
+  });
+  assert.equal(
+    oversizedSampleDiagnostics.ok,
+    false,
+    "tryOptimizeRawAnimation should reject oversized explicit sample diagnostics before allocation"
+  );
+  if (!oversizedSampleDiagnostics.ok) {
+    assert.ok(oversizedSampleDiagnostics.issues.some((issue) => issue.message.includes("sampleTimes exceeds 1000000")));
+  }
+  const finiteExtremeWeightOptimization = tryOptimizeRawAnimation(rawOptimizerSource, {
+    jointTolerances: { hips: { weight: Number.MIN_VALUE } }
+  });
+  assert.equal(finiteExtremeWeightOptimization.ok, true, "finite tiny joint weights should remain accepted");
+  if (finiteExtremeWeightOptimization.ok) {
+    assert.ok(
+      finiteExtremeWeightOptimization.stats.channels.every((channel) => Number.isFinite(channel.tolerance)),
+      "optimizer stats should not leak non-finite effective tolerances for extreme finite weights"
+    );
+  }
 
   const duplicateRawAnimation = createRawAnimation({
     id: "raw-duplicate-channel",
@@ -1434,6 +1469,42 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     ),
     "validateRawAnimation should reject non-positive raw animation durations"
   );
+  const malformedDurationRawAnimation = {
+    id: "raw-malformed-duration",
+    duration: Symbol("duration"),
+    tracks: [
+      {
+        joint: "head",
+        translations: [{ time: 0, value: [0, 0, 0] }],
+        rotations: [],
+        scales: []
+      }
+    ]
+  } as unknown as RawAnimation;
+  assert.ok(
+    validateRawAnimation(malformedDurationRawAnimation, skeleton).some(
+      (issue) => issue.message === "raw animation duration must be positive and finite"
+    ),
+    "validateRawAnimation should report malformed runtime duration values without throwing during key checks"
+  );
+  const oversizedRawKeyAnimation = {
+    id: "raw-oversized-key-array",
+    duration: 1,
+    tracks: [
+      {
+        joint: "head",
+        translations: new Array(1_000_001),
+        rotations: [],
+        scales: []
+      }
+    ]
+  } as unknown as RawAnimation;
+  assert.ok(
+    validateRawAnimation(oversizedRawKeyAnimation, skeleton).some((issue) =>
+      issue.message.includes("raw animation translation key count exceeds 1000000")
+    ),
+    "validateRawAnimation should reject oversized raw key arrays before walking sparse hostile input"
+  );
 
   const rawUtilityAnimation = createRawAnimation({
     id: "raw-utilities",
@@ -1527,6 +1598,15 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     () => createFixedRateSamplingTimes(1_000_000, 2),
     /sample count exceeds/,
     "fixed-rate sampling should reject impractically large sample counts before allocation"
+  );
+  assert.throws(
+    () =>
+      compareAnimationSampleError(rawUtilityAnimation, rawUtilityAnimation, {
+        skeleton,
+        sampleTimes: new Array(1_000_001) as number[]
+      }),
+    /sampleTimes exceeds 1000000/,
+    "sample-error comparison should reject oversized explicit sample arrays before cloning them"
   );
 
   const rawUtilityPose = sampleRawAnimation(rawUtilityAnimation, 1, { skeleton, loop: false });

@@ -19,14 +19,14 @@ export type ManifestPlaybackWindow = {
 const STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE = 1e-4;
 
 export function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
-  return (
-    normalizedTrackProperty(track.property) === "translation" &&
-    (track.humanBone === "hips" || isRootCarrierJointName(track.joint))
-  );
+  if (!isRecord(track)) return false;
+  const property = typeof track.property === "string" ? normalizedTrackProperty(track.property) : null;
+  return property === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
 }
 
 export function rootCarrierTranslationTrackHasMotion(track: AnimationTrack, window: ManifestPlaybackWindow): boolean {
   if (!isRootCarrierTranslationTrack(track)) return false;
+  if (!(track.times instanceof Float32Array) || !(track.values instanceof Float32Array)) return false;
   if (track.times.length < 2 || track.values.length !== track.times.length * 3) return false;
   const base = sampleTrack(track, window.start);
   const sampleTimes = [window.end];
@@ -50,9 +50,12 @@ export function resolveManifestPlaybackWindow(
   entry: ManifestPlaybackSource,
   clip: Pick<AnimationClip, "duration">
 ): ManifestPlaybackWindow | null {
-  const start = entry.playback?.start ?? 0;
-  const end = entry.playback?.end ?? clip.duration;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > clip.duration + 1e-5)
+  const playback = isRecord(entry?.playback) ? entry.playback : undefined;
+  if (entry?.playback !== undefined && !playback) return null;
+  const duration = isRecord(clip) && typeof clip.duration === "number" ? clip.duration : Number.NaN;
+  const start = playback?.start ?? 0;
+  const end = playback?.end ?? duration;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > duration + 1e-5)
     return null;
   return { start, end };
 }
@@ -73,9 +76,13 @@ export function duplicatedManifestIds(entries: readonly ManifestIdSource[]): Set
   const duplicates = new Set<string>();
   for (const entry of entries) {
     if (typeof entry !== "object" || entry === null) continue;
-    if (!entry.id) continue;
+    if (typeof entry.id !== "string" || entry.id.length === 0) continue;
     if (seen.has(entry.id)) duplicates.add(entry.id);
     else seen.add(entry.id);
   }
   return duplicates;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
