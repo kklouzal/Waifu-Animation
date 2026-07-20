@@ -5,6 +5,7 @@ export * from "./pose.js";
 export * from "./clip.js";
 export * from "./tracks.js";
 export * from "./motion.js";
+export * from "./character-controller.js";
 export * from "./skinning.js";
 export * from "./baked.js";
 export * from "./binary.js";

@@ -23,7 +23,15 @@
 - `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, optional ground-slope rejection, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: rotation/translation/scale pose delta metrics, invalid pose reports, and deterministic input checks.
+- `character-controller`: deterministic engine-agnostic controller core for avatar locomotion intent, facing/yaw, gait speed, posture/locomotion phases, jump buffering/coyote timing, world-adapter boundaries, clip-agnostic animation parameters/events, and snapshot/restore.
 - `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, base/overlay/debug runtime clip construction for Three `AnimationMixer`, skinned/debug geometry and rigid-instance upload adapters, and sanitized app-facing runtime clip snapshots/influence diagnostics.
+
+### 2026-07-20 character controller foundation
+
+- `CharacterController` is now exported as a reusable library core with an explicit Y-up/+Z-forward coordinate contract. It owns deterministic fixed-step state, sanitized movement/facing/gait/posture/jump/action intent, controller velocity, yaw turning, acceleration/deceleration, gravity, jump buffering, coyote timing, crouch transition progress, grounded/rising/falling/landing phases, ordered events/transitions, and snapshot/restore.
+- Physics remains adapter-owned through `CharacterWorldAdapter` (`queryGround`, `sweepCapsule`, `resolveMovement`). Adapter failures or non-finite results are surfaced as events and do not import or bind any concrete physics engine.
+- Animation remains clip-agnostic. The controller emits `CharacterAnimationState` parameters/events for later animation-graph mapping; it does not choose clip names or write bones.
+- The foundation intentionally stops before traversal polish, interaction/equipment execution, reach/IK coordination, multi-actor protocols, root-motion authority policies, and Waifu app integration. See `docs/character-controller.md` for usage and roadmap boundaries.
 
 ### 2026-06-08 hardening update
 

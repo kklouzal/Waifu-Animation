@@ -1,8 +1,10 @@
+import { runCharacterControllerTests } from "./character-controller.test.js";
 import { runCoreDataTests } from "./core-data.test.js";
 import { runMotionRuntimeTests } from "./motion-runtime.test.js";
 import { runRetargetingIkFacialTests } from "./retargeting-ik-facial.test.js";
 import { runThreeRuntimeTests } from "./three-runtime.test.js";
 
+runCharacterControllerTests();
 await runCoreDataTests();
 await runMotionRuntimeTests();
 await runRetargetingIkFacialTests();

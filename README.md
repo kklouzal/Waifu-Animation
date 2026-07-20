@@ -15,6 +15,7 @@ This project does not embed Ozz C++ source. It mirrors Ozz concepts and math bou
 See also:
 
 - `docs/architecture.md` for module boundaries, frame order, and the Waifu integration contract.
+- `docs/character-controller.md` for Character Controller conventions, current API, usage, and roadmap boundaries.
 - `docs/validation.md` for package gates, Waifu visual gates, artifact examples, and current limitations.
 - `docs/ozz-reference.md` for Ozz attribution and intentional differences.
 
@@ -42,6 +43,7 @@ npm test
 - `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
 - `tracks`: generic user-channel tracks, sampling, optimization, and bounded edge triggering.
 - `motion`: explicit motion-carrier sampling and interval deltas for root-motion consumers.
+- `character-controller`: deterministic, engine-agnostic avatar controller foundation for fixed-step movement intent, facing, gait speed, posture/locomotion phases, jump buffering/coyote timing, world-adapter boundaries, animation-facing parameters/events, and snapshot/restore.
 - `pose`: rest pose creation, blending, additive layers, masks, pose validation.
 - `skinning`: reusable matrix-palette skinning for positions, normals, and tangents.
 - `baked`: Ozz baked-sample style camera-joint, rigid-instance matrix, and bounds helpers.
@@ -56,6 +58,7 @@ npm test
 - `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
 - `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded authored animation clips, track policies, runtime clip lanes, action preparation, base-loop seam/transition policy helpers, overlay fade helpers, sanitized clip snapshots, reusable procedural application hooks, skinned/debug geometry and instancing adapters, and base/overlay/debug influence diagnostics.
 - `debug`, `validation`, and `asset-validation`: pose metrics, invalid transform diagnostics, runtime snapshots, input checks, and manifest/clip asset validation.
+- `character-controller`: engine-agnostic Y-up/+Z-forward controller core with explicit movement/facing/gait/posture/jump/action intent, world query/resolution contracts, clip-agnostic animation parameters/events, bounded fixed-step catch-up, and deterministic snapshot/restore.
 
 ## Pipeline
 
