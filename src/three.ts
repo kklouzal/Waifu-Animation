@@ -11,7 +11,14 @@ import {
   type KeyframeTrack,
   type Object3D
 } from "three";
-import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack, trackStride } from "./clip.js";
+import {
+  type AnimationClip,
+  type AnimationTrack,
+  type NormalizedTrackProperty,
+  normalizedTrackProperty,
+  sampleTrack,
+  trackStride
+} from "./clip.js";
 import { type FootPlantResult, type StationarySupportCompensation, solveTwoBoneIkCorrections } from "./ik.js";
 import {
   type Quat,
@@ -19,12 +26,16 @@ import {
   addVec3,
   clamp,
   clamp01,
+  cloneNormalizedQuat,
   dampAlpha,
   dampValue,
+  ensureShortestQuat,
   euclideanModulo,
   finiteNonNegative,
   isFiniteNumber,
   lengthVec3,
+  multiplyQuat,
+  normalizeQuat,
   normalizeVec3,
   quatFromUnitVectors,
   rotateVec3ByQuat,
@@ -294,7 +305,7 @@ export type ThreeFootPlantClearResult = {
 
 export type ThreeStationarySupportApplyOptions = {
   root: Object3D;
-  targetOffset: Vec3;
+  targetOffset?: Vec3;
   currentOffset?: Vec3;
   deltaSeconds?: number;
   influence?: number;
@@ -325,63 +336,82 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
   const playback = resolveThreeRuntimePlaybackWindow(clip, options.playback, options.minimumDuration ?? 0.1);
   let runtimeDuration = playback.end - playback.start;
   const trackSourceNames: Record<string, string> = {};
+  const mappedTrackNames = new Set<string>();
   const tracks = clip.tracks.flatMap((track) => {
     const boneName = track.humanBone ?? track.joint;
     if (!boneName) return [];
-    const bone = options.resolveBone(String(boneName));
-    if (!bone) return [];
-    if (!trackHasValidShape(track)) {
-      options.logger?.warn("invalid animation track skipped", options.id ?? clip.id, boneName, track.property);
-      return [];
-    }
-
     const property = normalizedTrackProperty(track.property);
     if (!property) {
       options.logger?.warn("unsupported animation track skipped", options.id ?? clip.id, boneName, track.property);
       return [];
     }
+    if (!trackHasValidShape(track, property)) {
+      options.logger?.warn("invalid animation track skipped", options.id ?? clip.id, boneName, track.property);
+      return [];
+    }
+    const rotationSpace = property === "rotation" ? resolveThreeRotationSpace(track, options, clip, boneName) : null;
+    if (property === "rotation" && !rotationSpace) return [];
+    const bone = options.resolveBone(String(boneName));
+    if (!bone) {
+      options.logger?.warn("animation track skipped: missing bone", options.id ?? clip.id, boneName, track.property);
+      return [];
+    }
+    const rawInvalidQuaternionSamples =
+      property === "rotation" ? countMalformedThreeQuaternionKeyframes(track.values) : 0;
     const sampleWindow = sliceAnimationTrackWindow(track, playback.start, playback.end);
     if (sampleWindow.times.length < 2) return [];
     runtimeDuration = Math.max(runtimeDuration, sampleWindow.duration);
 
     if (property === "rotation") {
+      const targetRestQuaternion = options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray();
       const retargeted =
-        track.rotationSpace === "normalized-humanoid-delta"
-          ? {
-              values: adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion(
-                sampleWindow.values,
-                options.targetVrmMetaVersion
-              ),
-              invalidSamples: 0
-            }
+        rotationSpace === "normalized-humanoid-delta"
+          ? retargetNormalizedHumanoidDeltaTrackValues(
+              sampleWindow.values,
+              targetRestQuaternion,
+              options.targetVrmMetaVersion
+            )
           : retargetQuaternionTrackValues(
               sampleWindow.values,
               track.sourceRestQuaternion,
-              options.targetRestQuaternion?.(String(boneName), bone) ?? bone.quaternion.toArray(),
+              targetRestQuaternion,
               String(boneName),
               options.sourceBasisQuaternion?.(String(boneName), bone),
               track.sourceRestChildDirection,
               options.targetRestChildDirection?.(String(boneName), bone)
             );
-      if (retargeted.invalidSamples > 0) {
-        options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, retargeted.invalidSamples);
+      const repairedQuaternionSamples = rawInvalidQuaternionSamples + retargeted.invalidSamples;
+      if (repairedQuaternionSamples > 0) {
+        options.logger?.warn("invalid retargeted quaternion samples repaired", boneName, repairedQuaternionSamples);
       }
+      const trackName = `${bone.uuid}.quaternion`;
+      if (mappedTrackNames.has(trackName)) {
+        options.logger?.warn("duplicate runtime track skipped", options.id ?? clip.id, boneName, "quaternion");
+        return [];
+      }
+      mappedTrackNames.add(trackName);
       const threeTrack = new QuaternionKeyframeTrack(
-        `${bone.uuid}.quaternion`,
+        trackName,
         Float32Array.from(sampleWindow.times),
         Float32Array.from(retargeted.values)
       );
-      trackSourceNames[threeTrack.name] = `${String(boneName)}.quaternion`;
+      trackSourceNames[trackName] = `${String(boneName)}.quaternion`;
       return [threeTrack];
     }
 
     const targetProperty = property === "translation" ? "position" : "scale";
+    const trackName = `${bone.uuid}.${targetProperty}`;
+    if (mappedTrackNames.has(trackName)) {
+      options.logger?.warn("duplicate runtime track skipped", options.id ?? clip.id, boneName, targetProperty);
+      return [];
+    }
+    mappedTrackNames.add(trackName);
     const threeTrack = new VectorKeyframeTrack(
-      `${bone.uuid}.${targetProperty}`,
+      trackName,
       Float32Array.from(sampleWindow.times),
       Float32Array.from(sampleWindow.values)
     );
-    trackSourceNames[threeTrack.name] = `${String(boneName)}.${targetProperty}`;
+    trackSourceNames[trackName] = `${String(boneName)}.${targetProperty}`;
     return [threeTrack];
   });
 
@@ -393,6 +423,68 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
   const rootMotionPolicy = readAnimationClipRootMotionPolicy(clip);
   if (rootMotionPolicy) threeClip.userData[THREE_ROOT_MOTION_POLICY_USER_DATA] = rootMotionPolicy;
   return threeClip;
+}
+
+function resolveThreeRotationSpace(
+  track: AnimationTrack,
+  options: ThreeAnimationClipOptions,
+  clip: AnimationClip,
+  boneName: string
+): NonNullable<AnimationTrack["rotationSpace"]> | null {
+  const rotationSpace = track.rotationSpace ?? "local-source";
+  if (rotationSpace === "local-source" || rotationSpace === "normalized-humanoid-delta") return rotationSpace;
+  options.logger?.warn("invalid rotationSpace track skipped", options.id ?? clip.id, boneName, track.rotationSpace);
+  return null;
+}
+
+function retargetNormalizedHumanoidDeltaTrackValues(
+  values: ArrayLike<number>,
+  targetRestQuaternion: ArrayLike<number> | null | undefined,
+  targetVrmMetaVersion: string | undefined
+): { values: number[]; invalidSamples: number } {
+  const adaptedValues = adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion(values, targetVrmMetaVersion);
+  const targetRest = targetRestQuaternion ? cloneNormalizedQuat(targetRestQuaternion) : null;
+  const output: number[] = [];
+  let invalidSamples = 0;
+  let previous: Quat | null = null;
+  for (let offset = 0; offset + 3 < adaptedValues.length; offset += 4) {
+    const raw: Quat = [
+      adaptedValues[offset] ?? 0,
+      adaptedValues[offset + 1] ?? 0,
+      adaptedValues[offset + 2] ?? 0,
+      adaptedValues[offset + 3] ?? 1
+    ];
+    if (isMalformedThreeQuaternion(raw)) invalidSamples += 1;
+    const delta: Quat = normalizeQuat(raw);
+    const retargeted: Quat = targetRest ? multiplyQuat(delta, targetRest) : delta;
+    const continuous: Quat = previous ? ensureShortestQuat(previous, retargeted) : retargeted;
+    output.push(...continuous);
+    previous = continuous;
+  }
+  return { values: output, invalidSamples };
+}
+
+function isMalformedThreeQuaternion(value: Quat): boolean {
+  if (!value.every(Number.isFinite)) return true;
+  const length = Math.hypot(value[0], value[1], value[2], value[3]);
+  return !Number.isFinite(length) || length <= 1e-8;
+}
+
+function countMalformedThreeQuaternionKeyframes(values: ArrayLike<number>): number {
+  let invalidSamples = 0;
+  for (let offset = 0; offset + 3 < values.length; offset += 4) {
+    if (
+      isMalformedThreeQuaternion([
+        values[offset] ?? 0,
+        values[offset + 1] ?? 0,
+        values[offset + 2] ?? 0,
+        values[offset + 3] ?? 1
+      ])
+    ) {
+      invalidSamples += 1;
+    }
+  }
+  return invalidSamples;
 }
 
 export function sliceAnimationTrackWindow(track: AnimationTrack, start: number, end: number): TrackSampleWindow {
@@ -1166,7 +1258,8 @@ export function applyThreeStationarySupportResult(
     current[2] + (target[2] * scale - current[2]) * amount
   ];
   const delta: Vec3 = [next[0] - current[0], next[1] - current[1], next[2] - current[2]];
-  options.root.position.add(tmpWorldDirection.set(delta[0], delta[1], delta[2]));
+  const localDelta = worldOffsetToLocal(options.root, delta, 1);
+  options.root.position.add(tmpWorldDirection.set(localDelta[0], localDelta[1], localDelta[2]));
   options.root.updateMatrixWorld(true);
   return { applied: lengthVec3(delta) > 1e-8, offset: next, delta, influence };
 }
@@ -1218,9 +1311,7 @@ function resolveThreeRuntimePlaybackWindow(
   };
 }
 
-function trackHasValidShape(track: AnimationTrack): boolean {
-  const property = normalizedTrackProperty(track.property);
-  if (!property) return false;
+function trackHasValidShape(track: AnimationTrack, property: NormalizedTrackProperty): boolean {
   const stride = trackStride(property);
   if (track.times.length < 1 || track.values.length !== track.times.length * stride) return false;
   let previous = -Infinity;
@@ -1228,7 +1319,7 @@ function trackHasValidShape(track: AnimationTrack): boolean {
     if (!Number.isFinite(time) || time < 0 || time <= previous) return false;
     previous = time;
   }
-  return track.values.every(Number.isFinite);
+  return property === "rotation" || track.values.every(Number.isFinite);
 }
 
 type FootPlantOffsetObject = Object3D & { __waifuAnimationFootPlantOffset?: Vector3 };
@@ -1260,6 +1351,7 @@ function worldOffsetToLocal(bone: Object3D, offset: Vec3, amount: number): Vec3 
     return [0, 0, 0];
   const parent = bone.parent;
   if (parent) {
+    parent.updateWorldMatrix(true, false);
     parent.getWorldPosition(tmpLocalDirection);
     tmpWorldDirection.add(tmpLocalDirection);
     parent.worldToLocal(tmpWorldDirection);

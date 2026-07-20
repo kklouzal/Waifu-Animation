@@ -4,8 +4,10 @@ import {
   LoopOnce,
   Object3D,
   Quaternion,
+  Vector3,
   WAIFU_ANIMATION_BINARY_FORMAT,
   adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion,
+  applyThreeStationarySupportResult,
   assert,
   calculateThreeBaseLoopSeamWindow,
   calculateThreeBaseLoopTransitionWeights,
@@ -14,6 +16,7 @@ import {
   calculateThreeRuntimeStartTime,
   createThreeAnimationClip,
   createThreeRuntimeClipsForEntry,
+  multiplyQuat,
   normalizedHumanoidDeltaFromSourceLocalSample,
   prepareThreeRuntimeAction,
   quatFromAxisAngle,
@@ -26,7 +29,8 @@ import {
   makeRuntimeClipDiagnosticStub,
   nodClip,
   quaternionNearlyEqual,
-  sampleThreeClipOnce
+  sampleThreeClipOnce,
+  vectorNearlyEqual
 } from "./test-helpers.js";
 
 export async function runThreeRuntimeTests(): Promise<void> {
@@ -119,6 +123,226 @@ export async function runThreeRuntimeTests(): Promise<void> {
   assert.ok(
     canonicalVrm0ActualValues.every((value, index) => Math.abs(value - pixivOfficialVrm0Rule[index]!) < 1e-6),
     "Three binding should adapt canonical normalized-delta tracks for VRM0 targets without rebaking assets"
+  );
+  const targetRestNormalizedDelta = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+  const targetRestNormalizedDeltaBone = new Object3D();
+  targetRestNormalizedDeltaBone.name = "targetRestNormalizedDeltaHead";
+  targetRestNormalizedDeltaBone.quaternion.fromArray(targetRestNormalizedDelta);
+  const targetRestNormalizedDeltaClip = createThreeAnimationClip(
+    {
+      id: "normalized-delta-target-rest",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1])
+        }
+      ]
+    },
+    {
+      resolveBone: (humanBone) => (humanBone === "head" ? targetRestNormalizedDeltaBone : null)
+    }
+  );
+  assert.ok(
+    quaternionNearlyEqual(
+      Array.from(targetRestNormalizedDeltaClip.tracks[0]!.values).slice(0, 4),
+      targetRestNormalizedDelta,
+      1e-5
+    ),
+    "Three binding should apply normalized humanoid deltas on top of the resolved target rest when no explicit rest callback is supplied"
+  );
+  const explicitRestNormalizedDeltaClip = createThreeAnimationClip(
+    {
+      id: "normalized-delta-explicit-target-rest",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1])
+        }
+      ]
+    },
+    {
+      resolveBone: (humanBone) => (humanBone === "head" ? targetRestNormalizedDeltaBone : null),
+      targetRestQuaternion: () => [0, 0, 0, 1]
+    }
+  );
+  assert.ok(
+    quaternionNearlyEqual(
+      Array.from(explicitRestNormalizedDeltaClip.tracks[0]!.values).slice(0, 4),
+      [0, 0, 0, 1],
+      1e-5
+    ),
+    "explicit target rest should override live bone pose for normalized humanoid delta tracks"
+  );
+  const targetRestVrm0Clip = createThreeAnimationClip(
+    {
+      id: "normalized-delta-vrm0-target-rest",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array(canonicalVrm0SourceValues)
+        }
+      ]
+    },
+    {
+      resolveBone: (humanBone) => (humanBone === "head" ? targetRestNormalizedDeltaBone : null),
+      targetRestQuaternion: () => targetRestNormalizedDelta,
+      targetVrmMetaVersion: "0"
+    }
+  );
+  const targetRestVrm0Expected = multiplyQuat(
+    [pixivOfficialVrm0Rule[0]!, pixivOfficialVrm0Rule[1]!, pixivOfficialVrm0Rule[2]!, pixivOfficialVrm0Rule[3]!],
+    targetRestNormalizedDelta
+  );
+  assert.ok(
+    quaternionNearlyEqual(Array.from(targetRestVrm0Clip.tracks[0]!.values).slice(0, 4), targetRestVrm0Expected, 1e-5),
+    "VRM0 sign adaptation should be applied before normalized deltas are composed with target rest"
+  );
+
+  const malformedNormalizedDeltaWarnings: string[] = [];
+  const malformedNormalizedDeltaClip = createThreeAnimationClip(
+    {
+      id: "malformed-normalized-delta",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([Number.NaN, 0, 0, 1, 0, 0, 0, -2])
+        }
+      ]
+    },
+    {
+      resolveBone: (humanBone) => (humanBone === "head" ? headBone : null),
+      targetRestQuaternion: () => [0, 0, 0, 1],
+      logger: {
+        warn: (...parts: unknown[]) => {
+          malformedNormalizedDeltaWarnings.push(parts.map(String).join(" "));
+        }
+      }
+    }
+  );
+  assert.equal(
+    malformedNormalizedDeltaWarnings.some((message) =>
+      message.includes("invalid retargeted quaternion samples repaired")
+    ),
+    true,
+    "Three binding should report repaired malformed normalized humanoid delta samples"
+  );
+  assert.deepEqual(
+    Array.from(malformedNormalizedDeltaClip.tracks[0]!.values),
+    [0, 0, 0, 1, -0, -0, -0, 1],
+    "normalized humanoid delta tracks should repair invalid quaternions and keep equivalent samples in the shortest hemisphere"
+  );
+
+  const rotationSpaceWarnings: string[] = [];
+  const invalidRotationSpaceClip = createThreeAnimationClip(
+    {
+      id: "invalid-rotation-space",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          rotationSpace: "model" as unknown as NonNullable<AnimationClip["tracks"][number]["rotationSpace"]>,
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1])
+        }
+      ]
+    },
+    {
+      resolveBone: (humanBone) => (humanBone === "head" ? headBone : null),
+      logger: {
+        warn: (...parts: unknown[]) => {
+          rotationSpaceWarnings.push(parts.map(String).join(" "));
+        }
+      }
+    }
+  );
+  assert.equal(invalidRotationSpaceClip.tracks.length, 0, "invalid rotationSpace tracks should be skipped");
+  assert.equal(
+    rotationSpaceWarnings.some((message) => message.includes("invalid rotationSpace track skipped")),
+    true,
+    "Three binding should diagnose invalid rotationSpace tracks"
+  );
+
+  const duplicateTrackWarnings: string[] = [];
+  const duplicateTargetClip = createThreeAnimationClip(
+    {
+      id: "duplicate-target-channel",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1])
+        },
+        {
+          joint: "aliasHead",
+          property: "rotation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1])
+        }
+      ]
+    },
+    {
+      resolveBone: (bone) => (bone === "head" || bone === "aliasHead" ? headBone : null),
+      logger: {
+        warn: (...parts: unknown[]) => {
+          duplicateTrackWarnings.push(parts.map(String).join(" "));
+        }
+      }
+    }
+  );
+  assert.equal(duplicateTargetClip.tracks.length, 1, "duplicate resolved runtime target tracks should be skipped");
+  assert.equal(
+    duplicateTrackWarnings.some((message) => message.includes("duplicate runtime track skipped")),
+    true,
+    "Three binding should diagnose duplicate resolved runtime target tracks"
+  );
+
+  const missingBoneWarnings: string[] = [];
+  const missingBoneClip = createThreeAnimationClip(
+    {
+      id: "missing-bone-diagnostic",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "head",
+          property: "quaternion",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 1, 0, 0, 0, 1])
+        }
+      ]
+    },
+    {
+      resolveBone: () => null,
+      logger: {
+        warn: (...parts: unknown[]) => {
+          missingBoneWarnings.push(parts.map(String).join(" "));
+        }
+      }
+    }
+  );
+  assert.equal(missingBoneClip.tracks.length, 0, "tracks for missing runtime bones should be skipped");
+  assert.equal(
+    missingBoneWarnings.some((message) => message.includes("animation track skipped: missing bone")),
+    true,
+    "Three binding should report missing runtime bones"
   );
 
   const officialNormalizedDelta = (
@@ -239,6 +463,54 @@ export async function runThreeRuntimeTests(): Promise<void> {
     "uuid binding should not animate the first same-named node"
   );
   assert.ok(Math.abs(duplicateTargetBone.quaternion.x) > 0.1, "uuid binding should animate the resolved target bone");
+
+  const supportParent = new Object3D();
+  supportParent.position.set(3, 0.5, -2);
+  supportParent.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
+  supportParent.scale.set(1.5, 1, 0.75);
+  const supportRoot = new Object3D();
+  supportRoot.position.set(0.25, 0.1, -0.2);
+  supportParent.add(supportRoot);
+  supportParent.updateMatrixWorld(true);
+  const supportBefore = new Vector3();
+  supportRoot.getWorldPosition(supportBefore);
+  const supportApplied = applyThreeStationarySupportResult(
+    { rootOffset: [0.12, 0, -0.04] },
+    { root: supportRoot, influence: 1, maxOffset: 1 }
+  );
+  const supportAfter = new Vector3();
+  supportRoot.getWorldPosition(supportAfter);
+  assert.equal(supportApplied.applied, true, "stationary support root offset should report an applied correction");
+  assert.ok(
+    vectorNearlyEqual(
+      [supportAfter.x - supportBefore.x, supportAfter.y - supportBefore.y, supportAfter.z - supportBefore.z],
+      [0.12, 0, -0.04],
+      1e-6
+    ),
+    "stationary support root offsets should be applied in world space even when the root has a transformed parent"
+  );
+
+  const staleParent = new Object3D();
+  const staleRoot = new Object3D();
+  staleParent.add(staleRoot);
+  staleParent.updateMatrixWorld(true);
+  staleParent.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
+  const overrideSupport = applyThreeStationarySupportResult(
+    { rootOffset: [0.5, 0, 0.5] },
+    { root: staleRoot, targetOffset: [0.05, 0, -0.01], currentOffset: [0.01, 0, 0.02], influence: 1, maxOffset: 1 }
+  );
+  const expectedOverrideLocalDelta = new Vector3(0.04, 0, -0.03).applyQuaternion(
+    staleParent.quaternion.clone().invert()
+  );
+  assert.ok(
+    vectorNearlyEqual(staleRoot.position.toArray(), expectedOverrideLocalDelta.toArray(), 1e-6),
+    "stationary support conversion should refresh stale parent matrices before converting world offsets to root-local position deltas"
+  );
+  assert.ok(
+    vectorNearlyEqual(overrideSupport.offset, [0.05, 0, -0.01], 1e-6) &&
+      vectorNearlyEqual(overrideSupport.delta, [0.04, 0, -0.03], 1e-6),
+    "explicit targetOffset should override the solver rootOffset while currentOffset remains world-space state"
+  );
 
   const root = new Object3D();
   const mixer = new AnimationMixer(root);
