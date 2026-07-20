@@ -20,7 +20,11 @@ Public API exported from `src/index.ts`:
 - `CharacterController`
 - `resolveCharacterControllerConfig`
 - `createFlatGroundCharacterWorld`
+- `CharacterAnimationGraph`
+- `resolveCharacterAnimationGraphConfig`
+- `createCharacterAnimationGraphOutputBuffer`
 - controller config/input/snapshot/world-adapter/event/animation-state types
+- animation graph config/snapshot/request/output/issue types
 - item/socket/interaction/actor identifier aliases for future interaction/equipment contracts
 - `CHARACTER_CONTROLLER_COORDINATE_SYSTEM` and `CHARACTER_CONTROLLER_SCHEMA_VERSION`
 
@@ -64,6 +68,55 @@ const saved = controller.snapshot();
 controller.restore(saved);
 ```
 
+## Animation graph request layer
+
+`src/character-animation-graph.ts` is the reusable clip-agnostic layer above `CharacterAnimationState`. It does not sample clips, name app assets, import Three/browser/VRM APIs, mutate bones, or decide masks. It emits semantic requests that an app or runtime adapter can map to authored clips later.
+
+Key surfaces:
+
+- `CharacterAnimationGraph` with deterministic `update()`, `snapshot()`, and `restore()`.
+- `CharacterAnimationGraphConfig` / `resolveCharacterAnimationGraphConfig` for frozen, finite, bounded request ids, thresholds, fade hints, playback-speed clamps, and scan limits.
+- `CharacterAnimationGraphOutput` with bounded `transitions`, `blends`, `playback`, `actions`, and `issues` arrays. Callers that care about hot-path allocation can pass `createCharacterAnimationGraphOutputBuffer()` as `update(animation, { output })`; the arrays are cleared and reused.
+- `CharacterAnimationTransitionRequest`, `CharacterAnimationBlendRequest`, `CharacterAnimationPlaybackRequest`, and `CharacterAnimationActionRequest` for app/runtime adapters.
+
+Default semantic request ids are:
+
+- `locomotion:idle`
+- `locomotion:gait:<controller gaitId>`
+- `posture:standing` and `posture:crouching`
+- `airborne:rise`, `airborne:fall`, and `airborne:landing`
+- `action:<controller action kind>`
+
+These ids are intentionally not clip names. Consumers map them to project-specific clip assets, masks, runtime lanes, or overlay policies outside this package. The ids/prefixes are configurable for projects that want a different semantic namespace.
+
+Transition precedence is explicit and stable:
+
+1. Controller `action-command` events are forwarded as action requests with the highest priority, but they do not replace locomotion/posture output.
+2. Airborne requests (`rise`, `fall`, `landing`) are the `primaryRequestId` while active and outrank grounded locomotion.
+3. Posture/crouch emits an independent standing/crouching blend by `crouchAlpha`.
+4. Grounded locomotion emits idle/gait blend and gait playback requests.
+
+The graph adds start/stop hysteresis for grounded locomotion, a minimum-rise debounce before switching rise to fall, and an optional landing hold window for deterministic handoff after controller landing. Bad or non-finite runtime inputs produce `issues` and safe fallback values instead of poisoning request output. Event/transition scans and action forwarding are bounded by config.
+
+```ts
+import { CharacterAnimationGraph, CharacterController, createFlatGroundCharacterWorld } from "waifu-animation";
+
+const controller = new CharacterController({}, createFlatGroundCharacterWorld());
+const graph = new CharacterAnimationGraph();
+
+const controllerResult = controller.update(1 / 60, {
+  movement: { planarDirection: [0, 0, 1], magnitude: 1, gait: "walk" }
+});
+
+const requests = graph.update(controllerResult.animation, { deltaSeconds: 1 / 60 });
+
+// Map semantic request ids to project clips in the app/runtime adapter, not here.
+console.log(requests.primaryRequestId, requests.playback, requests.blends);
+
+const savedGraph = graph.snapshot();
+graph.restore(savedGraph);
+```
+
 ## World adapter contract
 
 Adapters can implement one or more methods:
@@ -83,7 +136,7 @@ Not implemented in this slice:
 - full traversal: stairs/steps, slope slide, wall sliding, ledge vaulting, moving-platform transform parenting, crouch clearance, root-motion authority policies;
 - action execution: pickup/carry/drop/use/equip/unequip/sit/stand state machines, hand sockets, reach reservations, multi-actor coordination;
 - IK/reach solving integration: the controller only defines item/socket/interaction identifiers and future coordination boundaries;
-- animation graph selection: output events/parameters are clip-agnostic; consumers or later library slices map them to clip blends;
+- app-specific clip selection/binding: the graph emits semantic request ids only; consumers still map those ids to authored clips, runtime lanes, masks, and asset policies;
 - Waifu app integration: `/Warehouse/Waifu` will later own Three/VRM loading, browser input, scene/world/game behavior, physics-engine adapters, and visual gates.
 
-Recommended next slice: implement a reusable animation-graph/request layer that consumes `CharacterAnimationState` and maps gait/posture/locomotion events into clip-agnostic transition requests, still without choosing app-specific clip names.
+Recommended next slice: bind the semantic graph requests to a reusable clip-registry/runtime-lane adapter, still outside `/Warehouse/Waifu`, then validate the adapter against representative locomotion/posture/airborne/action fixtures before any Waifu app integration.
