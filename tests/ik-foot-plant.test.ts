@@ -1143,10 +1143,16 @@ export function runIkFootPlantTests(): void {
     },
     { floorY: -0.035, deltaSeconds: 1 / 60, enterHeight: 0.026, maxPlantedDrift: 0.02, maxRootCompensation: 0.025 }
   );
-  assert.equal(stationaryDriftSolve.supportState, "double-support", "correctable same-contact drift should not release support");
+  assert.equal(
+    stationaryDriftSolve.supportState,
+    "double-support",
+    "correctable same-contact drift should not release support"
+  );
   assert.ok(stationaryDriftSolve.left.maxPreReleaseAnchorError >= 0.021);
   assert.ok(stationaryDriftSolve.issues.some((issue) => issue.includes("planted anchor drift")));
-  assert.ok(Math.hypot(stationaryDriftSolve.rootCompensation[0], stationaryDriftSolve.rootCompensation[2]) <= 0.025 + 1e-6);
+  assert.ok(
+    Math.hypot(stationaryDriftSolve.rootCompensation[0], stationaryDriftSolve.rootCompensation[2]) <= 0.025 + 1e-6
+  );
   assert.equal(stationaryDriftSolve.left.reanchorCount, 0, "same-contact drift must not reacquire/reanchor");
   driftState = stationaryDriftSolve.state;
   const stationaryLiftSolve = solveStationarySupport(
@@ -1414,7 +1420,9 @@ export function runIkFootPlantTests(): void {
   assert.ok(stationaryDoubleTransferSolve.left.maxSlide >= 0.034);
   assert.ok(stationaryDoubleTransferSolve.right.maxSlide >= 0.034);
   assert.ok(
-    !stationaryDoubleTransferSolve.issues.some((issue) => issue.includes("expected stationary support did not acquire")),
+    !stationaryDoubleTransferSolve.issues.some((issue) =>
+      issue.includes("expected stationary support did not acquire")
+    ),
     "low contact transfer without horizontal anchors should not be counted as globally unsupported"
   );
   const stationaryAirborneUnsupportedSolve = solveStationarySupport(
@@ -1464,7 +1472,9 @@ export function runIkFootPlantTests(): void {
   assert.ok(stationaryAirborneUnsupportedSolve.left.maxUnsupportedExpectedDuration >= 1 / 60);
   assert.ok(stationaryAirborneUnsupportedSolve.right.maxUnsupportedExpectedDuration >= 1 / 60);
   assert.ok(
-    stationaryAirborneUnsupportedSolve.issues.some((issue) => issue.includes("expected stationary support did not acquire on either side")),
+    stationaryAirborneUnsupportedSolve.issues.some((issue) =>
+      issue.includes("expected stationary support did not acquire on either side")
+    ),
     "both feet above the support band should still be counted as globally unsupported"
   );
   const stationaryFloorGuardState = stationaryStandingSolve.state;
@@ -1891,7 +1901,16 @@ export function runIkFootPlantTests(): void {
         leftLowerLeg: poleKnee,
         leftFoot: poleAnkle
       })[bone] ?? null,
-    legs: [{ id: "left", hip: "leftUpperLeg", knee: "leftLowerLeg", ankle: "leftFoot", pole: [0, 0, 1], alignAnkleToGround: false }],
+    legs: [
+      {
+        id: "left",
+        hip: "leftUpperLeg",
+        knee: "leftLowerLeg",
+        ankle: "leftFoot",
+        pole: [0, 0, 1],
+        alignAnkleToGround: false
+      }
+    ],
     applyPelvis: false,
     applyLegIk: true
   });

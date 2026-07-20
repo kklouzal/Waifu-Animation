@@ -487,10 +487,14 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
   animationClip: ThreeAnimationClip
 ): ThreeRuntimeClip<TEntry>[] {
   const preservesResidualPelvisCarrier = entryHasResidualPelvisCarrier(entry);
-  if (readThreeRuntimeRootMotionPolicy(entry, animationClip) === "stripped-to-in-place" && !preservesResidualPelvisCarrier)
+  if (
+    readThreeRuntimeRootMotionPolicy(entry, animationClip) === "stripped-to-in-place" &&
+    !preservesResidualPelvisCarrier
+  )
     applyThreeTrackPolicy(animationClip, ROOT_TRANSLATION_EXCLUDE_POLICY);
   if (entry.loop === false) {
-    if (!entryHasVerticalTransitionPelvisCarrier(entry)) applyThreeTrackPolicy(animationClip, OVERLAY_UPPER_BODY_TRACK_POLICY);
+    if (!entryHasVerticalTransitionPelvisCarrier(entry))
+      applyThreeTrackPolicy(animationClip, OVERLAY_UPPER_BODY_TRACK_POLICY);
     animationClip.name = `${entry.id}:overlay`;
     return [createThreeRuntimeClip(entry, mixer, animationClip, "overlay")];
   }
@@ -553,8 +557,7 @@ function entryHasResidualPelvisCarrier(entry: AnimationManifestEntry): boolean {
     metadata.carrier === "hips" &&
     metadata.units === "meters-target-rest-offset" &&
     metadata.bakeMode === "remove-linear-trajectory" &&
-    (metadata.owner === "director-xz" ||
-      (metadata.owner === "none" && metadata.support === "contact-aware-stationary"))
+    (metadata.owner === "director-xz" || (metadata.owner === "none" && metadata.support === "contact-aware-stationary"))
   );
 }
 
@@ -1044,7 +1047,8 @@ export function applyThreeFootPlantResult(
       const previousOffset = getPreviousFootPlantPelvisOffset(pelvis)?.clone() ?? new Vector3();
       clearPreviousFootPlantPelvisOffset(pelvis);
       const offsetLength = lengthVec3(result.pelvisOffset);
-      const targetOffsetLocal = offsetLength > 1e-6 ? worldOffsetToLocal(pelvis, result.pelvisOffset, influence) : ([0, 0, 0] as Vec3);
+      const targetOffsetLocal =
+        offsetLength > 1e-6 ? worldOffsetToLocal(pelvis, result.pelvisOffset, influence) : ([0, 0, 0] as Vec3);
       const smoothingAmount = dampedInfluenceAmount(1, speed, options.deltaSeconds);
       const nextOffset = previousOffset.lerp(
         tmpWorldDirection.set(targetOffsetLocal[0], targetOffsetLocal[1], targetOffsetLocal[2]),
@@ -1143,7 +1147,6 @@ export function applyThreeFootPlantResult(
     issues
   };
 }
-
 
 export function applyThreeStationarySupportResult(
   result: Pick<StationarySupportCompensation, "rootOffset">,

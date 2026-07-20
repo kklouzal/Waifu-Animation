@@ -677,7 +677,12 @@ export async function runMotionRootMotionTests(): Promise<void> {
   });
   const residualBake = extractRawRootMotion(motionSkeleton, residualBakeSource, {
     reference: "absolute",
-    translation: { axes: { x: false, y: false, z: true }, bake: true, bakeMode: "remove-linear-trajectory", loop: true },
+    translation: {
+      axes: { x: false, y: false, z: true },
+      bake: true,
+      bakeMode: "remove-linear-trajectory",
+      loop: true
+    },
     rotation: false
   });
   const bakedTranslations = residualBake.rawAnimation.tracks[0]!.translations.map((key) => key.value);

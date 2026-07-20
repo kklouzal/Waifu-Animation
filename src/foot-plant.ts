@@ -529,7 +529,8 @@ export function solveStationarySupport(
   const sides = [input.left, input.right] as const;
   const sideTelemetry = new Map<StationarySupportContactSide, StationarySupportSideSolveTelemetry>();
   const footInput: FootPlantLegInput[] = [];
-  const floorGuardCandidates: Array<{ id: StationarySupportContactSide; height: number; input: FootPlantLegInput }> = [];
+  const floorGuardCandidates: Array<{ id: StationarySupportContactSide; height: number; input: FootPlantLegInput }> =
+    [];
   const requestedRoot = [0, 0, 0] as Vec3;
   let activeCount = 0;
   let verticalSupportCount = 0;
@@ -635,7 +636,7 @@ export function solveStationarySupport(
           issues.push(`${sideInput.side}: planted contact held through non-lift contact classifier miss`);
         if (driftLimitExceeded) {
           issues.push(
-            `${sideInput.side}: planted anchor drift ${anchorError!.toFixed(4)}m exceeds ${maxPlantedDrift.toFixed(4)}m without source-backed lift`
+            `${sideInput.side}: planted anchor drift ${anchorError.toFixed(4)}m exceeds ${maxPlantedDrift.toFixed(4)}m without source-backed lift`
           );
           sideState.transition = "hold-drift-limit";
         }

@@ -164,10 +164,14 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
 
   const view = new DataView(buffer);
   const version = view.getUint32(4, true);
-  if (version !== VERSION && version !== 2 && version !== 1) throw new Error(`unsupported animation binary version ${version}`);
+  if (version !== VERSION && version !== 2 && version !== 1)
+    throw new Error(`unsupported animation binary version ${version}`);
   const headerBytes = view.getUint32(8, true);
   const trackBytes = view.getUint32(12, true);
-  if (headerBytes !== HEADER_BYTES || (trackBytes !== TRACK_BYTES && trackBytes !== V2_TRACK_BYTES && trackBytes !== LEGACY_TRACK_BYTES))
+  if (
+    headerBytes !== HEADER_BYTES ||
+    (trackBytes !== TRACK_BYTES && trackBytes !== V2_TRACK_BYTES && trackBytes !== LEGACY_TRACK_BYTES)
+  )
     throw new Error("animation binary layout is unsupported");
 
   const duration = view.getFloat32(16, true);

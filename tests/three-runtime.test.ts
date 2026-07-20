@@ -84,9 +84,7 @@ export async function runThreeRuntimeTests(): Promise<void> {
   );
 
   const canonicalVrm0SourceValues = [0.1, 0.2, 0.3, 0.9273618495, -0.4, 0.5, -0.1, 0.7615773106];
-  const pixivOfficialVrm0Rule = canonicalVrm0SourceValues.map((value, index) =>
-    index % 2 === 0 ? -value : value
-  );
+  const pixivOfficialVrm0Rule = canonicalVrm0SourceValues.map((value, index) => (index % 2 === 0 ? -value : value));
   assert.deepEqual(
     adaptNormalizedHumanoidRotationValuesForTargetVrmMetaVersion(canonicalVrm0SourceValues, "0"),
     pixivOfficialVrm0Rule,
@@ -153,7 +151,10 @@ export async function runThreeRuntimeTests(): Promise<void> {
   const hingeThirty = quatFromAxisAngle([1, 0, 0], Math.PI / 6);
   const twistPreserved = quatFromAxisAngle([0, 1, 0], -Math.PI / 7);
   for (const bone of oracleBones) {
-    const sample = new Quaternion().fromArray(hingeThirty).multiply(new Quaternion().fromArray(twistPreserved)).toArray();
+    const sample = new Quaternion()
+      .fromArray(hingeThirty)
+      .multiply(new Quaternion().fromArray(twistPreserved))
+      .toArray();
     assert.ok(
       quaternionNearlyEqual(
         normalizedHumanoidDeltaFromSourceLocalSample(oracleParent, sample, oracleRest),
@@ -173,15 +174,15 @@ export async function runThreeRuntimeTests(): Promise<void> {
   );
   const symmetricLeft = normalizedHumanoidDeltaFromSourceLocalSample(oracleParent, hingeThirty, [0, 0, 0, 1]);
   const symmetricRight = normalizedHumanoidDeltaFromSourceLocalSample(
-    [-oracleParent[0]!, oracleParent[1]!, -oracleParent[2]!, oracleParent[3]!],
-    [-hingeThirty[0]!, hingeThirty[1]!, -hingeThirty[2]!, hingeThirty[3]!],
+    [-oracleParent[0], oracleParent[1], -oracleParent[2], oracleParent[3]],
+    [-hingeThirty[0], hingeThirty[1], -hingeThirty[2], hingeThirty[3]],
     [0, 0, 0, 1]
   );
   assert.ok(
-    Math.abs(symmetricLeft[0]! + symmetricRight[0]!) < 1e-6 &&
-      Math.abs(symmetricLeft[1]! - symmetricRight[1]!) < 1e-6 &&
-      Math.abs(symmetricLeft[2]! + symmetricRight[2]!) < 1e-6 &&
-      Math.abs(symmetricLeft[3]! - symmetricRight[3]!) < 1e-6,
+    Math.abs(symmetricLeft[0] + symmetricRight[0]) < 1e-6 &&
+      Math.abs(symmetricLeft[1] - symmetricRight[1]) < 1e-6 &&
+      Math.abs(symmetricLeft[2] + symmetricRight[2]) < 1e-6 &&
+      Math.abs(symmetricLeft[3] - symmetricRight[3]) < 1e-6,
     "mirrored normalized-delta inputs should preserve VRM-style X/Z quaternion symmetry"
   );
 

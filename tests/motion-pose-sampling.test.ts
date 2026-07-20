@@ -59,7 +59,10 @@ export async function runMotionPoseSamplingTests(): Promise<void> {
       }
     ]
   };
-  const coreRetargetExpected = multiplyQuat(multiplyQuat(coreRetargetSourceSample, invertQuat(coreRetargetSourceRest)), coreRetargetTargetRest);
+  const coreRetargetExpected = multiplyQuat(
+    multiplyQuat(coreRetargetSourceSample, invertQuat(coreRetargetSourceRest)),
+    coreRetargetTargetRest
+  );
   const coreRetargetPose = sampleClipToPose(coreRetargetSkeleton, coreRetargetClip, 1);
   assert.ok(
     !quaternionNearlyEqual(coreRetargetSourceSample, coreRetargetExpected, 1e-4),

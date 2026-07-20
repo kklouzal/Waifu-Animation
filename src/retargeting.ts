@@ -174,7 +174,10 @@ export function diagnoseRetargetingRestAxes(
           ])
         : undefined;
     const strongestSample = rotationTrack
-      ? strongestQuaternionSample(rotationTrack.values, isCanonicalNormalizedDelta ? [0, 0, 0, 1] : (sourceRestQuaternion ?? targetRestQuaternion))
+      ? strongestQuaternionSample(
+          rotationTrack.values,
+          isCanonicalNormalizedDelta ? [0, 0, 0, 1] : (sourceRestQuaternion ?? targetRestQuaternion)
+        )
       : undefined;
     const sourceChildDirection =
       sourceRestChildDirection ??

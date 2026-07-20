@@ -1132,24 +1132,27 @@ function bakeClipMotionCarrierTranslation(
     for (let key = 0; key < track.times.length; key += 1) {
       const offset = key * 3;
       const value: Vec3 = [track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!];
-      track.values.set(bakeLinearTrajectoryValue(value, reference, endpoints, translation.axes, track.times[key]!, duration), offset);
+      track.values.set(
+        bakeLinearTrajectoryValue(value, reference, endpoints, translation.axes, track.times[key]!, duration),
+        offset
+      );
     }
     return;
   }
 
   for (let offset = 0; offset + 2 < track.values.length; offset += 3) {
     track.values.set(
-      bakeReferenceTranslationValue([track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!], reference, translation.axes),
+      bakeReferenceTranslationValue(
+        [track.values[offset]!, track.values[offset + 1]!, track.values[offset + 2]!],
+        reference,
+        translation.axes
+      ),
       offset
     );
   }
 }
 
-function bakeReferenceTranslationValue(
-  value: Vec3,
-  reference: Vec3,
-  axes: Required<MotionExtractionAxisMask>
-): Vec3 {
+function bakeReferenceTranslationValue(value: Vec3, reference: Vec3, axes: Required<MotionExtractionAxisMask>): Vec3 {
   return [axes.x ? reference[0] : value[0], axes.y ? reference[1] : value[1], axes.z ? reference[2] : value[2]];
 }
 
@@ -1189,7 +1192,11 @@ function clipTranslationEndpointDelta(track: AnimationTrack, axes: Required<Moti
 
 type RawAnimationVec3KeyLike = { value: Vec3 };
 
-function maskedEndpointDelta(from: ArrayLike<number>, to: ArrayLike<number>, axes: Required<MotionExtractionAxisMask>): Vec3 {
+function maskedEndpointDelta(
+  from: ArrayLike<number>,
+  to: ArrayLike<number>,
+  axes: Required<MotionExtractionAxisMask>
+): Vec3 {
   return [
     axes.x ? finiteSigned((to[0] ?? 0) - (from[0] ?? 0), 0) : 0,
     axes.y ? finiteSigned((to[1] ?? 0) - (from[1] ?? 0), 0) : 0,
