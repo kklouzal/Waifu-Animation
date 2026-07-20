@@ -417,8 +417,9 @@ export function sampleMotionIntervalDelta(
   const loop = options.loop ?? clip.loop ?? false;
   const from = sampleMotionCarrier(skeleton, clip, fromTime, options);
   const to = sampleMotionCarrier(skeleton, clip, toTime, options);
+  const duration = finiteMotionDuration(clip.duration);
 
-  if (toTime <= fromTime || !Number.isFinite(clip.duration) || clip.duration <= 0) {
+  if (Math.abs(toTime - fromTime) <= EPSILON || duration <= 0) {
     return { from, to, delta: identityTransform() };
   }
 
@@ -426,11 +427,11 @@ export function sampleMotionIntervalDelta(
     return { from, to, delta: carrierTransformDelta(from.transform, to.transform) };
   }
 
-  return {
-    from,
-    to,
-    delta: sampleLoopingIntervalDelta(skeleton, clip, fromTime, toTime, options)
-  };
+  const delta =
+    toTime > fromTime
+      ? sampleLoopingIntervalDelta(skeleton, clip, fromTime, toTime, options)
+      : invertCarrierDelta(sampleLoopingIntervalDelta(skeleton, clip, toTime, fromTime, options));
+  return { from, to, delta };
 }
 
 export function sampleMotionTracks(
@@ -684,31 +685,69 @@ function sampleLoopingIntervalDelta(
   toSeconds: number,
   options: MotionSampleOptions
 ): Transform {
-  const duration = clip.duration;
-  let cursor = fromSeconds;
-  let current = sampleMotionCarrier(skeleton, clip, euclideanModulo(cursor, duration), {
-    ...options,
-    loop: false
-  }).transform;
+  const duration = finiteMotionDuration(clip.duration);
+  let remaining = toSeconds - fromSeconds;
+  if (duration <= 0 || !Number.isFinite(remaining) || remaining <= EPSILON) return identityTransform();
+
   let accumulated = identityTransform();
+  let startLocal = euclideanModulo(fromSeconds, duration);
+  if (duration - startLocal <= EPSILON) startLocal = 0;
 
-  while (cursor < toSeconds) {
-    const nextBoundary = Math.floor(cursor / duration + 1) * duration;
-    const next = Math.min(nextBoundary, toSeconds);
-    const endsAtBoundary = Math.abs(next - nextBoundary) <= EPSILON;
-    const endLocalTime = endsAtBoundary ? duration : euclideanModulo(next, duration);
-    const end = sampleMotionCarrier(skeleton, clip, endLocalTime, { ...options, loop: false }).transform;
-    accumulated = composeCarrierDelta(accumulated, carrierTransformDelta(current, end));
-    cursor = next;
+  const firstSpan = Math.min(remaining, duration - startLocal);
+  if (firstSpan > EPSILON) {
+    const endLocal = startLocal + firstSpan;
+    accumulated = composeCarrierDelta(
+      accumulated,
+      carrierTransformDelta(
+        sampleClipCarrierAtLocalTime(skeleton, clip, startLocal, options),
+        sampleClipCarrierAtLocalTime(
+          skeleton,
+          clip,
+          Math.abs(endLocal - duration) <= EPSILON ? duration : endLocal,
+          options
+        )
+      )
+    );
+    remaining -= firstSpan;
+  }
 
-    if (cursor < toSeconds && endsAtBoundary) {
-      current = sampleMotionCarrier(skeleton, clip, 0, { ...options, loop: false }).transform;
-    } else {
-      current = end;
+  if (remaining > EPSILON) {
+    const fullLoops = Math.floor((remaining + EPSILON) / duration);
+    if (fullLoops > 0) {
+      accumulated = composeCarrierDelta(
+        accumulated,
+        repeatCarrierDelta(
+          carrierTransformDelta(
+            sampleClipCarrierAtLocalTime(skeleton, clip, 0, options),
+            sampleClipCarrierAtLocalTime(skeleton, clip, duration, options)
+          ),
+          fullLoops
+        )
+      );
+      remaining -= fullLoops * duration;
     }
   }
 
+  if (remaining > EPSILON) {
+    accumulated = composeCarrierDelta(
+      accumulated,
+      carrierTransformDelta(
+        sampleClipCarrierAtLocalTime(skeleton, clip, 0, options),
+        sampleClipCarrierAtLocalTime(skeleton, clip, remaining, options)
+      )
+    );
+  }
+
   return accumulated;
+}
+
+function sampleClipCarrierAtLocalTime(
+  skeleton: Skeleton,
+  clip: AnimationClip,
+  localTime: number,
+  options: MotionSampleOptions
+): Transform {
+  return sampleMotionCarrier(skeleton, clip, localTime, { ...options, loop: false }).transform;
 }
 
 function composeCarrierDelta(a: Transform, b: Transform): Transform {

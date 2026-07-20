@@ -2,6 +2,7 @@ import type { AnimationClip, Pose, SampleRepairDiagnostic, Skeleton } from "./te
 import {
   AnimationRuntime,
   assert,
+  buildPackedRuntimeAnimation,
   clonePose,
   createSkeleton,
   diagnoseRetargetingRestAxes,
@@ -13,6 +14,7 @@ import {
   quatFromUnitVectors,
   retargetQuaternionSample,
   sampleClipToPose,
+  samplePackedRuntimeAnimationToPose,
   sampleTrack,
   sanitizeQuaternionTrackValues,
   toFloat32Array,
@@ -78,6 +80,76 @@ export async function runMotionPoseSamplingTests(): Promise<void> {
   assert.ok(
     quaternionNearlyEqual(coreRetargetEvaluation.localPose[1]!.rotation, coreRetargetExpected, 1e-5),
     "AnimationRuntime.evaluate should use the retargeted core sampling path"
+  );
+
+  const normalizedDeltaSourceRest = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+  const normalizedDeltaTargetRest = quatFromAxisAngle([0, 1, 0], Math.PI / 6);
+  const normalizedDelta = quatFromAxisAngle([0, 0, 1], Math.PI / 4);
+  const normalizedDeltaSkeleton = createSkeleton([
+    { name: "root" },
+    { name: "head", parentName: "root", humanoid: "head", rest: { rotation: normalizedDeltaTargetRest } }
+  ]);
+  const normalizedDeltaClip: AnimationClip = {
+    id: "normalized-delta-source-rest",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "head",
+        property: "rotation",
+        rotationSpace: "normalized-humanoid-delta",
+        sourceRestQuaternion: toFloat32Array(normalizedDeltaSourceRest),
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...normalizedDelta])
+      }
+    ]
+  };
+  const normalizedDeltaExpected = multiplyQuat(normalizedDelta, normalizedDeltaTargetRest);
+  assert.ok(
+    quaternionNearlyEqual(
+      sampleClipToPose(normalizedDeltaSkeleton, normalizedDeltaClip, 1)[1]!.rotation,
+      normalizedDeltaExpected,
+      1e-5
+    ),
+    "normalized humanoid delta sampling should ignore source rest metadata for valid delta samples"
+  );
+  assert.ok(
+    quaternionNearlyEqual(
+      samplePackedRuntimeAnimationToPose(
+        normalizedDeltaSkeleton,
+        buildPackedRuntimeAnimation(normalizedDeltaClip, normalizedDeltaSkeleton),
+        1
+      )[1]!.rotation,
+      normalizedDeltaExpected,
+      1e-5
+    ),
+    "packed normalized humanoid delta sampling should match ordinary source-rest-ignore semantics"
+  );
+  const malformedNormalizedDeltaDiagnostics: SampleRepairDiagnostic[] = [];
+  const malformedNormalizedDeltaPose = sampleClipToPose(
+    normalizedDeltaSkeleton,
+    {
+      ...normalizedDeltaClip,
+      id: "malformed-normalized-delta-source-rest",
+      tracks: [
+        {
+          ...normalizedDeltaClip.tracks[0]!,
+          times: toFloat32Array([0]),
+          values: toFloat32Array([0, 0, 0, 0])
+        }
+      ]
+    },
+    0,
+    { diagnostics: malformedNormalizedDeltaDiagnostics }
+  );
+  assert.ok(
+    quaternionNearlyEqual(malformedNormalizedDeltaPose[1]!.rotation, normalizedDeltaTargetRest, 1e-5),
+    "malformed normalized humanoid delta samples should fall back to identity delta before target rest"
+  );
+  assert.ok(
+    malformedNormalizedDeltaDiagnostics.some(
+      (issue) => issue.message === "rotation track quaternion was repaired to a normalizable fallback"
+    ),
+    "malformed normalized humanoid delta samples should still report quaternion repair diagnostics"
   );
 
   function modelPoint(skeleton: Skeleton, pose: Pose, joint: string): [number, number, number] {

@@ -186,7 +186,7 @@ export function diagnoseRetargetingRestAxes(
         : undefined);
     const retargeted =
       isCanonicalNormalizedDelta && strongestSample
-        ? strongestSample
+        ? normalizeQuat(multiplyQuat(strongestSample, targetRestQuaternion))
         : sourceRestQuaternion && strongestSample
           ? retargetQuaternionSample(
               sourceRestQuaternion,

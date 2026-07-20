@@ -5,6 +5,7 @@ import {
   assert,
   createSkeleton,
   createThreeAnimationClip,
+  diagnoseRetargetingRestAxes,
   invertQuat,
   multiplyQuat,
   normalizeQuat,
@@ -164,6 +165,49 @@ export function runRetargetingTests(): void {
       1e-5
     ),
     "official normalized humanoid oracle should implement P * sample * rest^-1 * P^-1"
+  );
+
+  const diagnosticNormalizedDeltaTargetRest = quatFromAxisAngle([0, 1, 0], Math.PI / 2);
+  const diagnosticNormalizedDelta = quatFromAxisAngle([0, 0, 1], Math.PI / 2);
+  const diagnosticNormalizedDeltaSkeleton = createSkeleton([
+    { name: "root" },
+    {
+      name: "leftUpperArm",
+      parentName: "root",
+      humanoid: "leftUpperArm",
+      rest: { rotation: diagnosticNormalizedDeltaTargetRest }
+    },
+    {
+      name: "leftLowerArm",
+      parentName: "leftUpperArm",
+      humanoid: "leftLowerArm",
+      rest: { translation: [0, 0, 1] }
+    }
+  ]);
+  const diagnosticNormalizedDeltaRestAxes = diagnoseRetargetingRestAxes(
+    diagnosticNormalizedDeltaSkeleton,
+    {
+      id: "diagnostic-normalized-delta-target-rest",
+      duration: 1,
+      tracks: [
+        {
+          humanBone: "leftUpperArm",
+          property: "quaternion",
+          rotationSpace: "normalized-humanoid-delta",
+          times: toFloat32Array([0, 1]),
+          values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...diagnosticNormalizedDelta])
+        }
+      ]
+    },
+    { bones: ["leftUpperArm"] }
+  );
+  assert.ok(
+    vectorNearlyEqual(
+      diagnosticNormalizedDeltaRestAxes[0]!.retargetedChildDirection!,
+      rotateVec3ByQuat(multiplyQuat(diagnosticNormalizedDelta, diagnosticNormalizedDeltaTargetRest), [0, 0, 1]),
+      1e-5
+    ),
+    "retargeting diagnostics should apply normalized humanoid deltas on top of target rest"
   );
 
   const targetChildDirectionHingeDelta = quatFromAxisAngle([0, 1, 0], Math.PI / 4);

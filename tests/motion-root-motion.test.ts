@@ -64,11 +64,34 @@ export async function runMotionRootMotionTests(): Promise<void> {
     [5, 0, 0],
     "looped motion intervals should accumulate forward displacement across wrap"
   );
-  const negativeMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0.7, 0.2);
-  assert.deepEqual(
-    negativeMotionDelta.delta.translation,
-    [0, 0, 0],
-    "negative motion intervals should return identity deltas"
+  const negativeMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0.7, 0.2, { loop: false });
+  assert.ok(
+    vectorNearlyEqual(negativeMotionDelta.delta.translation, [-5, 0, 0], 1e-6),
+    "non-looping negative motion intervals should preserve signed clamped deltas"
+  );
+  assert.ok(
+    quaternionNearlyEqual(negativeMotionDelta.delta.rotation, quatFromAxisAngle([0, 1, 0], -Math.PI / 2), 1e-5),
+    "non-looping negative motion intervals should preserve signed clamped rotation deltas"
+  );
+  const backwardLoopingMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0.25, -0.25, {
+    loop: true
+  });
+  assert.ok(
+    vectorNearlyEqual(backwardLoopingMotionDelta.delta.translation, [-5, 0, 0], 1e-5),
+    "looped clip-carrier motion intervals should support backward playback deltas"
+  );
+  assert.ok(
+    quaternionNearlyEqual(backwardLoopingMotionDelta.delta.rotation, quatFromAxisAngle([0, 1, 0], -Math.PI / 2), 1e-5),
+    "looped clip-carrier motion intervals should invert rotation for backward playback"
+  );
+  const largeLoopingMotionDelta = sampleMotionIntervalDelta(motionSkeleton, motionClip, 0, 100.5, { loop: true });
+  assert.ok(
+    vectorNearlyEqual(largeLoopingMotionDelta.delta.translation, [1005, 0, 0], 1e-4),
+    "large looping clip-carrier motion intervals should accumulate full-loop displacement without per-loop drift"
+  );
+  assert.ok(
+    quaternionNearlyEqual(largeLoopingMotionDelta.delta.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 2), 1e-5),
+    "large looping clip-carrier motion intervals should compose full-loop rotations deterministically"
   );
   const signedScaleMotionClip: AnimationClip = {
     id: "signed-scale-motion",
@@ -483,6 +506,24 @@ export async function runMotionRootMotionTests(): Promise<void> {
     equallyWeightedLocomotion.layers.map((layer) => layer.normalizedWeight),
     [0.5, 0.5],
     "locomotion output normalized weights should remain based on total layer weight"
+  );
+  const hugeWeightedLocomotion = synchronizeLocomotionPlayback([
+    { id: "huge-walk", duration: 2, weight: Number.MAX_VALUE },
+    { id: "huge-run", duration: 4, weight: Number.MAX_VALUE }
+  ]);
+  assert.equal(
+    hugeWeightedLocomotion.totalWeight,
+    Number.MAX_VALUE,
+    "huge locomotion weights should saturate exposed totals instead of overflowing"
+  );
+  assert.ok(
+    Math.abs(hugeWeightedLocomotion.synchronizedDuration - 3) < 1e-6,
+    "huge locomotion weights should still produce a finite weighted synchronized duration"
+  );
+  assert.deepEqual(
+    hugeWeightedLocomotion.layers.map((layer) => layer.normalizedWeight),
+    [0.5, 0.5],
+    "huge locomotion weights should keep normalized layer weights finite"
   );
   const zeroLocomotionSync = synchronizeLocomotionPlayback([
     { id: "zero-duration", duration: 0, weight: 1 },
@@ -927,6 +968,63 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     ],
     "invalid-duration runtime layers should keep finite advanced times instead of wrapping through invalid durations"
   );
+  const runtimeInvalidDurationRootMotion = new AnimationRuntime(motionSkeleton);
+  runtimeInvalidDurationRootMotion.setLayer("zero", runtimeZeroDurationClip, {
+    weight: 1,
+    targetWeight: 1,
+    loop: true
+  });
+  const invalidDurationRootMotionUpdate = runtimeInvalidDurationRootMotion.update(0.5, { collectRootMotion: true });
+  assert.deepEqual(
+    invalidDurationRootMotionUpdate.rootMotionDelta,
+    identityTransform(),
+    "invalid-duration runtime layers should not invent root-motion deltas"
+  );
+  assert.equal(
+    invalidDurationRootMotionUpdate.rootMotionLayers.length,
+    0,
+    "invalid-duration runtime layers should not emit root-motion diagnostics"
+  );
+
+  const runtimeMalformedLayerState = new AnimationRuntime(motionSkeleton);
+  const malformedLayer = runtimeMalformedLayerState.setLayer("malformed", motionClip, {
+    weight: 1,
+    targetWeight: 1,
+    time: 0.75
+  });
+  (malformedLayer as unknown as { blendMode: string; loop: unknown }).blendMode = "legacy-override";
+  (malformedLayer as unknown as { blendMode: string; loop: unknown }).loop = "yes";
+  const malformedLayerUpdate = runtimeMalformedLayerState.update(0.5, { collectRootMotion: true });
+  assert.deepEqual(
+    malformedLayerUpdate.rootMotionDelta.translation,
+    [5, 0, 0],
+    "runtime update should recover malformed blend/loop state before root-motion collection"
+  );
+  assert.deepEqual(
+    runtimeMalformedLayerState.evaluate().activeLayers.map((layer) => [layer.id, layer.time, layer.blendMode]),
+    [["malformed", 0.25, "override"]],
+    "runtime evaluation should expose sanitized scheduling state after malformed layer recovery"
+  );
+
+  const runtimeOverflowStep = new AnimationRuntime(motionSkeleton);
+  runtimeOverflowStep.setLayer("overflow", motionClip, {
+    weight: 1,
+    targetWeight: 1,
+    loop: true,
+    time: 0.25,
+    speed: Number.MAX_VALUE
+  });
+  const overflowStepUpdate = runtimeOverflowStep.update(Number.MAX_VALUE, { collectRootMotion: true });
+  assert.equal(
+    runtimeOverflowStep.evaluate().activeLayers[0]?.time,
+    0.25,
+    "overflowing runtime time steps should hold the previous finite clock"
+  );
+  assert.equal(
+    overflowStepUpdate.rootMotionLayers.length,
+    0,
+    "overflowing runtime time steps should not emit unsafe root-motion intervals"
+  );
 
   const runtimeHumanoidRootMotion = new AnimationRuntime(motionSkeleton);
   runtimeHumanoidRootMotion.setLayer("hips-move", motionClip, {
@@ -1151,6 +1249,29 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
       ["motion-b", 1, 2 / 3]
     ],
     "fractional carrier masks should be reflected in root-motion diagnostics"
+  );
+
+  const runtimeHugeRootMotionWeights = new AnimationRuntime(motionSkeleton);
+  const hugeMask = createJointMask(motionSkeleton, 0, { root: 3e38 });
+  runtimeHugeRootMotionWeights.setLayer("huge-a", weightedMotionA, {
+    weight: Number.MAX_VALUE,
+    targetWeight: Number.MAX_VALUE,
+    priority: 2
+  });
+  runtimeHugeRootMotionWeights.setLayer("huge-b", weightedMotionB, {
+    weight: Number.MAX_VALUE,
+    targetWeight: Number.MAX_VALUE,
+    priority: 2,
+    mask: hugeMask
+  });
+  const hugeRootMotionWeightsUpdate = runtimeHugeRootMotionWeights.update(1, { collectRootMotion: true });
+  assert.ok(
+    vectorNearlyEqual(hugeRootMotionWeightsUpdate.rootMotionDelta.translation, [6, 0, 0], 1e-6),
+    "huge finite root-motion weights should normalize without overflowing the blended delta"
+  );
+  assert.ok(
+    hugeRootMotionWeightsUpdate.rootMotionLayers.every((layer) => Number.isFinite(layer.normalizedWeight)),
+    "huge finite root-motion weights should keep diagnostics normalized and finite"
   );
 
   const runtimeMaskedFadeIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });

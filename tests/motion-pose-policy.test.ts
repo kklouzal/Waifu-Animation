@@ -764,6 +764,28 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "crossfade target should dominate after fade completion"
   );
 
+  const runtimeMalformedSourceCrossfade = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const malformedSourceLayer = runtimeMalformedSourceCrossfade.setLayer("old", crossfadeOldClip, {
+    weight: 1,
+    targetWeight: 1,
+    priority: 4
+  });
+  (malformedSourceLayer as unknown as { blendMode: string }).blendMode = "legacy-override";
+  runtimeMalformedSourceCrossfade.crossfade("new", crossfadeNewClip, { priority: 4, fadeSpeed: 1 });
+  runtimeMalformedSourceCrossfade.update(Math.log(2));
+  const malformedSourceCrossfade = runtimeMalformedSourceCrossfade.evaluate();
+  const fadedMalformedSource = malformedSourceCrossfade.activeLayers.find((layer) => layer.id === "old");
+  assert.equal(
+    fadedMalformedSource?.blendMode,
+    "override",
+    "crossfade should sanitize malformed source blend modes before scheduling fades"
+  );
+  assert.equal(fadedMalformedSource?.targetWeight, 0, "crossfade should fade sanitized same-priority override sources");
+  assert.ok(
+    Math.abs(malformedSourceCrossfade.localPose[2]!.translation[0] - 6) < 1e-6,
+    "crossfade should keep blended pose output deterministic after malformed source recovery"
+  );
+
   const additiveNudgeClip: AnimationClip = {
     id: "additive-nudge",
     duration: 1,

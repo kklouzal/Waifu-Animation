@@ -484,6 +484,7 @@ export function defaultTrackSample(property: NormalizedTrackProperty): number[] 
 }
 
 export function rotationSampleFallback(track: TrackMetadataForSampling): Quat {
+  if (isNormalizedHumanoidDeltaRotationTrack(track)) return cloneQuat(undefined);
   return track.sourceRestQuaternion?.length === 4
     ? cloneNormalizedQuat(track.sourceRestQuaternion)
     : cloneQuat(undefined);

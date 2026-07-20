@@ -38,6 +38,8 @@ import {
 } from "./pose.js";
 import { type Skeleton, createRestPose, localToModelPose } from "./skeleton.js";
 
+const MAX_RUNTIME_ROOT_MOTION_LOOPS = 10_000;
+
 export type LayerBlendMode = "override" | "additive";
 
 export type AnimationLayer = {
@@ -175,19 +177,21 @@ export function synchronizeLocomotionPlayback(
   const phase = clamp01(Number.isFinite(options.phase) ? options.phase! : 0);
   const durations = layers.map(readLocomotionLayerDuration);
   const rawWeights = layers.map((layer, index) => finiteNonNegative(weights?.[index] ?? layer.weight, 0));
-  const totalWeight = rawWeights.reduce((sum, weight) => sum + weight, 0);
-  let activeWeight = 0;
-  let weightedDuration = 0;
+  const totalWeightStats = readFiniteNonNegativeWeightStats(rawWeights);
+  const activeWeights: number[] = [];
+  const activeDurations: number[] = [];
 
   for (let index = 0; index < layers.length; index += 1) {
     const duration = durations[index]!;
     const weight = rawWeights[index]!;
     if (weight <= EPSILON || duration <= EPSILON) continue;
-    activeWeight += weight;
-    weightedDuration += duration * weight;
+    activeWeights.push(weight);
+    activeDurations.push(duration);
   }
 
-  const synchronizedDuration = activeWeight > EPSILON ? weightedDuration / activeWeight : 0;
+  const activeWeightStats = readFiniteNonNegativeWeightStats(activeWeights);
+  const activeWeight = activeWeightStats.total;
+  const synchronizedDuration = weightedFiniteNonNegativeAverage(activeDurations, activeWeights, activeWeightStats);
   const outputLayers = layers.map((layer, index): LocomotionPlaybackSyncLayer => {
     const duration = durations[index]!;
     const weight = rawWeights[index]!;
@@ -195,7 +199,7 @@ export function synchronizeLocomotionPlayback(
       id: layer.id ?? String(index),
       duration,
       weight,
-      normalizedWeight: totalWeight > EPSILON ? weight / totalWeight : 0,
+      normalizedWeight: normalizeFiniteNonNegativeWeight(weight, totalWeightStats),
       playbackSpeed: synchronizedDuration > EPSILON && duration > EPSILON ? duration / synchronizedDuration : 0,
       time: duration > EPSILON ? duration * phase : 0,
       ratio: phase,
@@ -203,7 +207,7 @@ export function synchronizeLocomotionPlayback(
     };
   });
 
-  return { synchronizedDuration, totalWeight, activeWeight, phase, layers: outputLayers };
+  return { synchronizedDuration, totalWeight: totalWeightStats.total, activeWeight, phase, layers: outputLayers };
 }
 
 export class AnimationRuntime {
@@ -219,7 +223,7 @@ export class AnimationRuntime {
   }
 
   setLayer(id: string, clip: AnimationClip, options: AnimationLayerOptions = {}): AnimationLayer {
-    const blendMode = options.blendMode ?? "override";
+    const blendMode = sanitizeLayerBlendMode(options.blendMode);
     const layer: AnimationLayer = {
       id,
       clip,
@@ -229,7 +233,7 @@ export class AnimationRuntime {
       fadeSpeed: finiteNonNegative(options.fadeSpeed, 8),
       speed: finiteNonNegative(options.speed, 1),
       priority: finiteNonNegative(options.priority, 0),
-      loop: options.loop ?? clip.loop ?? false,
+      loop: resolveLayerLoop(options.loop, clip.loop, false),
       blendMode,
       ...(options.motionCarrier ? { motionCarrier: options.motionCarrier } : {}),
       ...(options.mask ? { mask: options.mask } : {}),
@@ -242,7 +246,7 @@ export class AnimationRuntime {
   crossfade(id: string, clip: AnimationClip, options: CrossfadeOptions = {}): AnimationLayer {
     const existing = this.layers.get(id);
     const resetTime = options.resetTime ?? !existing;
-    const blendMode = options.blendMode ?? existing?.blendMode ?? "override";
+    const blendMode = sanitizeLayerBlendMode(options.blendMode ?? existing?.blendMode);
     const targetWeight = sanitizeLayerWeight(blendMode, options.targetWeight ?? options.weight ?? 1, 1);
     const fadeSpeed = finiteNonNegative(options.fadeSpeed, 8);
     const priority = finiteNonNegative(options.priority ?? existing?.priority, 0);
@@ -257,7 +261,7 @@ export class AnimationRuntime {
       fadeSpeed,
       speed: finiteNonNegative(options.speed ?? existing?.speed, 1),
       priority,
-      loop: options.loop ?? clip.loop ?? existing?.loop ?? false,
+      loop: resolveLayerLoop(options.loop, clip.loop, existing?.loop, false),
       blendMode,
       ...(options.motionCarrier
         ? { motionCarrier: options.motionCarrier }
@@ -277,6 +281,7 @@ export class AnimationRuntime {
       const fromIds = options.fromIds ? new Set(options.fromIds) : undefined;
       const excludeIds = new Set([id, ...(options.excludeIds ?? [])]);
       for (const source of this.layers.values()) {
+        sanitizeLayerState(source);
         if (excludeIds.has(source.id)) continue;
         if (source.blendMode !== "override") continue;
         if (source.priority !== priority) continue;
@@ -305,22 +310,23 @@ export class AnimationRuntime {
   }
 
   update(deltaSeconds: number, options: RuntimeUpdateOptions = {}): RuntimeUpdateResult {
-    const delta = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
+    const delta = finiteNonNegative(deltaSeconds, 0);
     const intervals: RuntimeMotionInterval[] = [];
     for (const layer of this.layers.values()) {
       sanitizeLayerState(layer);
       const fromTime = layer.time;
       const fromWeight = layer.weight;
-      const advancedTime = layer.time + delta * layer.speed;
+      const advancedTime = advanceLayerTime(fromTime, delta, layer.speed);
       layer.time = advancedTime;
       const alpha = dampAlpha(layer.fadeSpeed, delta);
-      layer.weight += (layer.targetWeight - layer.weight) * alpha;
+      layer.weight = fadeLayerWeight(layer, alpha);
       const toWeight = layer.weight;
       if (
         options.collectRootMotion &&
         layer.blendMode === "override" &&
         (fromWeight > 0.0001 || toWeight > 0.0001) &&
-        delta > 0
+        delta > 0 &&
+        shouldCollectRootMotionInterval(layer, fromTime, advancedTime)
       ) {
         const sampleOptions = {
           ...(layer.motionCarrier ? { carrier: layer.motionCarrier } : {}),
@@ -329,13 +335,16 @@ export class AnimationRuntime {
           ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
           skipUnsupportedTracks: true
         };
+        const interval = shouldSampleRootMotionInterval(layer, fromTime, advancedTime)
+          ? sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, advancedTime, sampleOptions)
+          : sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, fromTime, sampleOptions);
         intervals.push({
           layer,
           fromTime,
           toTime: advancedTime,
           fromWeight,
           toWeight,
-          interval: sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, advancedTime, sampleOptions)
+          interval
         });
       }
       layer.time = finalizeLayerTime(layer, advancedTime);
@@ -351,7 +360,7 @@ export class AnimationRuntime {
     const active = Array.from(this.layers.values())
       .map((layer) => sanitizeLayerState(layer))
       .filter((layer) => isLayerActive(layer))
-      .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+      .sort(compareLayerOrder);
 
     const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];
     const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
@@ -431,11 +440,69 @@ function sanitizeLayerWeight(blendMode: LayerBlendMode, value: number | undefine
   return blendMode === "additive" ? finiteSigned(value, fallback) : finiteNonNegative(value, fallback);
 }
 
+function sanitizeLayerBlendMode(value: LayerBlendMode | undefined): LayerBlendMode {
+  return value === "additive" ? "additive" : "override";
+}
+
+function resolveLayerLoop(...candidates: unknown[]): boolean {
+  for (const candidate of candidates) {
+    if (typeof candidate === "boolean") return candidate;
+  }
+  return false;
+}
+
 function readLocomotionLayerDuration(layer: LocomotionBlendLayerInput): number {
   return finiteNonNegative(layer.duration ?? layer.clip?.duration, 0);
 }
 
+type FiniteNonNegativeWeightStats = {
+  total: number;
+  max: number;
+  scaledTotal: number;
+};
+
+function readFiniteNonNegativeWeightStats(weights: readonly number[]): FiniteNonNegativeWeightStats {
+  let max = 0;
+  for (const weight of weights) max = Math.max(max, finiteNonNegative(weight, 0));
+  if (!(max > 0)) return { total: 0, max: 0, scaledTotal: 0 };
+
+  let scaledTotal = 0;
+  for (const weight of weights) scaledTotal += finiteNonNegative(weight, 0) / max;
+  if (!(scaledTotal > 0)) return { total: 0, max: 0, scaledTotal: 0 };
+
+  const total = max * scaledTotal;
+  return { total: Number.isFinite(total) ? total : Number.MAX_VALUE, max, scaledTotal };
+}
+
+function normalizeFiniteNonNegativeWeight(weight: number, stats: FiniteNonNegativeWeightStats): number {
+  const safeWeight = finiteNonNegative(weight, 0);
+  if (!(safeWeight > 0) || !(stats.total > EPSILON) || !(stats.max > 0) || !(stats.scaledTotal > 0)) return 0;
+  return safeWeight / stats.max / stats.scaledTotal;
+}
+
+function weightedFiniteNonNegativeAverage(
+  values: readonly number[],
+  weights: readonly number[],
+  stats: FiniteNonNegativeWeightStats
+): number {
+  if (!(stats.max > 0) || !(stats.scaledTotal > EPSILON)) return 0;
+  let maxValue = 0;
+  for (const value of values) maxValue = Math.max(maxValue, finiteNonNegative(value, 0));
+  if (!(maxValue > 0)) return 0;
+
+  let scaledAverage = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    const value = finiteNonNegative(values[index], 0);
+    const normalizedWeight = normalizeFiniteNonNegativeWeight(weights[index] ?? 0, stats);
+    scaledAverage += (value / maxValue) * normalizedWeight;
+  }
+  const average = maxValue * scaledAverage;
+  return Number.isFinite(average) ? average : Number.MAX_VALUE;
+}
+
 function sanitizeLayerState(layer: AnimationLayer): AnimationLayer {
+  layer.blendMode = sanitizeLayerBlendMode(layer.blendMode);
+  layer.loop = resolveLayerLoop(layer.loop, layer.clip.loop, false);
   layer.time = finiteNonNegative(layer.time, 0);
   layer.weight = sanitizeLayerWeight(layer.blendMode, layer.weight, 0);
   layer.targetWeight = sanitizeLayerWeight(layer.blendMode, layer.targetWeight, 0);
@@ -443,6 +510,62 @@ function sanitizeLayerState(layer: AnimationLayer): AnimationLayer {
   layer.speed = finiteNonNegative(layer.speed, 0);
   layer.priority = finiteNonNegative(layer.priority, 0);
   return layer;
+}
+
+function fadeLayerWeight(layer: AnimationLayer, alpha: number): number {
+  const amount = clamp01(alpha);
+  const faded = layer.weight + (layer.targetWeight - layer.weight) * amount;
+  return sanitizeLayerWeight(layer.blendMode, faded, 0);
+}
+
+function advanceLayerTime(time: number, deltaSeconds: number, speed: number): number {
+  const base = finiteNonNegative(time, 0);
+  const delta = finiteNonNegative(deltaSeconds, 0);
+  const playbackSpeed = finiteNonNegative(speed, 0);
+  if (delta <= 0 || playbackSpeed <= 0) return base;
+  const step = delta * playbackSpeed;
+  if (!Number.isFinite(step) || step <= 0) return base;
+  const advanced = base + step;
+  return Number.isFinite(advanced) ? advanced : base;
+}
+
+function shouldCollectRootMotionInterval(layer: AnimationLayer, fromTime: number, toTime: number): boolean {
+  const duration = layer.clip.duration;
+  if (!Number.isFinite(duration) || duration <= EPSILON) return false;
+  if (!Number.isFinite(fromTime) || !Number.isFinite(toTime)) return false;
+  const span = toTime - fromTime;
+  if (!Number.isFinite(span) || Math.abs(span) <= EPSILON) return false;
+  if (layer.loop) return true;
+
+  const fromClipTime = clampNonLoopingClipTime(fromTime, duration);
+  const toClipTime = clampNonLoopingClipTime(toTime, duration);
+  return Math.abs(toClipTime - fromClipTime) > EPSILON;
+}
+
+function shouldSampleRootMotionInterval(layer: AnimationLayer, fromTime: number, toTime: number): boolean {
+  if (!shouldCollectRootMotionInterval(layer, fromTime, toTime)) return false;
+  const duration = layer.clip.duration;
+  if (!layer.loop) return true;
+  return Math.abs(toTime - fromTime) / duration <= MAX_RUNTIME_ROOT_MOTION_LOOPS;
+}
+
+function clampNonLoopingClipTime(time: number, duration: number): number {
+  return Math.min(duration, Math.max(0, time));
+}
+
+function compareLayerOrder(
+  a: Pick<AnimationLayer, "id" | "priority">,
+  b: Pick<AnimationLayer, "id" | "priority">
+): number {
+  const priorityDelta = a.priority - b.priority;
+  if (priorityDelta !== 0) return priorityDelta;
+  return compareLayerId(a.id, b.id);
+}
+
+function compareLayerId(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
 }
 
 function isLayerActive(layer: AnimationLayer): boolean {
@@ -471,46 +594,57 @@ function readRootMotionEffectiveWeight(layer: AnimationLayer, carrierJoint: numb
   if (layerWeight <= 0) return 0;
   if (!layer.mask) return layerWeight;
   if (carrierJoint < 0 || carrierJoint >= layer.mask.length) return 0;
-  return layerWeight * finiteNonNegative(layer.mask[carrierJoint], 0);
+  return multiplyFiniteNonNegative(layerWeight, finiteNonNegative(layer.mask[carrierJoint], 0));
 }
 
 function readRootMotionIntervalEffectiveWeight(interval: RuntimeMotionInterval): number {
   const carrierJoint = interval.interval.from.jointIndex;
   const fromWeight = readRootMotionEffectiveWeight(interval.layer, carrierJoint, interval.fromWeight);
   const toWeight = readRootMotionEffectiveWeight(interval.layer, carrierJoint, interval.toWeight);
-  return (fromWeight + toWeight) * 0.5;
+  return averageFiniteNonNegative(fromWeight, toWeight);
+}
+
+function multiplyFiniteNonNegative(a: number, b: number): number {
+  if (!(a > 0) || !(b > 0)) return 0;
+  const product = a * b;
+  return Number.isFinite(product) ? product : Number.MAX_VALUE;
+}
+
+function averageFiniteNonNegative(a: number, b: number): number {
+  const first = finiteNonNegative(a, 0);
+  const second = finiteNonNegative(b, 0);
+  const max = Math.max(first, second);
+  if (max <= 0) return 0;
+  return max * ((first / max + second / max) * 0.5);
 }
 
 function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold: number): RuntimeUpdateResult {
+  const blendThreshold = sanitizeBlendThreshold(threshold);
   let rootMotionDelta = identityTransform();
   const rootMotionLayers: RuntimeRootMotionLayerDelta[] = [];
   const active = intervals
     .filter(
       (interval) => interval.layer.blendMode === "override" && readRootMotionIntervalEffectiveWeight(interval) > 0.0001
     )
-    .sort((a, b) => a.layer.priority - b.layer.priority || a.layer.id.localeCompare(b.layer.id));
+    .sort((a, b) => compareLayerOrder(a.layer, b.layer));
 
   for (let index = 0; index < active.length; ) {
     const priority = active[index]!.layer.priority;
     const group: RuntimeMotionInterval[] = [];
-    let totalWeight = 0;
     while (index < active.length && active[index]!.layer.priority === priority) {
       const item = active[index]!;
-      const effectiveWeight = readRootMotionIntervalEffectiveWeight(item);
       group.push(item);
-      totalWeight += effectiveWeight;
       index += 1;
     }
-    if (totalWeight <= 0) continue;
+    const weightedGroup = readRootMotionGroupWeights(group);
+    if (weightedGroup.entries.length === 0 || weightedGroup.totalWeight <= 0) continue;
 
-    for (const item of group) {
-      const effectiveWeight = readRootMotionIntervalEffectiveWeight(item);
-      const normalizedWeight = effectiveWeight / totalWeight;
+    for (const { item, weight, normalizedWeight } of weightedGroup.entries) {
       rootMotionLayers.push({
         id: item.layer.id,
         clipId: item.layer.clip.id,
         priority: item.layer.priority,
-        weight: effectiveWeight,
+        weight,
         normalizedWeight,
         fromTime: item.fromTime,
         toTime: item.toTime,
@@ -518,16 +652,41 @@ function blendRootMotionIntervals(intervals: RuntimeMotionInterval[], threshold:
         delta: item.interval.delta
       });
     }
-    const groupDelta = blendRootMotionGroup(group, totalWeight);
+    const groupDelta = blendRootMotionGroup(weightedGroup.entries);
     rootMotionDelta =
-      totalWeight < threshold ? lerpTransform(rootMotionDelta, groupDelta, totalWeight / threshold) : groupDelta;
+      weightedGroup.totalWeight < blendThreshold
+        ? lerpTransform(rootMotionDelta, groupDelta, weightedGroup.totalWeight / blendThreshold)
+        : groupDelta;
   }
 
   return { rootMotionDelta, rootMotionLayers };
 }
 
-function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: number): Transform {
-  if (!(totalWeight > EPSILON)) return identityTransform();
+type WeightedRuntimeMotionInterval = {
+  item: RuntimeMotionInterval;
+  weight: number;
+  normalizedWeight: number;
+};
+
+function readRootMotionGroupWeights(group: RuntimeMotionInterval[]): {
+  totalWeight: number;
+  entries: WeightedRuntimeMotionInterval[];
+} {
+  const entries: WeightedRuntimeMotionInterval[] = [];
+  for (const item of group) {
+    const weight = finiteNonNegative(readRootMotionIntervalEffectiveWeight(item), 0);
+    if (weight <= EPSILON) continue;
+    entries.push({ item, weight, normalizedWeight: 0 });
+  }
+  const stats = readFiniteNonNegativeWeightStats(entries.map((entry) => entry.weight));
+  if (!(stats.total > 0)) return { totalWeight: 0, entries: [] };
+
+  for (const entry of entries) entry.normalizedWeight = normalizeFiniteNonNegativeWeight(entry.weight, stats);
+  return { totalWeight: stats.total, entries };
+}
+
+function blendRootMotionGroup(group: WeightedRuntimeMotionInterval[]): Transform {
+  if (group.length === 0) return identityTransform();
 
   const translation: Vec3 = [0, 0, 0];
   const scale: Vec3 = [0, 0, 0];
@@ -535,10 +694,8 @@ function blendRootMotionGroup(group: RuntimeMotionInterval[], totalWeight: numbe
   let firstRotation: Quat | undefined;
   let acceptedWeight = 0;
 
-  for (const item of group) {
-    const weight = finiteNonNegative(readRootMotionIntervalEffectiveWeight(item), 0);
-    if (weight <= EPSILON) continue;
-    const normalizedWeight = weight / totalWeight;
+  for (const { item, normalizedWeight } of group) {
+    if (!(normalizedWeight > EPSILON)) continue;
     const delta = item.interval.delta;
 
     translation[0] += finiteSigned(delta.translation[0], 0) * normalizedWeight;
