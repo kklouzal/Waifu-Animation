@@ -74,7 +74,7 @@ export function validatePose(skeleton: Skeleton, pose: readonly Transform[]): Po
     return issues;
   }
   for (let index = 0; index < pose.length; index += 1) {
-    if (!isFiniteTransform(pose[index]!)) {
+    if (!isFinitePoseTransform(pose[index])) {
       issues.push({
         joint: skeleton.joints[index]!.name,
         index,
@@ -171,7 +171,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
   const fallbackPose = options.fallbackPose ?? skeleton.restPose;
   const jointCount = skeleton.joints.length;
   const output = createRestPose(skeleton);
-  const totalWeights = new Float32Array(jointCount);
+  const totalWeights = new Array<number>(jointCount).fill(0);
   const rotationSums: Quat[] = Array.from({ length: jointCount }, () => [0, 0, 0, 0] as Quat);
   const translationSums = Array.from({ length: jointCount }, () => [0, 0, 0] as [number, number, number]);
   const scaleSums = Array.from({ length: jointCount }, () => [0, 0, 0] as [number, number, number]);
@@ -187,7 +187,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
       if (!isFiniteTransform(poseTransform)) continue;
       const maskWeight = readMaskWeight(layer.mask, joint);
       const weight = layerWeight * maskWeight;
-      if (weight <= 0) continue;
+      if (!Number.isFinite(weight) || weight <= 0) continue;
       accumulateTransform(rotationSums[joint]!, translationSums[joint]!, scaleSums[joint]!, poseTransform, weight);
       totalWeights[joint] = (totalWeights[joint] ?? 0) + weight;
     }
@@ -212,7 +212,7 @@ export function blendPoses(skeleton: Skeleton, layers: PoseLayer[], options: Ble
     }
 
     const total = totalWeights[joint]!;
-    if (total <= 0) {
+    if (!Number.isFinite(total) || total <= 0) {
       output[joint] = cloneTransform(fallbackTransform);
       continue;
     }
@@ -238,13 +238,14 @@ function accumulateTransform(
   transform: Transform,
   weight: number
 ): void {
+  const normalizedRotation = normalizeQuat(transform.rotation);
   const hasExistingRotation =
     Math.abs(rotationSum[0]) + Math.abs(rotationSum[1]) + Math.abs(rotationSum[2]) + Math.abs(rotationSum[3]) > 0;
-  const reference = hasExistingRotation ? normalizeQuat(rotationSum, transform.rotation) : transform.rotation;
+  const reference = hasExistingRotation ? normalizeQuat(rotationSum, normalizedRotation) : normalizedRotation;
   const rotation =
-    dotQuat(reference, transform.rotation) < 0
-      ? ([-transform.rotation[0], -transform.rotation[1], -transform.rotation[2], -transform.rotation[3]] as Quat)
-      : transform.rotation;
+    dotQuat(reference, normalizedRotation) < 0
+      ? ([-normalizedRotation[0], -normalizedRotation[1], -normalizedRotation[2], -normalizedRotation[3]] as Quat)
+      : normalizedRotation;
   translationSum[0] += transform.translation[0] * weight;
   translationSum[1] += transform.translation[1] * weight;
   translationSum[2] += transform.translation[2] * weight;
@@ -255,6 +256,10 @@ function accumulateTransform(
   scaleSum[0] += transform.scale[0] * weight;
   scaleSum[1] += transform.scale[1] * weight;
   scaleSum[2] += transform.scale[2] * weight;
+}
+
+function isFinitePoseTransform(value: unknown): value is Transform {
+  return typeof value === "object" && value !== null && isFiniteTransform(value as Transform);
 }
 
 export function additiveDeltaPose(restPose: readonly Transform[], samplePose: readonly Transform[]): Pose {

@@ -589,7 +589,11 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
   const names = new Map<string, number>();
   const humanoidToIndex = new Map<HumanoidBoneName, number>();
   for (let index = 0; index < skeleton.joints.length; index += 1) {
-    const joint = skeleton.joints[index]!;
+    const joint = skeleton.joints[index];
+    if (!isSkeletonJointObject(joint)) {
+      issues.push({ index, message: "joint is invalid" });
+      continue;
+    }
     const hasValidName = typeof joint.name === "string" && joint.name.length > 0;
     if (!hasValidName) issues.push({ index, message: "joint has no name" });
     const existingNameIndex = names.get(joint.name);
@@ -607,16 +611,16 @@ export function validateSkeleton(skeleton: Skeleton): SkeletonValidationIssue[] 
     if (joint.parentIndex >= index)
       issues.push({ index, joint: joint.name, message: "parent index must be before child" });
     if (joint.parentIndex < NO_PARENT) issues.push({ index, joint: joint.name, message: "parent index is invalid" });
-    if (!isFiniteTransform(joint.rest)) issues.push({ index, joint: joint.name, message: "rest transform is invalid" });
+    if (!isFiniteSkeletonTransform(joint.rest))
+      issues.push({ index, joint: joint.name, message: "rest transform is invalid" });
     if (index < skeleton.parents.length && skeleton.parents[index] !== joint.parentIndex) {
       issues.push({ index, joint: joint.name, message: "parents entry does not match joint parent" });
     }
     const restPoseTransform = skeleton.restPose[index];
-    if (restPoseTransform) {
-      if (!isFiniteTransform(restPoseTransform))
-        issues.push({ index, joint: joint.name, message: "rest pose transform is invalid" });
-      if (!transformsEqual(restPoseTransform, joint.rest))
-        issues.push({ index, joint: joint.name, message: "rest pose entry does not match joint rest" });
+    if (!isFiniteSkeletonTransform(restPoseTransform)) {
+      issues.push({ index, joint: joint.name, message: "rest pose transform is invalid" });
+    } else if (isFiniteSkeletonTransform(joint.rest) && !transformsEqual(restPoseTransform, joint.rest)) {
+      issues.push({ index, joint: joint.name, message: "rest pose entry does not match joint rest" });
     }
     if (nameToIndex && hasValidName && nameToIndex.get(joint.name) !== index) {
       issues.push({ index, joint: joint.name, message: "nameToIndex entry does not match joint index" });
@@ -727,6 +731,18 @@ function transformsEqual(a: Transform, b: Transform): boolean {
   );
 }
 
+function isSkeletonJointObject(value: unknown): value is SkeletonJoint {
+  return typeof value === "object" && value !== null;
+}
+
+function isFiniteSkeletonTransform(value: unknown): value is Transform {
+  return isSkeletonTransformObject(value) && isFiniteTransform(value);
+}
+
+function isSkeletonTransformObject(value: unknown): value is Transform {
+  return typeof value === "object" && value !== null;
+}
+
 export function createRestPose(skeleton: Skeleton): Transform[] {
   return cloneTransformList(skeleton.restPose);
 }
@@ -805,8 +821,8 @@ export function updateLocalToModelPoseRange(
     throw new Error(`local pose length ${localPose.length} does not match skeleton ${skeleton.joints.length}`);
   }
   const jointCount = skeleton.joints.length;
-  const from = sanitizeLocalToModelBoundary(options.from, NO_PARENT, jointCount, "from");
-  const to = sanitizeLocalToModelBoundary(options.to, jointCount - 1, jointCount, "to");
+  const from = sanitizeLocalToModelBoundary(options.from, NO_PARENT, jointCount, "from", false);
+  const to = sanitizeLocalToModelBoundary(options.to, jointCount - 1, jointCount, "to", true);
   out.length = skeleton.joints.length;
   if (to < 0) return out;
 
@@ -842,13 +858,18 @@ function sanitizeLocalToModelBoundary(
   value: number | undefined,
   fallback: number,
   jointCount: number,
-  label: string
+  label: string,
+  clampHigh: boolean
 ): number {
   const resolved = value ?? fallback;
   if (!Number.isInteger(resolved)) throw new Error(`local-to-model ${label} must be an integer`);
   if (resolved === NO_PARENT) return resolved;
   if (resolved < 0) throw new Error(`local-to-model ${label} is out of range`);
-  return Math.min(resolved, jointCount - 1);
+  if (resolved >= jointCount) {
+    if (clampHigh && jointCount > 0) return jointCount - 1;
+    throw new Error(`local-to-model ${label} is out of range`);
+  }
+  return resolved;
 }
 
 function resolveRequiredJointIndex(skeleton: Skeleton, joint: JointReference, label: string): number {

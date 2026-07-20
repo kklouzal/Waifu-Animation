@@ -35,6 +35,7 @@ import {
   iterateJointsReverseDepthFirst,
   iterateRawSkeletonBreadthFirst,
   iterateRawSkeletonDepthFirst,
+  localToModelPose,
   normalizeTransform,
   optimizeRawAnimation,
   quatFromAxisAngle,
@@ -46,6 +47,7 @@ import {
   tryBuildAdditiveAnimationClip,
   tryBuildAnimationFromRawAnimation,
   tryOptimizeRawAnimation,
+  updateLocalToModelPoseRange,
   validateAnimationInputs,
   validateClip,
   validateRawAnimation,
@@ -249,6 +251,30 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
         issue.index === 2 && issue.joint === "head" && issue.message === "rest pose entry does not match joint rest"
     ),
     "validateSkeleton should report stale rest pose entries"
+  );
+  const sparseRestPose = skeleton.restPose.map((transform) => cloneTransform(transform));
+  sparseRestPose[2] = undefined as unknown as Skeleton["restPose"][number];
+  const sparseRestPoseSkeleton = {
+    ...skeleton,
+    restPose: sparseRestPose
+  };
+  assert.ok(
+    validateSkeleton(sparseRestPoseSkeleton).some(
+      (issue) => issue.index === 2 && issue.joint === "head" && issue.message === "rest pose transform is invalid"
+    ),
+    "validateSkeleton should report sparse rest pose entries instead of silently accepting holes"
+  );
+  const missingJointRestSkeleton = {
+    ...skeleton,
+    joints: skeleton.joints.map((joint, index) =>
+      index === 1 ? ({ ...joint, rest: undefined } as unknown as Skeleton["joints"][number]) : joint
+    )
+  };
+  assert.ok(
+    validateSkeleton(missingJointRestSkeleton).some(
+      (issue) => issue.index === 1 && issue.joint === "spine" && issue.message === "rest transform is invalid"
+    ),
+    "validateSkeleton should report malformed joint rest transforms instead of throwing"
   );
   const shortRestPoseSkeleton = {
     ...skeleton,
@@ -455,6 +481,15 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
   assert.throws(
     () => Array.from(iterateJointsDepthFirst(traversalSkeleton, "missing")),
     /depth-first traversal joint missing was not found/
+  );
+  const traversalModelPose = localToModelPose(traversalSkeleton, traversalSkeleton.restPose);
+  assert.throws(
+    () =>
+      updateLocalToModelPoseRange(traversalSkeleton, traversalSkeleton.restPose, traversalModelPose, {
+        from: traversalSkeleton.joints.length
+      }),
+    /local-to-model from is out of range/,
+    "local-to-model range updates should reject first-joint indices beyond the skeleton instead of clamping to a leaf"
   );
 
   const rawSkeleton = createRawSkeleton([

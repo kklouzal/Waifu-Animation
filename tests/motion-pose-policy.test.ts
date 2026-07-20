@@ -18,13 +18,20 @@ import {
   createSubtreeJointMask,
   filterTracksByNamePolicy,
   normalizeQuat,
+  quatFromAxisAngle,
   sampleClipToPose,
   sanitizeQuaternionTrackValues,
   toFloat32Array,
   validateJointMask,
   validatePose
 } from "./test-api.js";
-import { makeAuthoredLoopClip, makeTransformTrack, sampleNodPose, skeleton } from "./test-helpers.js";
+import {
+  makeAuthoredLoopClip,
+  makeTransformTrack,
+  quaternionNearlyEqual,
+  sampleNodPose,
+  skeleton
+} from "./test-helpers.js";
 
 export async function runMotionPosePolicyTests(): Promise<void> {
   const sampled = sampleNodPose();
@@ -318,6 +325,15 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "positive mask weights above 1 should remain supported"
   );
 
+  const hugeWeightPose = clonePose(skeleton.restPose);
+  hugeWeightPose[0]!.translation = [5, 2, -1];
+  const hugeWeightBlend = blendPoses(skeleton, [{ pose: hugeWeightPose, weight: 1e39 }], { threshold: 0.01 });
+  assert.deepEqual(
+    hugeWeightBlend[0]!.translation,
+    [5, 2, -1],
+    "finite blend weights above Float32 range should not overflow accumulated ownership"
+  );
+
   const nonZeroFallbackPose = clonePose(skeleton.restPose);
   nonZeroFallbackPose[0]!.translation = [3, 2, 1];
   nonZeroFallbackPose[1]!.translation = [4, 5, 6];
@@ -332,6 +348,17 @@ export async function runMotionPosePolicyTests(): Promise<void> {
       (issue) => issue.index === 1 && issue.message === "transform is not finite or quaternion is invalid"
     ),
     "validatePose should still report malformed layer transforms"
+  );
+  const sparsePose = clonePose(skeleton.restPose);
+  sparsePose[1] = undefined as unknown as (typeof sparsePose)[number];
+  assert.ok(
+    validatePose(skeleton, sparsePose).some(
+      (issue) =>
+        issue.index === 1 &&
+        issue.joint === "spine" &&
+        issue.message === "transform is not finite or quaternion is invalid"
+    ),
+    "validatePose should report sparse pose entries instead of throwing"
   );
   const invalidBlend = blendPoses(skeleton, [{ pose: invalidLayerPose, weight: 1 }], {
     threshold: 0.01,
@@ -586,6 +613,23 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "higher layer weights should influence normalized blend more"
   );
   assert.ok(Math.abs(Math.hypot(...weightedBlend[2]!.rotation) - 1) < 1e-5);
+
+  const unnormalizedIdentityPose = clonePose(skeleton.restPose);
+  unnormalizedIdentityPose[2]!.rotation = [0, 0, 0, 2];
+  const quarterTurnPose = clonePose(skeleton.restPose);
+  quarterTurnPose[2]!.rotation = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
+  const normalizedInputRotationBlend = blendPoses(
+    skeleton,
+    [
+      { pose: unnormalizedIdentityPose, weight: 1 },
+      { pose: quarterTurnPose, weight: 1 }
+    ],
+    { threshold: 0.01 }
+  );
+  assert.ok(
+    quaternionNearlyEqual(normalizedInputRotationBlend[2]!.rotation, quatFromAxisAngle([1, 0, 0], Math.PI / 4), 1e-6),
+    "finite non-unit input quaternions should be normalized before weighted pose blending"
+  );
 
   const lowerPriorityTranslateClip: AnimationClip = {
     id: "lower-priority-translate",
@@ -961,6 +1005,21 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     ),
     ["head.rotation", "hips.translation"],
     "source track regex rules should distinguish properties on the same source bone"
+  );
+  const threeAliasPropertyPolicyClip: AnimationClip = {
+    id: "three-alias-source-policy",
+    duration: 1,
+    tracks: [
+      { humanBone: "head", property: "quaternion", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0, 1]) },
+      { humanBone: "hips", property: "position", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }
+    ]
+  };
+  assert.deepEqual(
+    applySourceTrackPolicy(threeAliasPropertyPolicyClip, {
+      include: [/^head\.rotation$/, /^hips\.translation$/]
+    }).tracks.map((track) => `${track.humanBone ?? track.joint}.${track.property}`),
+    ["head.quaternion", "hips.position"],
+    "source track regex rules should match normalized property aliases for Three-facing source properties"
   );
   assert.deepEqual(
     applySourceTrackPolicy(baseAuthoredClip, AUTHORED_BASE_SOURCE_TRACK_POLICY).tracks.map(

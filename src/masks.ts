@@ -40,7 +40,7 @@ function sourceTrackPropertyNames(track: AnimationTrack): string[] {
   const declared = String(track.property);
   const normalized = normalizedTrackProperty(declared);
   const runtime = normalized === "rotation" ? "quaternion" : normalized === "translation" ? "position" : normalized;
-  return Array.from(new Set([declared, ...(runtime ? [runtime] : [])]));
+  return Array.from(new Set([declared, ...(normalized ? [normalized] : []), ...(runtime ? [runtime] : [])]));
 }
 
 function sourceTrackNames(track: AnimationTrack): string[] {
