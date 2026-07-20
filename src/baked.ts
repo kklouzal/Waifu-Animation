@@ -1,11 +1,5 @@
 import { type Mat4, type Vec3, transformPoint } from "./math.js";
-import {
-  cloneFiniteMat4,
-  cloneFiniteVec3,
-  isFiniteMat4,
-  sanitizeNonNegativeIntegerWithFlooredFallbackOrZero,
-  sanitizePositiveIntegerWithFlooredFallback
-} from "./numeric-helpers.js";
+import { cloneFiniteMat4, cloneFiniteVec3, isFiniteMat4 } from "./numeric-helpers.js";
 import { NO_PARENT, type JointReference, type Skeleton, type SkeletonJoint, resolveJointIndex } from "./skeleton.js";
 
 export type BakedCameraJointPredicate = (joint: SkeletonJoint, index: number, skeleton: Skeleton) => boolean;
@@ -63,9 +57,14 @@ export type RigidInstanceBounds = {
 
 const UNIT_CUBE_MIN: Vec3 = [-0.5, -0.5, -0.5];
 const UNIT_CUBE_MAX: Vec3 = [0.5, 0.5, 0.5];
+const MAX_RIGID_INSTANCE_COUNT = 1_048_576;
+const MAX_RIGID_BUFFER_COMPONENTS = MAX_RIGID_INSTANCE_COUNT * 16;
 
 export function resolveBakedCameraJointIndex(skeleton: Skeleton, options: BakedCameraJointOptions = {}): number {
-  if (options.joint !== undefined) return resolveOptionalJointIndex(skeleton, options.joint);
+  if (options.joint !== undefined) {
+    const explicit = resolveOptionalJointIndex(skeleton, options.joint);
+    if (explicit >= 0) return explicit;
+  }
 
   if (options.predicate) {
     for (let index = 0; index < skeleton.joints.length; index += 1) {
@@ -76,10 +75,10 @@ export function resolveBakedCameraJointIndex(skeleton: Skeleton, options: BakedC
   const needle = options.includes ?? "camera";
   if (needle.length === 0) return -1;
   const caseSensitive = options.caseSensitive ?? false;
-  const search = caseSensitive ? needle : needle.toLocaleLowerCase();
+  const search = caseSensitive ? needle : needle.toLowerCase();
   for (let index = 0; index < skeleton.joints.length; index += 1) {
     const name = skeleton.joints[index]!.name;
-    const haystack = caseSensitive ? name : name.toLocaleLowerCase();
+    const haystack = caseSensitive ? name : name.toLowerCase();
     if (haystack.includes(search)) return index;
   }
   return -1;
@@ -93,11 +92,11 @@ export function getBakedCameraJointOverride(
   const jointIndex = resolveBakedCameraJointIndex(skeleton, options);
   if (jointIndex < 0 || jointIndex >= skeleton.joints.length) return undefined;
   const source = modelMatrices[jointIndex];
-  if (!isFiniteMat4(source, { requireIntegerLength: true }) && options.fallbackMatrix === undefined) return undefined;
+  if (!isExactFiniteMat4(source) && !isExactFiniteMat4(options.fallbackMatrix)) return undefined;
   return {
     jointIndex,
     jointName: skeleton.joints[jointIndex]!.name,
-    matrix: cloneFiniteMat4(source, { fallback: options.fallbackMatrix, requireIntegerLength: true })
+    matrix: cloneExactFiniteMat4(source, options.fallbackMatrix)
   };
 }
 
@@ -114,9 +113,10 @@ export function updateRigidInstanceMatrices(
   options: RigidInstanceMatrixOptions = {}
 ): Mat4[] {
   const count = resolveRigidInstanceCount(modelMatrices, options);
+  const matrices = resolveRigidInstanceMatrices(modelMatrices, options, count);
   out.length = count;
   for (let index = 0; index < count; index += 1) {
-    out[index] = resolveRigidInstanceMatrix(modelMatrices, options, index);
+    out[index] = matrices[index]!;
   }
   return out;
 }
@@ -126,17 +126,20 @@ export function updateRigidInstanceMatrixBuffer(
   out: RigidInstanceMatrixBuffer,
   options: RigidInstanceMatrixBufferOptions = {}
 ): RigidInstanceMatrixBuffer {
-  const offset = sanitizeNonNegativeIntegerWithFlooredFallbackOrZero(options.offset, 0);
-  const stride = sanitizePositiveIntegerWithFlooredFallback(options.stride, 16);
+  const offset = sanitizeNonNegativeInteger(options.offset, 0);
+  const stride = Math.max(16, sanitizePositiveInteger(options.stride, 16));
   const count = resolveRigidInstanceCount(modelMatrices, options);
-  const requiredLength = count > 0 ? offset + (count - 1) * stride + 16 : 0;
+  const requiredLength = computeRigidBufferRequiredLength(count, offset, stride);
+  if (requiredLength === undefined)
+    throw new RangeError("rigid instance matrix buffer range exceeds safe array bounds");
   if (out instanceof Float32Array && out.length < requiredLength) {
     throw new Error(`rigid instance matrix buffer requires ${requiredLength} components, received ${out.length}`);
   }
   if (Array.isArray(out) && out.length < requiredLength) out.length = requiredLength;
 
+  const matrices = resolveRigidInstanceMatrices(modelMatrices, options, count);
   for (let index = 0; index < count; index += 1) {
-    const matrix = resolveRigidInstanceMatrix(modelMatrices, options, index);
+    const matrix = matrices[index]!;
     const base = offset + index * stride;
     for (let component = 0; component < 16; component += 1) {
       out[base + component] = matrix[component]!;
@@ -193,8 +196,16 @@ function resolveRigidInstanceMatrix(
   outputIndex: number
 ): Mat4 {
   const sourceIndex = options.jointIndices?.[outputIndex] ?? outputIndex;
-  const source = Number.isInteger(sourceIndex) && sourceIndex >= 0 ? modelMatrices[sourceIndex] : undefined;
-  return cloneFiniteMat4(source, { fallback: options.fallbackMatrix, requireIntegerLength: true });
+  const source = Number.isSafeInteger(sourceIndex) && sourceIndex >= 0 ? modelMatrices[sourceIndex] : undefined;
+  return cloneExactFiniteMat4(source, options.fallbackMatrix);
+}
+
+function resolveRigidInstanceMatrices(
+  modelMatrices: readonly MatrixLike[],
+  options: Pick<RigidInstanceMatrixOptions, "fallbackMatrix" | "jointIndices">,
+  count: number
+): Mat4[] {
+  return Array.from({ length: count }, (_, index) => resolveRigidInstanceMatrix(modelMatrices, options, index));
 }
 
 function resolveRigidInstanceCount(
@@ -202,8 +213,49 @@ function resolveRigidInstanceCount(
   options: Pick<RigidInstanceMatrixOptions, "count" | "jointIndices">
 ): number {
   const fallback = options.jointIndices ? options.jointIndices.length : modelMatrices.length;
-  const count = sanitizeNonNegativeIntegerWithFlooredFallbackOrZero(options.count, fallback);
-  return Math.min(count, fallback);
+  const count = sanitizeNonNegativeInteger(options.count, fallback);
+  const resolved = Math.min(count, fallback);
+  if (resolved > MAX_RIGID_INSTANCE_COUNT) {
+    throw new RangeError(`rigid instance count exceeds ${MAX_RIGID_INSTANCE_COUNT}`);
+  }
+  return resolved;
+}
+
+function isExactFiniteMat4(matrix: MatrixLike | undefined): matrix is MatrixLike {
+  if (matrix?.length !== 16 || !isFiniteMat4(matrix)) return false;
+  for (let index = 0; index < 16; index += 1) {
+    if (!Number.isFinite(Math.fround(matrix[index]!))) return false;
+  }
+  return true;
+}
+
+function cloneExactFiniteMat4(matrix: MatrixLike | undefined, fallback: MatrixLike | undefined): Mat4 {
+  if (isExactFiniteMat4(matrix)) {
+    const clone = cloneFiniteMat4(matrix);
+    if (isFiniteMat4(clone)) return clone;
+  }
+  if (isExactFiniteMat4(fallback)) {
+    const clone = cloneFiniteMat4(fallback);
+    if (isFiniteMat4(clone)) return clone;
+  }
+  return cloneFiniteMat4(undefined);
+}
+
+function computeRigidBufferRequiredLength(count: number, offset: number, stride: number): number | undefined {
+  if (count <= 0) return 0;
+  const required = offset + (count - 1) * stride + 16;
+  return Number.isSafeInteger(required) && required >= 0 && required <= MAX_RIGID_BUFFER_COMPONENTS
+    ? required
+    : undefined;
+}
+
+function sanitizePositiveInteger(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && value! > 0 ? value! : Math.max(1, Math.floor(fallback));
+}
+
+function sanitizeNonNegativeInteger(value: number | undefined, fallback: number): number {
+  if (value === undefined) return Number.isSafeInteger(fallback) && fallback >= 0 ? fallback : 0;
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function resolveLocalBounds(min: Vec3 | undefined, max: Vec3 | undefined): { min: Vec3; max: Vec3 } {
