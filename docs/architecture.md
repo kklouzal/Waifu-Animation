@@ -9,17 +9,21 @@
 - `attachments`: Ozz-style joint attachment transform composition for props, targets, and other renderer-agnostic consumers, including reusable bindings that pre-resolve attachment joints and offset matrices.
 - `clip`: decoded binary clip tracks, finite-value checks, quaternion continuity, and sampling into local pose buffers.
 - `binary`: versioned `.waifuanim.bin` encoding and decoding for animation keyframe payloads.
+- `tracks`: generic Ozz-style user-channel track validation, build, sampling, optimization, and bounded trigger-edge queries.
 - `pose`: pose cloning, normalized blending, additive deltas, joint masks, and pose validation.
 - `runtime`: weighted layer stack, priorities, first-class override crossfade orchestration, additive layers, optional evaluation diagnostics, and final local/model pose evaluation.
+- `skinning`: reusable matrix-palette skinning for positions, normals, tangents, inverse-bind palettes, remaps, output reuse, and overlap diagnostics.
+- `baked`: baked-sample helpers for camera joints, rigid-instance matrices, and rigid-instance bounds.
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
 - `manifest`: manifest include loading, duplicate/id validation, root-motion policy/provenance metadata readers, clip asset inspection, usable/rejected manifest helpers.
+- `asset-validation`: manifest-entry asset loading, binary decode inspection, semantic coverage/root-motion/loop reports, and accepted/rejected/quarantined summaries.
 - `importer-config`: app-agnostic Ozz-style offline import planning for additive references, raw motion extraction, optimization, user tracks, baked camera joints, and rigid instances.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.
 - `ik`: two-bone IK target solve foundation, world-space correction quaternions for consumers, and an Ozz-inspired foot-plant planning job with ankle target correction, optional ground-slope rejection, pelvis compensation, target clamping, and explicit skipped/clamped statuses.
 - `face`: viseme stack limiting, configurable viseme smoothing, reusable facial expression composition, mouth envelope smoothing, and blink scheduling.
 - `debug` and `validation`: rotation/translation/scale pose delta metrics, invalid pose reports, and deterministic input checks.
-- `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, base/overlay/debug runtime clip construction for Three `AnimationMixer`, and sanitized app-facing runtime clip snapshots/influence diagnostics.
+- `three`: decoded clip to Three binding, rest-pose retargeting into normalized VRM bones, track policy application, base/overlay/debug runtime clip construction for Three `AnimationMixer`, skinned/debug geometry and rigid-instance upload adapters, and sanitized app-facing runtime clip snapshots/influence diagnostics.
 
 ### 2026-06-08 hardening update
 

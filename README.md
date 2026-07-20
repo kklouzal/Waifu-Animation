@@ -40,8 +40,11 @@ npm test
 - `skeleton`: Ozz-style skeleton representation, humanoid mapping, local-to-model conversion.
 - `attachments`: renderer-agnostic Ozz-style joint attachment transform helpers.
 - `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
+- `tracks`: generic user-channel tracks, sampling, optimization, and bounded edge triggering.
 - `motion`: explicit motion-carrier sampling and interval deltas for root-motion consumers.
 - `pose`: rest pose creation, blending, additive layers, masks, pose validation.
+- `skinning`: reusable matrix-palette skinning for positions, normals, and tangents.
+- `baked`: Ozz baked-sample style camera-joint, rigid-instance matrix, and bounds helpers.
 - `runtime`: deterministic layer stack, crossfades, priorities, explicit root-motion delta collection, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters.
 - `manifest`: manifest includes, duplicate/id validation, clip asset inspection, usable/rejected clip helpers.
@@ -51,7 +54,7 @@ npm test
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
 - `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
-- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded authored animation clips, track policies, runtime clip lanes, action preparation, base-loop seam/transition policy helpers, overlay fade helpers, sanitized clip snapshots, reusable procedural application hooks, and base/overlay/debug influence diagnostics.
+- `three`: Three.js `AnimationClip`/`AnimationMixer` adapter for decoded authored animation clips, track policies, runtime clip lanes, action preparation, base-loop seam/transition policy helpers, overlay fade helpers, sanitized clip snapshots, reusable procedural application hooks, skinned/debug geometry and instancing adapters, and base/overlay/debug influence diagnostics.
 - `debug`, `validation`, and `asset-validation`: pose metrics, invalid transform diagnostics, runtime snapshots, input checks, and manifest/clip asset validation.
 
 ## Pipeline

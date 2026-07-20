@@ -670,6 +670,38 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     }).some((issue) => issue.message === "raw skeleton joint has invalid humanoid bone pelvis"),
     "validateRawSkeleton should reject invalid humanoid identifiers"
   );
+  const overLimitRawSkeleton = createWideRawSkeletonForLimitTest(1025);
+  assert.ok(
+    validateRawSkeleton(overLimitRawSkeleton).some(
+      (issue) => issue.message === "raw skeleton exceeds Ozz-style 1024 joint safety limit"
+    ),
+    "validateRawSkeleton should report over-limit raw skeletons without recursing through hostile full payloads"
+  );
+  assert.throws(
+    () => countRawSkeletonJoints(overLimitRawSkeleton),
+    /raw skeleton exceeds Ozz-style 1024 joint safety limit/,
+    "countRawSkeletonJoints should reject over-limit raw skeletons instead of traversing unbounded input"
+  );
+  assert.throws(
+    () => Array.from(iterateRawSkeletonDepthFirst(overLimitRawSkeleton)),
+    /raw skeleton exceeds Ozz-style 1024 joint safety limit/,
+    "raw depth-first traversal should enforce the Ozz-style joint safety cap"
+  );
+  assert.throws(
+    () => Array.from(iterateRawSkeletonBreadthFirst(overLimitRawSkeleton)),
+    /raw skeleton exceeds Ozz-style 1024 joint safety limit/,
+    "raw breadth-first traversal should enforce the Ozz-style joint safety cap"
+  );
+  assert.throws(
+    () => cloneRawSkeleton(overLimitRawSkeleton),
+    /raw skeleton exceeds Ozz-style 1024 joint safety limit/,
+    "cloneRawSkeleton should enforce the Ozz-style joint safety cap"
+  );
+  assert.throws(
+    () => buildSkeletonFromRawSkeleton(overLimitRawSkeleton),
+    /raw skeleton exceeds Ozz-style 1024 joint safety limit/,
+    "raw skeleton builder should reject over-limit raw skeletons before traversal"
+  );
 
   const editableRawAnimationTrack = createRawAnimationJointTrack({ joint: "leftUpperArm" });
   editableRawAnimationTrack.translations.push({ time: 0, value: [0, 0, 0] }, { time: 2, value: [2, 0, 0] });
@@ -871,6 +903,28 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     optimizedRawViaFunction.tracks[0]!.translations.length,
     2,
     "optimizeRawAnimation should expose the same reduction path"
+  );
+  const denseRawOptimizerKeyCount = 4096;
+  const denseRawOptimizerSource = createRawAnimation({
+    id: "dense-raw-optimizer",
+    duration: 1,
+    tracks: [
+      {
+        joint: "hips",
+        translations: Array.from({ length: denseRawOptimizerKeyCount }, (_unused, index) => {
+          const time = index / (denseRawOptimizerKeyCount - 1);
+          return { time, value: [Math.sin(time * Math.PI * 11) * 0.1 + time * 0.05, 0, 0] };
+        })
+      }
+    ]
+  });
+  assert.equal(
+    optimizeRawAnimation(denseRawOptimizerSource, {
+      skeleton,
+      tolerances: { translation: 0, rotation: 0, scale: 0 }
+    }).tracks[0]!.translations.length,
+    denseRawOptimizerKeyCount,
+    "raw animation optimization should handle dense key tracks through bounded iterative segmentation"
   );
 
   const propagatedErrorSkeleton = createSkeleton([
@@ -1694,4 +1748,8 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
   );
 
   return { rawBuiltClip, rawBuiltPose };
+}
+
+function createWideRawSkeletonForLimitTest(jointCount: number): ReturnType<typeof createRawSkeleton> {
+  return createRawSkeleton(Array.from({ length: jointCount }, (_unused, index) => ({ name: `limit${index}` })));
 }

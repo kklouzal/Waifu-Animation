@@ -1005,21 +1005,28 @@ function decimateRawAnimationKeys(
   if (keys.length <= 2) return keys.map((key) => cloneRawAnimationKey(key, property));
 
   const included = new Array<boolean>(keys.length).fill(false);
+  const segments: [number, number][] = [[0, keys.length - 1]];
   included[0] = true;
   included[keys.length - 1] = true;
-  markRawAnimationRequiredKeys(keys, property, 0, keys.length - 1, tolerance, included);
+  while (segments.length > 0) {
+    const [left, right] = segments.pop()!;
+    const candidate = findRawAnimationRequiredKey(keys, property, left, right, tolerance);
+    if (candidate < 0) continue;
+    included[candidate] = true;
+    if (candidate - left > 1) segments.push([left, candidate]);
+    if (right - candidate > 1) segments.push([candidate, right]);
+  }
   return keys.filter((_, index) => included[index]).map((key) => cloneRawAnimationKey(key, property));
 }
 
-function markRawAnimationRequiredKeys(
+function findRawAnimationRequiredKey(
   keys: readonly (RawAnimationVec3Key | RawAnimationQuaternionKey)[],
   property: NormalizedTrackProperty,
   left: number,
   right: number,
-  tolerance: number,
-  included: boolean[]
-): void {
-  if (right - left <= 1) return;
+  tolerance: number
+): number {
+  if (right - left <= 1) return -1;
   let maxError = -1;
   let candidate = -1;
   for (let index = left + 1; index < right; index += 1) {
@@ -1029,10 +1036,7 @@ function markRawAnimationRequiredKeys(
       candidate = index;
     }
   }
-  if (candidate < 0 || maxError <= tolerance) return;
-  included[candidate] = true;
-  markRawAnimationRequiredKeys(keys, property, left, candidate, tolerance, included);
-  markRawAnimationRequiredKeys(keys, property, candidate, right, tolerance, included);
+  return candidate >= 0 && maxError > tolerance ? candidate : -1;
 }
 
 function rawAnimationKeyInterpolationError(

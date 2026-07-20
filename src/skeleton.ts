@@ -238,6 +238,7 @@ export function createRawSkeletonJoint(definition: RawSkeletonJointDefinition): 
 export function cloneRawSkeleton(rawSkeleton: RawSkeleton): RawSkeleton {
   const active = new Set<RawSkeletonJoint>();
   const visited = new Set<RawSkeletonJoint>();
+  let jointCount = 0;
 
   function cloneJoint(joint: RawSkeletonJoint, path: string): RawSkeletonJoint {
     assertRawJointObject(joint, path);
@@ -245,6 +246,11 @@ export function cloneRawSkeleton(rawSkeleton: RawSkeleton): RawSkeleton {
     if (visited.has(joint)) throw new Error(`raw skeleton reuses the same joint object at ${path}`);
     active.add(joint);
     visited.add(joint);
+    jointCount += 1;
+    if (jointCount > OZZ_MAX_JOINTS) {
+      active.delete(joint);
+      throw new Error(`raw skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit`);
+    }
     const cloned: RawSkeletonJoint = { name: joint.name, children: [] };
     if (joint.rest !== undefined) cloned.rest = cloneTransform(joint.rest);
     if (joint.humanoid !== undefined) cloned.humanoid = joint.humanoid;
@@ -284,6 +290,10 @@ export function* iterateRawSkeletonDepthFirst(
     if (visited.has(joint)) throw new Error(`raw skeleton reuses the same joint object at ${path}`);
     active.add(joint);
     visited.add(joint);
+    if (order >= OZZ_MAX_JOINTS) {
+      active.delete(joint);
+      throw new Error(`raw skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit`);
+    }
     yield {
       index: order,
       depth,
@@ -328,6 +338,9 @@ export function* iterateRawSkeletonBreadthFirst(
       assertRawJointObject(joint, path);
       if (visited.has(joint)) throw new Error(`raw skeleton contains a cycle or shared joint at ${path}`);
       visited.add(joint);
+      if (order >= OZZ_MAX_JOINTS) {
+        throw new Error(`raw skeleton exceeds Ozz-style ${OZZ_MAX_JOINTS} joint safety limit`);
+      }
       yield {
         index: order,
         depth,
@@ -397,6 +410,10 @@ export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValida
       });
       reportedJointLimit = true;
     }
+    if (jointCount > OZZ_MAX_JOINTS) {
+      active.delete(joint);
+      return;
+    }
 
     if (typeof joint.name !== "string" || joint.name.length === 0) {
       issues.push({ index, path, message: "raw skeleton joint is missing a name" });
@@ -446,6 +463,7 @@ export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValida
     for (let childIndex = 0; childIndex < joint.children.length; childIndex += 1) {
       const child = joint.children[childIndex]!;
       visit(child, `${path}/${rawPathSegment(child, childIndex)}`);
+      if (jointCount > OZZ_MAX_JOINTS) break;
     }
     active.delete(joint);
   }
@@ -453,6 +471,7 @@ export function validateRawSkeleton(rawSkeleton: RawSkeleton): RawSkeletonValida
   for (let rootIndex = 0; rootIndex < roots.length; rootIndex += 1) {
     const root = roots[rootIndex]!;
     visit(root, rawPathSegment(root, rootIndex));
+    if (jointCount > OZZ_MAX_JOINTS) break;
   }
   return issues;
 }

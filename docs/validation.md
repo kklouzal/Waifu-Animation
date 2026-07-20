@@ -13,7 +13,7 @@ npm run build
 Current coverage includes:
 
 - finite transform and clip validation, including duplicate resolved target-channel rejection;
-- VRM humanoid identifier and hierarchy validation for skeleton joints, humanoid maps, and clip `humanBone` tracks;
+- VRM humanoid identifier and hierarchy validation for skeleton joints, humanoid maps, raw skeleton traversal/build caps, and clip `humanBone` tracks;
 - quaternion sanitization and shortest-path retargeting, including normalized `sourceRestQuaternion` metadata, binary source-rest roundtrips, malformed source-rest encode rejection, and rotation sample quaternion validation;
 - malformed binary payload rejection, including invalid target kinds, malformed optional metadata presence flags, and misaligned float tables;
 - manifest metadata hardening, including malformed runtime JSON status/root-motion policy/provenance rejection, structural unusable-clip filtering, asset-report classification of structural rejects, and rejected-report surfacing;
