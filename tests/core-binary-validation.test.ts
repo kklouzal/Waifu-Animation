@@ -1,8 +1,10 @@
 import type { AnimationClip } from "./test-api.js";
 import { assert, decodeAnimationBinary, encodeAnimationBinary, toFloat32Array } from "./test-api.js";
 import {
+  align4ForTest,
   binaryFloatByteOffsetForTest,
   createLegacyV1NodBinary,
+  makeSourceRestQuaternionClip,
   nodClip,
   quaternionNearlyEqual
 } from "./test-helpers.js";
@@ -34,6 +36,74 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
   assert.equal(decodedNodClip.tracks.length, 1);
   assert.deepEqual(Array.from(decodedNodClip.tracks[0]!.times), [0, 0.5, 1]);
   assert.ok(decodedNodClip.tracks[0]!.values instanceof Float32Array);
+  const wrappedNodBinary = new Uint8Array(decodedNodClip.tracks[0]!.values.buffer.byteLength + 32);
+  wrappedNodBinary.set(new Uint8Array(encodeAnimationBinary(nodClip)), 16);
+  const decodedWrappedNodClip = decodeAnimationBinary(
+    new Uint8Array(wrappedNodBinary.buffer, 16, encodeAnimationBinary(nodClip).byteLength),
+    "wrapped-nod"
+  );
+  wrappedNodBinary.fill(0, 16);
+  assert.deepEqual(
+    Array.from(decodedWrappedNodClip.tracks[0]!.times),
+    [0, 0.5, 1],
+    "decodeAnimationBinary should copy ArrayBufferView input instead of aliasing the caller-owned backing buffer"
+  );
+  const normalizedDeltaClip: AnimationClip = {
+    id: "binary-normalized-delta",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "head",
+        property: "rotation",
+        rotationSpace: "normalized-humanoid-delta",
+        times: toFloat32Array([0]),
+        values: toFloat32Array([0, 0, 0, 1])
+      }
+    ]
+  };
+  assert.equal(
+    decodeAnimationBinary(encodeAnimationBinary(normalizedDeltaClip), "binary-normalized-delta").tracks[0]!
+      .rotationSpace,
+    "normalized-humanoid-delta",
+    "v3 binary roundtrips should preserve normalized humanoid delta rotation-space metadata"
+  );
+  const mixedTargetKindClip: AnimationClip = {
+    id: "binary-mixed-target-kinds",
+    duration: 1,
+    tracks: [
+      { joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([1, 0, 0]) },
+      { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([2, 0, 0]) }
+    ]
+  };
+  const decodedMixedTargetKindClip = decodeAnimationBinary(
+    encodeAnimationBinary(mixedTargetKindClip),
+    "binary-mixed-target-kinds"
+  );
+  assert.deepEqual(
+    decodedMixedTargetKindClip.tracks.map((track) => [track.joint, track.humanBone, Array.from(track.values)]),
+    [
+      ["head", undefined, [1, 0, 0]],
+      [undefined, "head", [2, 0, 0]]
+    ],
+    "binary target records should preserve joint-vs-humanBone identity even when names match"
+  );
+  const duplicateDecodedChannelBinary = encodeAnimationBinary({
+    id: "duplicate-decoded-channel",
+    duration: 1,
+    tracks: [
+      { joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) },
+      { joint: "neck", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }
+    ]
+  });
+  new Uint8Array(duplicateDecodedChannelBinary).set(
+    new TextEncoder().encode("head"),
+    binaryStringByteOffsetForTest(duplicateDecodedChannelBinary) + 4
+  );
+  assert.throws(
+    () => decodeAnimationBinary(duplicateDecodedChannelBinary, "duplicate-decoded-channel"),
+    /animation track 1 duplicate target channel head\.translation/,
+    "decodeAnimationBinary should reject duplicate target channels from corrupt binary string-table references"
+  );
   const decodedLegacyNodClip = decodeAnimationBinary(createLegacyV1NodBinary(), "legacy-nod");
   assert.equal(decodedLegacyNodClip.id, "legacy-nod");
   assert.equal(decodedLegacyNodClip.loop, true);
@@ -44,6 +114,12 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
   assert.ok(
     quaternionNearlyEqual(Array.from(decodedLegacyNodClip.tracks[0]!.values.slice(4, 8)), [0.15, 0, 0, 0.9887], 1e-6),
     "decodeAnimationBinary should read legacy v1 track/string/float offsets using the v1 record size"
+  );
+  const decodedV2ChildDirectionClip = decodeAnimationBinary(createV2SourceRestChildDirectionBinary(), "v2-child");
+  assert.deepEqual(
+    Array.from(decodedV2ChildDirectionClip.tracks[0]!.sourceRestChildDirection ?? []),
+    [0, 1, 0],
+    "decodeAnimationBinary should read v2 source-rest child-direction payloads from 44-byte track records"
   );
   const absentSourceRestFlagBinary = encodeAnimationBinary(nodClip);
   new DataView(absentSourceRestFlagBinary).setUint32(32 + 28, 0, true);
@@ -59,6 +135,27 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     () => decodeAnimationBinary(invalidSourceRestFlagBinary, "invalid-source-rest-flag"),
     /animation track 0 source-rest presence flag is invalid/,
     "decodeAnimationBinary should reject malformed source-rest presence flags"
+  );
+  const invalidLayoutVersionBinary = encodeAnimationBinary(nodClip);
+  new DataView(invalidLayoutVersionBinary).setUint32(12, 44, true);
+  assert.throws(
+    () => decodeAnimationBinary(invalidLayoutVersionBinary, "invalid-layout-version"),
+    /animation binary layout is unsupported/,
+    "decodeAnimationBinary should reject version/layout hybrids instead of guessing record semantics"
+  );
+  const unknownPropertyBinary = encodeAnimationBinary(nodClip);
+  new DataView(unknownPropertyBinary).setUint32(32 + 4, 99, true);
+  assert.throws(
+    () => decodeAnimationBinary(unknownPropertyBinary, "unknown-property"),
+    /unknown animation binary property 99/,
+    "decodeAnimationBinary should reject unknown binary property codes"
+  );
+  const invalidUtf8NameBinary = encodeAnimationBinary(nodClip);
+  new Uint8Array(invalidUtf8NameBinary).fill(0xff, binaryStringByteOffsetForTest(invalidUtf8NameBinary), 84);
+  assert.throws(
+    () => decodeAnimationBinary(invalidUtf8NameBinary, "invalid-utf8-name"),
+    /animation track 0 target name is not valid utf-8/,
+    "decodeAnimationBinary should reject corrupt UTF-8 target names instead of replacement-decoding them"
   );
   const childDirectionBinaryClip: AnimationClip = {
     id: "binary-child-direction",
@@ -82,6 +179,30 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
       .sourceRestChildDirection,
     undefined,
     "decodeAnimationBinary should honor a false source-rest child direction presence flag"
+  );
+  const invalidRotationSpacePropertyBinary = encodeAnimationBinary({
+    id: "invalid-rotation-space-property",
+    duration: 1,
+    tracks: [
+      { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }
+    ]
+  });
+  new DataView(invalidRotationSpacePropertyBinary).setUint32(32 + 44, 2, true);
+  assert.throws(
+    () => decodeAnimationBinary(invalidRotationSpacePropertyBinary, "invalid-rotation-space-property"),
+    /animation binary decoded invalid clip: track 0 head\.translation rotationSpace is only valid on rotation tracks/,
+    "decodeAnimationBinary should validate v3 rotation-space metadata against decoded track properties"
+  );
+  const corruptSourceRestBinary = encodeAnimationBinary(makeSourceRestQuaternionClip("corrupt-source-rest"));
+  const corruptSourceRestFloatData = new Float32Array(
+    corruptSourceRestBinary,
+    binaryFloatByteOffsetForTest(corruptSourceRestBinary)
+  );
+  corruptSourceRestFloatData.set([0, 0, 0, 2], 5);
+  assert.throws(
+    () => decodeAnimationBinary(corruptSourceRestBinary, "corrupt-source-rest"),
+    /animation binary decoded invalid clip: track 0 head\.rotation sourceRestQuaternion must be normalized/,
+    "decodeAnimationBinary should reject corrupt source-rest quaternion metadata after decoding payload bounds"
   );
   assert.throws(
     () => encodeAnimationBinary({ ...nodClip, id: "binary-non-finite-duration", duration: Number.NaN }),
@@ -166,4 +287,53 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     /animation track 0 values must be finite/,
     "decodeAnimationBinary should reject non-finite binary value samples"
   );
+  const overlappingBinaryPayload = encodeAnimationBinary(endpointTrackTimeClip);
+  new DataView(overlappingBinaryPayload).setUint32(32 + 20, 0, true);
+  assert.throws(
+    () => decodeAnimationBinary(overlappingBinaryPayload, "overlapping-binary-payload"),
+    /animation track 0 value overlaps another float payload/,
+    "decodeAnimationBinary should reject track records whose float ranges overlap"
+  );
+}
+
+function createV2SourceRestChildDirectionBinary(): ArrayBuffer {
+  const headerBytes = 32;
+  const trackBytes = 44;
+  const name = new TextEncoder().encode("head");
+  const floats = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0];
+  const stringByteOffset = headerBytes + trackBytes;
+  const floatByteOffset = stringByteOffset + align4ForTest(name.byteLength);
+  const buffer = new ArrayBuffer(floatByteOffset + floats.length * Float32Array.BYTES_PER_ELEMENT);
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+
+  bytes.set(new TextEncoder().encode("WANI"), 0);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, headerBytes, true);
+  view.setUint32(12, trackBytes, true);
+  view.setFloat32(16, 1, true);
+  view.setUint32(20, 0, true);
+  view.setUint32(24, 1, true);
+  view.setUint32(28, name.byteLength, true);
+
+  view.setUint32(headerBytes, 1, true);
+  view.setUint32(headerBytes + 4, 2, true);
+  view.setUint32(headerBytes + 8, 0, true);
+  view.setUint32(headerBytes + 12, name.byteLength, true);
+  view.setUint32(headerBytes + 16, 0, true);
+  view.setUint32(headerBytes + 20, 1, true);
+  view.setUint32(headerBytes + 24, 1, true);
+  view.setUint32(headerBytes + 28, 5, true);
+  view.setUint32(headerBytes + 32, 1, true);
+  view.setUint32(headerBytes + 36, 9, true);
+  view.setUint32(headerBytes + 40, 1, true);
+
+  bytes.set(name, stringByteOffset);
+  new Float32Array(buffer, floatByteOffset, floats.length).set(floats);
+  return buffer;
+}
+
+function binaryStringByteOffsetForTest(buffer: ArrayBuffer): number {
+  const view = new DataView(buffer);
+  return view.getUint32(8, true) + view.getUint32(24, true) * view.getUint32(12, true);
 }

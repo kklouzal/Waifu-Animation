@@ -79,11 +79,26 @@ export type ManifestLoaderOptions = {
 export function validateManifest(manifest: AnimationManifest): string[] {
   const issues: string[] = [];
   const ids = new Set<string>();
+  if (!isRecord(manifest)) return ["manifest must be an object"];
+  if (!Number.isInteger(manifest.version) || manifest.version < 1)
+    issues.push("manifest version must be a positive integer");
+  if (manifest.includes !== undefined) {
+    if (!Array.isArray(manifest.includes) || manifest.includes.some((include) => !isNonEmptyString(include))) {
+      issues.push("manifest includes must be an array of non-empty strings");
+    }
+  }
+  if (manifest.source !== undefined && !isRecord(manifest.source)) issues.push("manifest source must be an object");
   const clips = readManifestClips(manifest);
-  if (!clips) return ["manifest clips must be an array"];
+  if (!clips) return [...issues, "manifest clips must be an array"];
   for (const entry of clips) {
+    if (!isManifestEntryObject(entry)) {
+      issues.push("manifest entry must be an object");
+      continue;
+    }
     if (!entry.id) issues.push("manifest entry is missing id");
     if (!entry.url) issues.push(`${entry.id || "<unknown>"} is missing url`);
+    const metadataIssue = manifestEntryMetadataIssue(entry);
+    if (metadataIssue) issues.push(`${entry.id || "<unknown>"} ${metadataIssue}`);
     if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT)
       issues.push(`${entry.id} has unsupported format ${entry.format}`);
     if (entry.id) {
@@ -112,8 +127,8 @@ export async function loadManifest(
 ): Promise<AnimationManifest> {
   if (seen.has(url)) return { version: 1, clips: [] };
   seen.add(url);
-  const manifest = (await loader(url)) as AnimationManifest;
-  const manifestIncludes = Array.isArray(manifest.includes) ? manifest.includes : [];
+  const manifest = readLoadedManifest(await loader(url), url);
+  const manifestIncludes = readManifestIncludes(manifest, url);
   const includes = await Promise.all(
     manifestIncludes.map(async (includeUrl) => {
       const resolved = options.resolveInclude?.(includeUrl, url) ?? includeUrl;
@@ -133,6 +148,13 @@ export async function loadManifest(
 
 export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationClip): ClipAssetInspection {
   const issues = validateClip(clip);
+  if (!entry.id) issues.push({ message: "manifest entry is missing id" });
+  if (!entry.url) issues.push({ message: `${entry.id || "<unknown>"} is missing url` });
+  const metadataIssue = manifestEntryMetadataIssue(entry);
+  if (metadataIssue) issues.push({ message: metadataIssue });
+  if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) {
+    issues.push({ message: `${entry.id || "<unknown>"} has unsupported format ${String(entry.format)}` });
+  }
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
   const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
   const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
@@ -218,7 +240,7 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
     if (typeof sourceRootMotion === "string") {
       if (!isRootMotionPolicy(sourceRootMotion))
         return `has invalid source.rootMotion policy ${String(sourceRootMotion)}`;
-    } else if (typeof sourceRootMotion === "object" && sourceRootMotion !== null && "policy" in sourceRootMotion) {
+    } else if (isRecord(sourceRootMotion) && "policy" in sourceRootMotion) {
       const policy = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).policy;
       const provenance = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).provenance;
       if (!isRootMotionPolicy(policy)) return `has invalid source.rootMotion.policy ${String(policy)}`;
@@ -254,6 +276,51 @@ export function manifestRequiredCoverageIssue(entry: AnimationManifestEntry): st
   return null;
 }
 
+export function manifestEntryMetadataIssue(entry: AnimationManifestEntry): string | null {
+  const idIssue = optionalNonEmptyStringIssue(entry.id, "id");
+  if (idIssue) return idIssue;
+  const labelIssue = optionalStringIssue(entry.label, "label");
+  if (labelIssue) return labelIssue;
+  const urlIssue = optionalNonEmptyStringIssue(entry.url, "url");
+  if (urlIssue) return urlIssue;
+  if (entry.playback !== undefined) {
+    if (!isRecord(entry.playback)) return "has invalid playback metadata";
+    const start = entry.playback.start;
+    const end = entry.playback.end;
+    if (start !== undefined && !Number.isFinite(start)) return "has invalid playback.start metadata";
+    if (end !== undefined && !Number.isFinite(end)) return "has invalid playback.end metadata";
+  }
+  const loopIssue = optionalBooleanIssue(entry.loop, "loop");
+  if (loopIssue) return loopIssue;
+  const preloadIssue = optionalBooleanIssue(entry.preload, "preload");
+  if (preloadIssue) return preloadIssue;
+  const autoplayIssue = optionalBooleanIssue(entry.autoplay, "autoplay");
+  if (autoplayIssue) return autoplayIssue;
+  if (entry.weight !== undefined && (!Number.isFinite(entry.weight) || entry.weight < 0)) {
+    return "has invalid weight metadata";
+  }
+  const tagsIssue = optionalStringArrayIssue(entry.tags, "tags");
+  if (tagsIssue) return tagsIssue;
+  const statesIssue = optionalStringArrayIssue(entry.states, "states");
+  if (statesIssue) return statesIssue;
+  const emotionsIssue = optionalStringArrayIssue(entry.emotions, "emotions");
+  if (emotionsIssue) return emotionsIssue;
+  const gesturesIssue = optionalStringArrayIssue(entry.gestures, "gestures");
+  if (gesturesIssue) return gesturesIssue;
+  if (entry.source !== undefined && !isRecord(entry.source)) return "has invalid source metadata";
+  if (entry.validation !== undefined) {
+    if (!isRecord(entry.validation)) return "has invalid validation metadata";
+    if (entry.validation.reason !== undefined && typeof entry.validation.reason !== "string") {
+      return "has invalid validation.reason metadata";
+    }
+    if (entry.validation.issues !== undefined) {
+      const validationIssuesIssue = optionalStringArrayIssue(entry.validation.issues, "validation.issues");
+      if (validationIssuesIssue) return validationIssuesIssue;
+    }
+  }
+  return null;
+}
+
 export function readRequiredAnimationCoverage(entry: AnimationManifestEntry): RequiredAnimationCoverage {
   if (manifestRequiredCoverageIssue(entry)) return { requiredHumanBones: [], requiredJoints: [] };
   const source = entry.source ?? {};
@@ -280,8 +347,8 @@ function exactRootMotionAxes(value: unknown, expected: readonly string[]): boole
 
 function isIntentionalResidualRootCarrier(entry: AnimationManifestEntry): boolean {
   const rootMotion = entry.source?.rootMotion;
-  if (typeof rootMotion !== "object" || rootMotion === null) return false;
-  const metadata = rootMotion as Record<string, unknown>;
+  if (!isRecord(rootMotion)) return false;
+  const metadata = rootMotion;
   const verticalTransition =
     metadata.owner === "director-xz" &&
     metadata.support === "vertical-transition" &&
@@ -323,14 +390,14 @@ export function readRootMotionProvenance(entry: AnimationManifestEntry, clip?: A
 }
 
 export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionMetadata | null {
+  if (entry.source !== undefined && !isRecord(entry.source)) return null;
   const entrySource = entry.source ?? {};
   const clipMetadata = clip?.metadata ?? {};
   const sourceRootMotion = entrySource.rootMotion;
   if (sourceRootMotion !== undefined) {
     if (typeof sourceRootMotion === "string")
       return isRootMotionPolicy(sourceRootMotion) ? { policy: sourceRootMotion, provenance: "unknown" } : null;
-    if (typeof sourceRootMotion !== "object" || sourceRootMotion === null || !("policy" in sourceRootMotion))
-      return null;
+    if (!isRecord(sourceRootMotion) || !("policy" in sourceRootMotion)) return null;
     const metadata = sourceRootMotion as { policy?: unknown; provenance?: unknown };
     if (!isRootMotionPolicy(metadata.policy)) return null;
     if (metadata.provenance !== undefined && !isRootMotionProvenance(metadata.provenance)) return null;
@@ -381,6 +448,19 @@ function formatUnknownValue(value: unknown): string {
   }
 }
 
+function readLoadedManifest(value: unknown, url: string): AnimationManifest {
+  if (!isRecord(value)) throw new Error(`manifest ${url} must be an object`);
+  return value as AnimationManifest;
+}
+
+function readManifestIncludes(manifest: AnimationManifest, url: string): string[] {
+  if (manifest.includes === undefined) return [];
+  if (!Array.isArray(manifest.includes) || manifest.includes.some((include) => !isNonEmptyString(include))) {
+    throw new Error(`manifest ${url} includes must be an array of non-empty strings`);
+  }
+  return manifest.includes;
+}
+
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
   const clips = readManifestClips(manifest) ?? [];
   const duplicateIds = duplicatedManifestIds(clips);
@@ -395,7 +475,11 @@ export function rejectedAnimationReport(
   return clips
     .map((entry) => ({ entry, reason: manifestRejectionIssue(entry, duplicateIds) }))
     .filter((item): item is { entry: AnimationManifestEntry; reason: string } => item.reason !== null)
-    .map(({ entry, reason }) => ({ id: entry.id, label: entry.label, reason }));
+    .map(({ entry, reason }) => ({
+      id: isManifestEntryObject(entry) && typeof entry.id === "string" ? entry.id : "<unknown>",
+      ...(isManifestEntryObject(entry) && typeof entry.label === "string" ? { label: entry.label } : {}),
+      reason
+    }));
 }
 
 function manifestRejectionIssue(entry: AnimationManifestEntry, duplicateIds = new Set<string>()): string | null {
@@ -411,8 +495,11 @@ function manifestStructuralRejectionIssue(
   entry: AnimationManifestEntry,
   duplicateIds: ReadonlySet<string>
 ): string | null {
+  if (!isManifestEntryObject(entry)) return "manifest entry must be an object";
   if (!entry.id) return "missing id";
   if (!entry.url) return "missing url";
+  const metadataIssue = manifestEntryMetadataIssue(entry);
+  if (metadataIssue) return metadataIssue;
   if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) return `unsupported format ${String(entry.format)}`;
   if (duplicateIds.has(entry.id)) return `duplicate clip id ${entry.id}`;
   if (entry.validation?.status === "accepted" && entry.validation.reason)
@@ -421,5 +508,37 @@ function manifestStructuralRejectionIssue(
 }
 
 function readManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] | null {
-  return Array.isArray(manifest.clips) ? manifest.clips : null;
+  return isRecord(manifest) && Array.isArray(manifest.clips) ? manifest.clips : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isManifestEntryObject(value: unknown): value is AnimationManifestEntry {
+  return isRecord(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function optionalNonEmptyStringIssue(value: unknown, label: string): string | null {
+  if (value === undefined) return null;
+  return isNonEmptyString(value) ? null : `has invalid ${label} metadata`;
+}
+
+function optionalStringIssue(value: unknown, label: string): string | null {
+  if (value === undefined) return null;
+  return typeof value === "string" ? null : `has invalid ${label} metadata`;
+}
+
+function optionalBooleanIssue(value: unknown, label: string): string | null {
+  if (value === undefined) return null;
+  return typeof value === "boolean" ? null : `has invalid ${label} metadata`;
+}
+
+function optionalStringArrayIssue(value: unknown, label: string): string | null {
+  if (value === undefined) return null;
+  return Array.isArray(value) && value.every(isNonEmptyString) ? null : `has invalid ${label} metadata`;
 }

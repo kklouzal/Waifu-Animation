@@ -14,6 +14,7 @@ import {
   type AssetValidationStatus,
   inspectClipAsset,
   isInvalidAssetValidationStatus,
+  manifestEntryMetadataIssue,
   manifestRequiredCoverageIssue,
   manifestRootMotionPolicyIssue,
   readRequiredAnimationCoverage,
@@ -80,21 +81,22 @@ export async function validateAnimationManifestAssets(
   fetchAsset: AnimationAssetFetch,
   options: AnimationAssetValidationOptions = {}
 ): Promise<AnimationAssetValidationReport> {
+  const manifestClips = readManifestAssetEntries(manifest);
+  if (!manifestClips) {
+    const entries = [
+      buildRejectedEntry(manifestEntry("<manifest>", "Manifest", ""), [
+        { id: "<manifest>", severity: "error", message: "manifest clips must be an array" }
+      ])
+    ];
+    return buildValidationReport(entries, options.now);
+  }
   const structuralIssues = inspectManifestStructure(manifest);
   const entries = await Promise.all(
-    manifest.clips.map((entry, index) =>
+    manifestClips.map((entry, index) =>
       validateAnimationManifestEntryWithStructure(entry, fetchAsset, options, structuralIssues.get(index) ?? [])
     )
   );
-  const statusCounts = countValidationStatuses(entries);
-  return {
-    generatedAt: (options.now ?? new Date()).toISOString(),
-    total: entries.length,
-    accepted: statusCounts.accepted,
-    rejected: statusCounts.rejected,
-    quarantined: statusCounts.quarantined,
-    entries
-  };
+  return buildValidationReport(entries, options.now);
 }
 
 export async function validateAnimationManifestEntry(
@@ -127,8 +129,10 @@ export function inspectAnimationAsset(
   clip: AnimationClip,
   skeleton?: Skeleton
 ): AnimationAssetValidationEntry {
-  const clipIssues = validateClip(clip, skeleton).map((issue) => toAssetIssue(entry.id, issue));
-  const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(entry.id, issue));
+  if (!isRecord(entry)) return buildRejectedEntry(entry, inspectManifestEntryStructure(entry));
+  const id = typeof entry.id === "string" && entry.id.length > 0 ? entry.id : "<unknown>";
+  const clipIssues = validateClip(clip, skeleton).map((issue) => toAssetIssue(id, issue));
+  const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(id, issue));
   const issues = dedupeIssues([
     ...inspectManifestEntryStructure(entry),
     ...clipIssues,
@@ -149,15 +153,15 @@ export function inspectAnimationAsset(
     status = "accepted";
   }
   return {
-    id: entry.id,
-    label: entry.label,
-    url: entry.url,
+    id,
+    label: typeof entry.label === "string" ? entry.label : "",
+    url: typeof entry.url === "string" ? entry.url : "",
     accepted: status === "accepted",
     status,
     duration: clip.duration,
     loop: Boolean(entry.loop ?? clip.loop),
     ...assetReportMetadata(entry, clip),
-    compatibleStates: entry.states ?? [],
+    compatibleStates: readStringArray(entry.states),
     jointCoverage: jointCoverage(clip, skeleton),
     trackCount: clip.tracks.length,
     issues
@@ -182,16 +186,14 @@ function inspectSemanticAsset(
   skeleton?: Skeleton
 ): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
+  const id = readEntryId(entry);
   const effectiveLoop = entry.loop ?? clip.loop;
   const coverage = jointCoverage(clip, skeleton);
-  if (clip.tracks.length === 0)
-    issues.push({ id: entry.id, severity: "error", message: "clip has no animation tracks" });
+  if (clip.tracks.length === 0) issues.push({ id, severity: "error", message: "clip has no animation tracks" });
   if (effectiveLoop && clip.duration < 0.25) {
-    const severity = /aim[-_ ]?offset/i.test(`${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""}`)
-      ? "warning"
-      : "error";
+    const severity = /aim[-_ ]?offset/i.test(manifestEntrySearchText(entry)) ? "warning" : "error";
     issues.push({
-      id: entry.id,
+      id,
       severity,
       message: "looping clip is too short to blend safely unless used as a static pose/aim offset"
     });
@@ -199,8 +201,7 @@ function inspectSemanticAsset(
   if (effectiveLoop) issues.push(...inspectLoopEndpointMismatches(entry, clip, skeleton));
   if (skeleton) {
     const mapped = coverage.length;
-    if (mapped === 0)
-      issues.push({ id: entry.id, severity: "error", message: "clip has no tracks that map to target skeleton" });
+    if (mapped === 0) issues.push({ id, severity: "error", message: "clip has no tracks that map to target skeleton" });
   }
   issues.push(...inspectRequiredCoverage(entry, coverage, skeleton));
   return issues;
@@ -214,6 +215,7 @@ function inspectLoopEndpointMismatches(
   skeleton?: Skeleton
 ): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
+  const id = readEntryId(entry);
   const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
   if (!playbackWindow) return issues;
   for (let index = 0; index < clip.tracks.length; index += 1) {
@@ -233,7 +235,7 @@ function inspectLoopEndpointMismatches(
     if (!Number.isFinite(delta) || delta <= tolerance) continue;
     const joint = resolveLoopEndpointJoint(track, skeleton);
     issues.push({
-      id: entry.id,
+      id,
       severity: "warning",
       message: `${LOOP_ENDPOINT_WARNING_PREFIX}: track ${index}${joint ? ` (${joint})` : ""} ${property} delta ${formatDelta(delta)} exceeds ${formatDelta(tolerance)}`,
       track: index,
@@ -297,12 +299,13 @@ function inspectRequiredCoverage(
   if (manifestRequiredCoverageIssue(entry)) return [];
   const required = readRequiredAnimationCoverage(entry);
   const issues: AnimationAssetValidationIssue[] = [];
+  const id = readEntryId(entry);
   if (required.requiredHumanBones.length === 0 && required.requiredJoints.length === 0) return issues;
   const covered = new Set(coverage);
   for (const bone of required.requiredHumanBones) {
     if (covered.has(bone)) continue;
     issues.push({
-      id: entry.id,
+      id,
       severity: "error",
       joint: bone,
       message: `required humanoid bone ${bone} is not covered by resolved target skeleton tracks`
@@ -312,7 +315,7 @@ function inspectRequiredCoverage(
     const coverageName = resolveRequiredJointCoverageName(joint, skeleton);
     if (coverageName && covered.has(coverageName)) continue;
     issues.push({
-      id: entry.id,
+      id,
       severity: "error",
       joint,
       message: `required joint ${joint} is not covered by resolved target skeleton tracks`
@@ -352,12 +355,13 @@ function dedupeIssues(issues: AnimationAssetValidationIssue[]): AnimationAssetVa
 }
 
 function inspectManifestStructure(manifest: AnimationManifest): Map<number, AnimationAssetValidationIssue[]> {
-  const duplicateIds = duplicatedManifestIds(manifest.clips);
+  const clips = readManifestAssetEntries(manifest) ?? [];
+  const duplicateIds = duplicatedManifestIds(clips);
   const issues = new Map<number, AnimationAssetValidationIssue[]>();
-  for (let index = 0; index < manifest.clips.length; index += 1) {
-    const entry = manifest.clips[index]!;
+  for (let index = 0; index < clips.length; index += 1) {
+    const entry = clips[index]!;
     const entryIssues = inspectManifestEntryStructure(entry);
-    if (entry.id && duplicateIds.has(entry.id)) {
+    if (isRecord(entry) && typeof entry.id === "string" && entry.id.length > 0 && duplicateIds.has(entry.id)) {
       entryIssues.push({ id: entry.id, severity: "error", message: `duplicate clip id ${entry.id}` });
     }
     if (entryIssues.length > 0) issues.set(index, entryIssues);
@@ -366,10 +370,13 @@ function inspectManifestStructure(manifest: AnimationManifest): Map<number, Anim
 }
 
 function inspectManifestEntryStructure(entry: AnimationManifestEntry): AnimationAssetValidationIssue[] {
+  if (!isRecord(entry)) return [{ id: "<unknown>", severity: "error", message: "manifest entry must be an object" }];
   const id = entry.id || "<unknown>";
   const issues: AnimationAssetValidationIssue[] = [];
   if (!entry.id) issues.push({ id, severity: "error", message: "manifest entry is missing id" });
   if (!entry.url) issues.push({ id, severity: "error", message: `${id} is missing url` });
+  const metadataIssue = manifestEntryMetadataIssue(entry);
+  if (metadataIssue) issues.push({ id, severity: "error", message: metadataIssue });
   if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) {
     issues.push({ id, severity: "error", message: `${id} has unsupported format ${String(entry.format)}` });
   }
@@ -400,16 +407,18 @@ function buildRejectedEntry(
   entry: AnimationManifestEntry,
   issues: AnimationAssetValidationIssue[]
 ): AnimationAssetValidationEntry {
+  const safeEntry = isRecord(entry) ? (entry as Partial<AnimationManifestEntry>) : {};
+  const metadataEntry = isRecord(entry) ? entry : manifestEntry("<unknown>", "", "");
   return {
-    id: entry.id,
-    label: entry.label,
-    url: entry.url,
+    id: typeof safeEntry.id === "string" ? safeEntry.id : "<unknown>",
+    label: typeof safeEntry.label === "string" ? safeEntry.label : "",
+    url: typeof safeEntry.url === "string" ? safeEntry.url : "",
     accepted: false,
     status: "rejected",
     duration: 0,
-    loop: Boolean(entry.loop),
-    ...assetReportMetadata(entry),
-    compatibleStates: entry.states ?? [],
+    loop: safeEntry.loop === true,
+    ...assetReportMetadata(metadataEntry),
+    compatibleStates: readStringArray(safeEntry.states),
     jointCoverage: [],
     trackCount: 0,
     issues
@@ -417,7 +426,7 @@ function buildRejectedEntry(
 }
 
 function classifyCategory(entry: AnimationManifestEntry, clip?: AnimationClip): string {
-  const text = `${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""} ${clip?.name ?? ""}`.toLowerCase();
+  const text = manifestEntrySearchText(entry, clip);
   if (/walk|run|jog|turn|locomotion/.test(text)) return "locomotion";
   if (/sit|chair/.test(text)) return "sitting";
   if (/stretch/.test(text)) return "stretching";
@@ -427,14 +436,26 @@ function classifyCategory(entry: AnimationManifestEntry, clip?: AnimationClip): 
 }
 
 function classifyPosture(entry: AnimationManifestEntry): string {
-  const text = `${entry.id} ${entry.label} ${entry.tags?.join(" ") ?? ""}`.toLowerCase();
+  const text = manifestEntrySearchText(entry);
   if (/sit|chair/.test(text)) return "sitting";
   if (/crouch/.test(text)) return "crouching";
   return "standing";
 }
 
+function manifestEntrySearchText(entry: AnimationManifestEntry, clip?: AnimationClip): string {
+  return `${readString(entry.id) ?? ""} ${readString(entry.label) ?? ""} ${readStringArray(entry.tags).join(" ")} ${clip?.name ?? ""}`.toLowerCase();
+}
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readEntryId(entry: AnimationManifestEntry): string {
+  return readString(entry.id) ?? "<unknown>";
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function assetReportMetadata(
@@ -477,4 +498,31 @@ function rootCarrierTranslationSummary(
     if (playbackWindow && rootCarrierTranslationTrackHasMotion(track, playbackWindow)) moving += 1;
   }
   return { total, moving };
+}
+
+function buildValidationReport(
+  entries: AnimationAssetValidationEntry[],
+  now: Date | undefined
+): AnimationAssetValidationReport {
+  const statusCounts = countValidationStatuses(entries);
+  return {
+    generatedAt: (now ?? new Date()).toISOString(),
+    total: entries.length,
+    accepted: statusCounts.accepted,
+    rejected: statusCounts.rejected,
+    quarantined: statusCounts.quarantined,
+    entries
+  };
+}
+
+function manifestEntry(id: string, label: string, url: string): AnimationManifestEntry {
+  return { id, label, url, format: WAIFU_ANIMATION_BINARY_FORMAT };
+}
+
+function readManifestAssetEntries(manifest: AnimationManifest): AnimationManifestEntry[] | null {
+  return isRecord(manifest) && Array.isArray(manifest.clips) ? manifest.clips : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

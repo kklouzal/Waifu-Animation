@@ -35,6 +35,7 @@ const ROTATION_SPACE_NORMALIZED_HUMANOID_DELTA: BinaryRotationSpace = 2;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
 export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
   assertValidClipForBinaryEncoding(clip);
@@ -164,14 +165,11 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
 
   const view = new DataView(buffer);
   const version = view.getUint32(4, true);
-  if (version !== VERSION && version !== 2 && version !== 1)
-    throw new Error(`unsupported animation binary version ${version}`);
+  const expectedTrackBytes = trackBytesForVersion(version);
+  if (expectedTrackBytes === null) throw new Error(`unsupported animation binary version ${version}`);
   const headerBytes = view.getUint32(8, true);
   const trackBytes = view.getUint32(12, true);
-  if (
-    headerBytes !== HEADER_BYTES ||
-    (trackBytes !== TRACK_BYTES && trackBytes !== V2_TRACK_BYTES && trackBytes !== LEGACY_TRACK_BYTES)
-  )
+  if (headerBytes !== HEADER_BYTES || trackBytes !== expectedTrackBytes)
     throw new Error("animation binary layout is unsupported");
 
   const duration = view.getFloat32(16, true);
@@ -191,6 +189,8 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
   }
   const floatData = new Float32Array(buffer, floatByteOffset);
   const tracks: AnimationTrack[] = [];
+  const floatRanges: FloatRange[] = [];
+  const channels = new Set<string>();
 
   for (let index = 0; index < trackCount; index += 1) {
     const trackOffset = HEADER_BYTES + index * trackBytes;
@@ -204,7 +204,7 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     const sourceRestPresent = readOptionalPayloadFlag(view, trackOffset + 32, index, "source-rest");
     const sourceRestOffset = sourceRestPresent ? view.getUint32(trackOffset + 28, true) : NO_OFFSET;
     const sourceRestChildDirectionPresent =
-      trackBytes >= TRACK_BYTES
+      trackBytes >= V2_TRACK_BYTES
         ? readOptionalPayloadFlag(view, trackOffset + 40, index, "source-rest-child-direction")
         : false;
     const sourceRestChildDirectionOffset = sourceRestChildDirectionPresent
@@ -221,21 +221,35 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     if (keyCount < 1) throw new Error(`animation track ${index} has no keys`);
     if (nameByteOffset + nameByteLength > stringBytes)
       throw new Error(`animation track ${index} name bounds are invalid`);
-    assertFloatBounds(index, "time", timeOffset, keyCount, floatData.length);
-    assertFloatBounds(index, "value", valueOffset, keyCount * stride, floatData.length);
-    if (sourceRestOffset !== NO_OFFSET) assertFloatBounds(index, "source-rest", sourceRestOffset, 4, floatData.length);
+    recordFloatBounds(floatRanges, index, "time", timeOffset, keyCount, floatData.length);
+    recordFloatBounds(floatRanges, index, "value", valueOffset, keyCount * stride, floatData.length);
+    if (sourceRestOffset !== NO_OFFSET)
+      recordFloatBounds(floatRanges, index, "source-rest", sourceRestOffset, 4, floatData.length);
     if (sourceRestChildDirectionOffset !== NO_OFFSET)
-      assertFloatBounds(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData.length);
+      recordFloatBounds(
+        floatRanges,
+        index,
+        "source-rest-child-direction",
+        sourceRestChildDirectionOffset,
+        3,
+        floatData.length
+      );
     validateBinaryTrackTimes(index, timeOffset, keyCount, floatData, duration);
     assertFiniteFloatRange(index, "value", valueOffset, keyCount * stride, floatData);
     if (sourceRestOffset !== NO_OFFSET) assertFiniteFloatRange(index, "source-rest", sourceRestOffset, 4, floatData);
     if (sourceRestChildDirectionOffset !== NO_OFFSET)
       assertFiniteFloatRange(index, "source-rest-child-direction", sourceRestChildDirectionOffset, 3, floatData);
 
-    const name = textDecoder.decode(
-      bytes.subarray(stringByteOffset + nameByteOffset, stringByteOffset + nameByteOffset + nameByteLength)
+    const nameBytes = bytes.subarray(
+      stringByteOffset + nameByteOffset,
+      stringByteOffset + nameByteOffset + nameByteLength
     );
+    const name = decodeTrackName(nameBytes, index);
     if (name.length === 0) throw new Error(`animation track ${index} target name is empty`);
+    const channelKey = `${targetKind}:${name}:${property}`;
+    if (channels.has(channelKey))
+      throw new Error(`animation track ${index} duplicate target channel ${name}.${property}`);
+    channels.add(channelKey);
     const trackBase = {
       property,
       times: floatData.subarray(timeOffset, timeOffset + keyCount),
@@ -266,12 +280,41 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     tracks.push(track);
   }
 
-  return {
+  assertFloatRangesDoNotOverlap(floatRanges);
+
+  const clip = {
     id,
     duration,
     loop: Boolean(flags & 1),
     tracks
   };
+  const decodedIssue = version >= 2 ? validateClip(clip)[0] : undefined;
+  if (decodedIssue)
+    throw new Error(`animation binary decoded invalid clip: ${formatClipValidationIssue(decodedIssue)}`);
+
+  return clip;
+}
+
+type FloatRange = {
+  trackIndex: number;
+  label: string;
+  start: number;
+  end: number;
+};
+
+function trackBytesForVersion(version: number): number | null {
+  if (version === VERSION) return TRACK_BYTES;
+  if (version === 2) return V2_TRACK_BYTES;
+  if (version === 1) return LEGACY_TRACK_BYTES;
+  return null;
+}
+
+function decodeTrackName(bytes: Uint8Array, trackIndex: number): string {
+  try {
+    return fatalTextDecoder.decode(bytes);
+  } catch {
+    throw new Error(`animation track ${trackIndex} target name is not valid utf-8`);
+  }
 }
 
 function readSourceRestChildDirection(track: AnimationTrack): Float32Array | null {
@@ -325,8 +368,26 @@ function readSourceRestQuaternion(track: AnimationTrack): Float32Array | null {
   return sourceRestQuaternion;
 }
 
-function assertFloatBounds(trackIndex: number, label: string, offset: number, count: number, floatCount: number): void {
+function recordFloatBounds(
+  ranges: FloatRange[],
+  trackIndex: number,
+  label: string,
+  offset: number,
+  count: number,
+  floatCount: number
+): void {
   if (offset + count > floatCount) throw new Error(`animation track ${trackIndex} ${label} bounds are invalid`);
+  ranges.push({ trackIndex, label, start: offset, end: offset + count });
+}
+
+function assertFloatRangesDoNotOverlap(ranges: FloatRange[]): void {
+  const orderedRanges = [...ranges].sort((left, right) => left.start - right.start || left.end - right.end);
+  let cursor = 0;
+  for (const range of orderedRanges) {
+    if (range.start < cursor)
+      throw new Error(`animation track ${range.trackIndex} ${range.label} overlaps another float payload`);
+    cursor = range.end;
+  }
 }
 
 function validateBinaryTrackTimes(
@@ -368,7 +429,7 @@ function readOptionalPayloadFlag(view: DataView, offset: number, trackIndex: num
 }
 
 function align4(value: number): number {
-  return (value + 3) & ~3;
+  return value + ((4 - (value % 4)) % 4);
 }
 
 function normalizeArrayBuffer(input: ArrayBuffer | ArrayBufferView): ArrayBuffer {

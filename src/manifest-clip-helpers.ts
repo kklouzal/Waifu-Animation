@@ -72,6 +72,7 @@ export function duplicatedManifestIds(entries: readonly ManifestIdSource[]): Set
   const seen = new Set<string>();
   const duplicates = new Set<string>();
   for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) continue;
     if (!entry.id) continue;
     if (seen.has(entry.id)) duplicates.add(entry.id);
     else seen.add(entry.id);

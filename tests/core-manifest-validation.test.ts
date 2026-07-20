@@ -16,6 +16,124 @@ import {
 import { invalidValidationStatusManifestEntry, nodClip, quarantinedManifestEntry, skeleton } from "./test-helpers.js";
 
 export async function runCoreManifestValidationTests(): Promise<void> {
+  assert.deepEqual(
+    validateManifest(null as unknown as AnimationManifest),
+    ["manifest must be an object"],
+    "validateManifest should reject non-object runtime JSON before reading manifest fields"
+  );
+  assert.deepEqual(
+    validateManifest({ version: 0 } as unknown as AnimationManifest),
+    ["manifest version must be a positive integer", "manifest clips must be an array"],
+    "validateManifest should accumulate top-level version and missing clips diagnostics"
+  );
+  assert.deepEqual(
+    validateManifest({ version: 1, includes: ["/base.json", ""], clips: [] }),
+    ["manifest includes must be an array of non-empty strings"],
+    "validateManifest should reject malformed include path metadata"
+  );
+  assert.deepEqual(
+    validateManifest({ version: 1, clips: [null] } as unknown as AnimationManifest),
+    ["manifest entry must be an object"],
+    "validateManifest should reject malformed clip entry values instead of dereferencing them"
+  );
+  const malformedEntryMetadataManifest = {
+    version: 1,
+    clips: [
+      {
+        id: "bad-weight",
+        label: "Bad Weight",
+        url: "/bad-weight.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        weight: Number.NaN
+      },
+      {
+        id: "bad-tags",
+        label: "Bad Tags",
+        url: "/bad-tags.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        tags: ["idle", ""]
+      },
+      {
+        id: "bad-source",
+        label: "Bad Source",
+        url: "/bad-source.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: []
+      },
+      {
+        id: "bad-validation",
+        label: "Bad Validation",
+        url: "/bad-validation.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        validation: []
+      }
+    ]
+  } as unknown as AnimationManifest;
+  assert.deepEqual(
+    validateManifest(malformedEntryMetadataManifest),
+    [
+      "bad-weight has invalid weight metadata",
+      "bad-tags has invalid tags metadata",
+      "bad-source has invalid source metadata",
+      "bad-validation has invalid validation metadata"
+    ],
+    "validateManifest should report malformed public manifest metadata fields deterministically"
+  );
+  assert.equal(
+    usableManifestClips(malformedEntryMetadataManifest).length,
+    0,
+    "usableManifestClips should exclude entries with malformed public manifest metadata"
+  );
+  assert.deepEqual(
+    rejectedAnimationReport({ version: 1, clips: [null] } as unknown as AnimationManifest),
+    [{ id: "<unknown>", reason: "manifest entry must be an object" }],
+    "rejectedAnimationReport should surface malformed clip entry shapes without throwing"
+  );
+  let malformedManifestFetchCount = 0;
+  const malformedManifestAssetReport = await validateAnimationManifestAssets(
+    { version: 1 } as unknown as AnimationManifest,
+    async () => {
+      malformedManifestFetchCount += 1;
+      return encodeAnimationBinary(nodClip);
+    },
+    { now: new Date("2026-01-01T00:00:00.000Z") }
+  );
+  assert.equal(malformedManifestFetchCount, 0);
+  assert.equal(malformedManifestAssetReport.total, 1);
+  assert.equal(malformedManifestAssetReport.rejected, 1);
+  assert.ok(
+    malformedManifestAssetReport.entries[0]!.issues.some(
+      (issue) => issue.message === "manifest clips must be an array"
+    ),
+    "asset report validation should surface a malformed top-level manifest without fetching assets"
+  );
+  const malformedEntryAssetFetches: string[] = [];
+  const malformedEntryAssetReport = await validateAnimationManifestAssets(
+    {
+      version: 1,
+      clips: [
+        null,
+        {
+          id: "valid-after-null",
+          label: "Valid After Null",
+          url: "/valid-after-null.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        }
+      ]
+    } as unknown as AnimationManifest,
+    async (url) => {
+      malformedEntryAssetFetches.push(url);
+      return encodeAnimationBinary(nodClip);
+    },
+    { skeleton, now: new Date("2026-01-01T00:00:00.000Z") }
+  );
+  assert.deepEqual(malformedEntryAssetFetches, ["/valid-after-null.waifuanim.bin"]);
+  assert.equal(malformedEntryAssetReport.accepted, 1);
+  assert.equal(malformedEntryAssetReport.rejected, 1);
+  assert.ok(
+    malformedEntryAssetReport.entries[0]!.issues.some((issue) => issue.message === "manifest entry must be an object"),
+    "asset report validation should reject malformed clip entries without aborting adjacent valid assets"
+  );
   const malformedValidationStatusManifest = {
     version: 1,
     clips: [

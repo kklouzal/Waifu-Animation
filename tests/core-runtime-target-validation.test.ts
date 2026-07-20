@@ -22,6 +22,19 @@ import {
 } from "./test-helpers.js";
 
 export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
+  const malformedSkeletonInputReport = validateAnimationInputs({} as typeof skeleton, {
+    id: "malformed-skeleton-input",
+    duration: 1,
+    tracks: []
+  });
+  assert.equal(malformedSkeletonInputReport.accepted, false);
+  assert.ok(
+    malformedSkeletonInputReport.skeletonIssues.some(
+      (issue) => issue.message === "skeleton must include joints, parents, and restPose arrays"
+    ),
+    "validateAnimationInputs should report malformed skeleton container shapes instead of throwing"
+  );
+
   const duplicateResolvedChannelClip: AnimationClip = {
     id: "duplicate-resolved-channel",
     duration: 1,
