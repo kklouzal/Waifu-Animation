@@ -27,6 +27,7 @@ export type {
   AnimationTrack,
   ClipValidationIssue,
   NormalizedTrackProperty,
+  RotationSpace,
   SampleOptions,
   SampleRatioOptions,
   SampleRepairDiagnostic,
@@ -59,12 +60,31 @@ export function formatClipIssue(issue: ClipValidationIssue): string {
 
 export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipValidationIssue[] {
   const issues: ClipValidationIssue[] = [];
+  if (!isAnimationClipObject(clip)) {
+    issues.push({ message: "animation clip must be an object" });
+    return issues;
+  }
+  const candidate = clip as Partial<AnimationClip>;
+  const tracks = Array.isArray(candidate.tracks) ? candidate.tracks : null;
+  const duration = typeof candidate.duration === "number" ? candidate.duration : Number.NaN;
+  const durationValid = Number.isFinite(duration) && duration > 0;
   const resolvedChannels = new Map<string, { track: number; joint: string; property: NormalizedTrackProperty }>();
-  if (!clip.id) issues.push({ message: "clip id is required" });
-  if (!Number.isFinite(clip.duration) || clip.duration <= 0)
-    issues.push({ message: "clip duration must be positive and finite" });
-  for (let index = 0; index < clip.tracks.length; index += 1) {
-    const track = clip.tracks[index]!;
+  if (typeof candidate.id !== "string" || candidate.id.length === 0) issues.push({ message: "clip id is required" });
+  if (candidate.name !== undefined && typeof candidate.name !== "string")
+    issues.push({ message: "clip name must be a string" });
+  if (!durationValid) issues.push({ message: "clip duration must be positive and finite" });
+  if (candidate.loop !== undefined && typeof candidate.loop !== "boolean")
+    issues.push({ message: "clip loop must be a boolean" });
+  if (!tracks) {
+    issues.push({ message: "clip tracks must be an array" });
+    return issues;
+  }
+  for (let index = 0; index < tracks.length; index += 1) {
+    const track = tracks[index] as Partial<AnimationTrack> | undefined;
+    if (!isAnimationTrackObject(track)) {
+      issues.push({ track: index, message: "animation track must be an object" });
+      continue;
+    }
     const property = normalizedTrackProperty(track.property);
     const hasJoint = track.joint !== undefined;
     const hasHumanBone = track.humanBone !== undefined;
@@ -142,6 +162,25 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
         resolvedChannels.set(channel.key, { track: index, joint: channel.joint, property });
       }
     }
+    const hasRuntimeTimes = track.times instanceof Float32Array;
+    const hasRuntimeValues = track.values instanceof Float32Array;
+    if (!hasRuntimeTimes) {
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track times must be a Float32Array"
+      });
+    }
+    if (!hasRuntimeValues) {
+      issues.push({
+        track: index,
+        joint: targetName,
+        property: track.property,
+        message: "track values must be a Float32Array"
+      });
+    }
+    if (!hasRuntimeTimes || !hasRuntimeValues) continue;
     if (track.times.length < 1)
       issues.push({ track: index, joint: targetName, property: track.property, message: "track has no times" });
     if (track.values.length !== track.times.length * stride) {
@@ -156,7 +195,7 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
       const time = track.times[i]!;
       if (!Number.isFinite(time)) {
         issues.push({ track: index, joint: targetName, property: track.property, message: "track time is not finite" });
-      } else if (time < 0 || time > clip.duration) {
+      } else if (time < 0 || (durationValid && time > duration)) {
         issues.push({
           track: index,
           joint: targetName,
@@ -173,7 +212,7 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
         });
       }
     }
-    if (track.values.some((value) => !Number.isFinite(value))) {
+    if (hasNonFiniteTrackValue(track.values)) {
       issues.push({
         track: index,
         joint: targetName,
@@ -184,6 +223,21 @@ export function validateClip(clip: AnimationClip, skeleton?: Skeleton): ClipVali
     validateRotationTrackQuaternions(issues, track, index, targetName, property);
   }
   return issues;
+}
+
+function isAnimationClipObject(value: unknown): value is AnimationClip {
+  return typeof value === "object" && value !== null;
+}
+
+function isAnimationTrackObject(value: unknown): value is AnimationTrack {
+  return typeof value === "object" && value !== null;
+}
+
+function hasNonFiniteTrackValue(values: Float32Array): boolean {
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Number.isFinite(values[index])) return true;
+  }
+  return false;
 }
 
 function validateRotationSpace(
@@ -521,6 +575,7 @@ export function readTrackTargetKey(
   jointIndex: number
 ): string | null {
   if (skeleton) return jointIndex >= 0 ? String(jointIndex) : null;
-  const joint = track.joint ?? track.humanBone;
-  return joint === undefined ? null : String(joint);
+  if (track.joint !== undefined) return `joint:${track.joint}`;
+  if (track.humanBone !== undefined) return `humanBone:${track.humanBone}`;
+  return null;
 }

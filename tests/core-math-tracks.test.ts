@@ -169,6 +169,18 @@ export async function runCoreMathTrackTests(): Promise<void> {
     true,
     "raw user tracks should reject duplicate ratios"
   );
+  assert.ok(
+    validateRawUserTrack({ type: "float" } as unknown as RawUserTrack).some(
+      (issue) => issue.message === "raw user track keyframes must be an array"
+    ),
+    "raw user track validation should report missing keyframe arrays without throwing"
+  );
+  assert.ok(
+    validateRawUserTrack({ type: "float", keyframes: [undefined] } as unknown as RawUserTrack).some(
+      (issue) => issue.key === 0 && issue.message === "keyframe must be an object"
+    ),
+    "raw user track validation should report sparse/malformed keyframes"
+  );
   const invalidUserTrackBuild = tryBuildUserTrack(invalidRawUserTrack);
   assert.equal(invalidUserTrackBuild.ok, false, "invalid raw user tracks should not build");
   if (!invalidUserTrackBuild.ok) assert.equal(invalidUserTrackBuild.issues.length > 0, true);
@@ -195,6 +207,16 @@ export async function runCoreMathTrackTests(): Promise<void> {
     () => buildUserTrack({ type: "float", keyframes: [{ ratio: 0, value: Number.NaN, interpolation: "linear" }] }),
     /finite/,
     "buildUserTrack should not allow NaN values to leak into runtime tracks"
+  );
+  assert.ok(
+    validateUserTrack({
+      type: "float",
+      name: 12,
+      ratios: new Float32Array([0]),
+      values: new Float32Array([1]),
+      steps: new Uint8Array([0])
+    } as unknown as ReturnType<typeof buildUserTrack>).some((issue) => issue.message === "track name must be a string"),
+    "runtime user track validation should keep track names typed"
   );
   const patchedUserTrack = buildUserTrack({
     type: "float",
@@ -555,6 +577,25 @@ export async function runCoreMathTrackTests(): Promise<void> {
       { ratio: 0.4, value: 0, interpolation: "step" }
     ],
     "step keys needed for held segments should not be optimized away"
+  );
+  const stepResumeSourceTrack: RawUserTrack<"float"> = {
+    type: "float",
+    keyframes: [
+      { ratio: 0, value: 0, interpolation: "step" },
+      { ratio: 0.5, value: 1, interpolation: "linear" },
+      { ratio: 1, value: 2, interpolation: "linear" }
+    ]
+  };
+  const optimizedStepResumeTrack = optimizeRawUserTrack(stepResumeSourceTrack, { tolerance: 0 });
+  assert.deepEqual(
+    optimizedStepResumeTrack.track.keyframes.map((key) => key.ratio),
+    [0, 0.5, 1],
+    "user track optimization should preserve the first linear key after a held step segment"
+  );
+  assert.equal(
+    sampleRawUserTrack(optimizedStepResumeTrack.track, 0.75),
+    sampleRawUserTrack(stepResumeSourceTrack, 0.75),
+    "optimized user tracks should preserve resumed interpolation after step holds"
   );
   const optimizedLinearTrack = optimizeRawUserTrack({
     type: "float4",

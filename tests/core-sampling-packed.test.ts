@@ -14,9 +14,11 @@ import {
   sampleClipToPoseWithContext,
   samplePackedRuntimeAnimationToPose,
   samplePackedRuntimeAnimationToPoseAtRatio,
+  sampleTime,
   sanitizeQuaternionTrackValues,
   toFloat32Array,
   tryBuildPackedRuntimeAnimation,
+  validateClip,
   validatePackedRuntimeAnimation
 } from "./test-api.js";
 import { assertFinitePose, nodClip, quaternionNearlyEqual, skeleton, vectorNearlyEqual } from "./test-helpers.js";
@@ -114,6 +116,11 @@ export async function runCoreSamplingPackedTests(rawAnimationFixtures: {
   );
   const ratioClampStartPose = sampleClipToPoseAtRatio(skeleton, coherentSamplingClip, Number.NaN);
   const ratioClampEndPose = sampleClipToPoseAtRatio(skeleton, coherentSamplingClip, 2);
+  assert.equal(
+    sampleTime({ id: "invalid-duration", duration: Number.NaN, tracks: [] }, 1, false),
+    0,
+    "direct time sampling should clamp non-finite clip durations to a bounded zero time"
+  );
   assert.deepEqual(
     ratioClampStartPose[2]!.translation,
     [0, 0, 0],
@@ -171,6 +178,56 @@ export async function runCoreSamplingPackedTests(rawAnimationFixtures: {
     repairedContextPose[1]!.rotation,
     [0, 0, 0, 1],
     "context sampling should repair non-normalizable rotation samples"
+  );
+  const malformedClipTracks = new Array<AnimationClip["tracks"][number]>(3);
+  malformedClipTracks[1] = {
+    humanBone: "head",
+    property: "translation",
+    times: [0] as unknown as Float32Array,
+    values: toFloat32Array([0, 0, 0])
+  };
+  malformedClipTracks[2] = {
+    humanBone: "spine",
+    property: "translation",
+    times: toFloat32Array([0]),
+    values: [0, 0, 0] as unknown as Float32Array
+  };
+  const malformedClipIssues = validateClip(
+    { id: "malformed-clip", duration: 1, tracks: malformedClipTracks },
+    skeleton
+  );
+  assert.ok(
+    malformedClipIssues.some((issue) => issue.track === 0 && issue.message === "animation track must be an object"),
+    "validateClip should report sparse/malformed track entries instead of throwing"
+  );
+  assert.ok(
+    malformedClipIssues.some((issue) => issue.track === 1 && issue.message === "track times must be a Float32Array"),
+    "validateClip should keep the runtime clip typed-array contract explicit"
+  );
+  assert.ok(
+    malformedClipIssues.some((issue) => issue.track === 2 && issue.message === "track values must be a Float32Array"),
+    "validateClip should reject non-typed runtime value buffers explicitly"
+  );
+  assert.ok(
+    validateClip({ id: "missing-tracks", duration: 1 } as unknown as AnimationClip).some(
+      (issue) => issue.message === "clip tracks must be an array"
+    ),
+    "validateClip should report malformed clip track containers without dereferencing them"
+  );
+  const malformedClipMetadataIssues = validateClip({
+    id: "malformed-clip-metadata",
+    name: 7,
+    duration: 1,
+    loop: "yes",
+    tracks: []
+  } as unknown as AnimationClip);
+  assert.ok(
+    malformedClipMetadataIssues.some((issue) => issue.message === "clip name must be a string"),
+    "validateClip should report malformed clip names"
+  );
+  assert.ok(
+    malformedClipMetadataIssues.some((issue) => issue.message === "clip loop must be a boolean"),
+    "validateClip should report malformed loop flags"
   );
 
   const coherentSamplingStats = getAnimationClipStats(coherentSamplingClip, skeleton);
@@ -277,6 +334,77 @@ export async function runCoreSamplingPackedTests(rawAnimationFixtures: {
     packedRuntimeAnimation.keyControllers[1]!.seekTable,
     { iframeLowerKeys: [0, 0, 1, 1, 2], iframeUpperKeys: [0, 1, 1, 2, 2] },
     "packed seek tables should mark exact iframe keys and interpolation spans"
+  );
+  const normalizedDeltaSkeleton = createSkeleton([
+    { name: "hips", humanoid: "hips" },
+    {
+      name: "head",
+      parentName: "hips",
+      humanoid: "head",
+      rest: { rotation: quatFromAxisAngle([0, 1, 0], Math.PI / 6) }
+    }
+  ]);
+  const normalizedDeltaClip: AnimationClip = {
+    id: "packed-normalized-delta",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "head",
+        property: "rotation",
+        rotationSpace: "normalized-humanoid-delta",
+        times: toFloat32Array([0, 1]),
+        values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)])
+      }
+    ]
+  };
+  const normalizedDeltaPacked = buildPackedRuntimeAnimation(normalizedDeltaClip, normalizedDeltaSkeleton);
+  assert.equal(
+    normalizedDeltaPacked.keyControllers[0]!.rotationSpace,
+    "normalized-humanoid-delta",
+    "packed runtime controllers should preserve rotation-space metadata"
+  );
+  assert.ok(
+    quaternionNearlyEqual(
+      samplePackedRuntimeAnimationToPose(normalizedDeltaSkeleton, normalizedDeltaPacked, 0.5)[1]!.rotation,
+      sampleClipToPose(normalizedDeltaSkeleton, normalizedDeltaClip, 0.5)[1]!.rotation,
+      1e-6
+    ),
+    "packed normalized humanoid delta tracks should sample equivalently to ordinary clips"
+  );
+  const nameResolvedPacked = buildPackedRuntimeAnimation({
+    id: "packed-name-resolved",
+    duration: 1,
+    tracks: [
+      {
+        joint: "head",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 3, 0, 0])
+      }
+    ]
+  });
+  assert.equal(
+    nameResolvedPacked.keyControllers[0]!.targetKey,
+    "joint:head",
+    "packed no-skeleton target keys should preserve joint-vs-humanBone target kind"
+  );
+  assert.deepEqual(
+    samplePackedRuntimeAnimationToPose(skeleton, nameResolvedPacked, 1)[2]!.translation,
+    [3, 0, 0],
+    "packed animations built without a skeleton should still validate and sample by stored joint metadata"
+  );
+  const mixedTargetNoSkeletonPacked = tryBuildPackedRuntimeAnimation({
+    id: "packed-mixed-target-no-skeleton",
+    duration: 1,
+    tracks: [
+      { joint: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([1, 0, 0]) },
+      { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([2, 0, 0]) }
+    ]
+  });
+  assert.equal(
+    mixedTargetNoSkeletonPacked.ok,
+    true,
+    "packed validation without a skeleton should distinguish same-label joint and humanBone targets by kind"
   );
   const singleKeyPacked = buildPackedRuntimeAnimation(
     {
@@ -435,6 +563,41 @@ export async function runCoreSamplingPackedTests(rawAnimationFixtures: {
       (issue) => issue.message === "packed key controller targetKey does not match resolved target"
     ),
     "packed runtime validation should reject key controllers whose targetKey no longer matches their resolved target"
+  );
+  const invalidPackedRotationSpace = {
+    ...packedRuntimeAnimation,
+    keyControllers: packedRuntimeAnimation.keyControllers.map((controller, index) =>
+      index === 1 ? { ...controller, rotationSpace: "normalized-humanoid-delta" } : controller
+    )
+  } as unknown as typeof packedRuntimeAnimation;
+  assert.ok(
+    validatePackedRuntimeAnimation(invalidPackedRotationSpace, skeleton).some(
+      (issue) => issue.message === "rotationSpace is only valid on rotation tracks"
+    ),
+    "packed runtime validation should reject rotation-space metadata on non-rotation controllers"
+  );
+  const malformedPackedControllers = [
+    packedRuntimeAnimation.keyControllers[0]!,
+    undefined,
+    {} as (typeof packedRuntimeAnimation.keyControllers)[number],
+    packedRuntimeAnimation.keyControllers[1]!
+  ] as unknown as typeof packedRuntimeAnimation.keyControllers;
+  const malformedControllerPacked = {
+    ...packedRuntimeAnimation,
+    archive: { ...packedRuntimeAnimation.archive, trackCount: malformedPackedControllers.length },
+    keyControllers: malformedPackedControllers
+  };
+  assert.ok(
+    validatePackedRuntimeAnimation(malformedControllerPacked, skeleton).some(
+      (issue) => issue.message === "packed key controller must be an object"
+    ),
+    "packed runtime validation should report sparse/malformed key controllers without throwing"
+  );
+  assert.ok(
+    validatePackedRuntimeAnimation(malformedControllerPacked, skeleton).some(
+      (issue) => issue.message === "packed key controller targetKey is required"
+    ),
+    "packed runtime validation should report object-shaped key controllers with missing target metadata"
   );
   const overlappingPackedBuffersBase = buildPackedRuntimeAnimation(
     {

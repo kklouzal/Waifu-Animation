@@ -3,6 +3,7 @@ export type {
   AnimationTrack,
   ClipValidationIssue,
   NormalizedTrackProperty,
+  RotationSpace,
   SampleOptions,
   SampleRatioOptions,
   SampleRepairDiagnostic,

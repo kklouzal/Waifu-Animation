@@ -12,6 +12,7 @@ import {
   dotQuat,
   ensureShortestQuat,
   euclideanModulo,
+  isFiniteTransform,
   lerpVec3,
   multiplyQuat,
   normalizeQuat,
@@ -285,6 +286,7 @@ const RAW_ANIMATION_PROPERTY_RANK: Readonly<Record<NormalizedTrackProperty, numb
   rotation: 1,
   scale: 2
 };
+const MAX_FIXED_RATE_SAMPLE_COUNT = 1_000_000;
 
 export function createRawAnimation(definition: RawAnimationDefinition): RawAnimation {
   const raw: RawAnimation = {
@@ -556,7 +558,11 @@ export function createFixedRateSamplingTimes(duration: number, frequency: number
   }
   const safeDuration = Number.isFinite(duration) ? Math.max(0, duration) : 0;
   const period = 1 / frequency;
-  const sampleCount = Math.max(1, Math.ceil(1 + safeDuration * frequency));
+  const rawSampleCount = 1 + safeDuration * frequency;
+  if (!Number.isFinite(rawSampleCount) || rawSampleCount > MAX_FIXED_RATE_SAMPLE_COUNT) {
+    throw new RangeError(`fixed-rate sampling sample count exceeds ${MAX_FIXED_RATE_SAMPLE_COUNT}`);
+  }
+  const sampleCount = Math.max(1, Math.ceil(rawSampleCount));
   const samples: FixedRateSample[] = [];
   const times: number[] = [];
   const ratios: number[] = [];
@@ -1189,12 +1195,7 @@ function validateAdditiveReferencePose(
 }
 
 function isValidAdditiveReferenceTransform(transform: Transform): boolean {
-  return (
-    transform.translation.every(Number.isFinite) &&
-    transform.rotation.every(Number.isFinite) &&
-    transform.scale.every(Number.isFinite) &&
-    Math.hypot(...transform.rotation) > EPSILON
-  );
+  return isFiniteTransform(transform);
 }
 
 function assertValidRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton): void {
@@ -1206,12 +1207,14 @@ function assertValidRawAnimation(rawAnimation: RawAnimation, skeleton?: Skeleton
 
 function sampleRawAnimationTime(rawAnimation: RawAnimation, timeSeconds: number, loop: boolean): number {
   if (!Number.isFinite(timeSeconds)) return 0;
-  if (loop && rawAnimation.duration > 0) return euclideanModulo(timeSeconds, rawAnimation.duration);
-  return clamp(timeSeconds, 0, Math.max(0, rawAnimation.duration));
+  const duration = Number.isFinite(rawAnimation.duration) && rawAnimation.duration > 0 ? rawAnimation.duration : 0;
+  if (loop && duration > 0) return euclideanModulo(timeSeconds, duration);
+  return clamp(timeSeconds, 0, duration);
 }
 
 function sampleRawAnimationRatioToTime(rawAnimation: RawAnimation, ratio: number): number {
-  return clamp(Number.isFinite(ratio) ? ratio : 0, 0, 1) * rawAnimation.duration;
+  const duration = Number.isFinite(rawAnimation.duration) && rawAnimation.duration > 0 ? rawAnimation.duration : 0;
+  return clamp(Number.isFinite(ratio) ? ratio : 0, 0, 1) * duration;
 }
 
 function sampleValidatedRawAnimation(

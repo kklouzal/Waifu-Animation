@@ -22,6 +22,7 @@ import type {
   AnimationClip,
   ClipValidationIssue,
   NormalizedTrackProperty,
+  RotationSpace,
   SampleOptions,
   SampleRatioOptions,
   SampleRepairDiagnostic,
@@ -93,6 +94,7 @@ export type PackedRuntimeAnimationKeyController = {
   joint?: string;
   humanBone?: string;
   jointIndex?: number;
+  rotationSpace?: RotationSpace;
   sourceRestQuaternion?: readonly number[];
   sourceRestChildDirection?: readonly number[];
   seekTable: PackedRuntimeAnimationTrackSeekTable;
@@ -204,7 +206,12 @@ export function validatePackedRuntimeAnimation(
       skeleton,
       resolvedChannels
     );
-    if (index > 0 && comparePackedKeyControllers(controllers[index - 1]!, controller) > 0) {
+    if (
+      index > 0 &&
+      isPackedKeyControllerObject(controllers[index - 1]) &&
+      isPackedKeyControllerObject(controller) &&
+      comparePackedKeyControllers(controllers[index - 1]!, controller) > 0
+    ) {
       issues.push({
         track: index,
         joint: controllerTargetName(controller),
@@ -328,6 +335,7 @@ type PackedRuntimeAnimationBuildTrack = {
   joint?: string;
   humanBone?: string;
   jointIndex?: number;
+  rotationSpace?: RotationSpace;
   sourceRestQuaternion?: readonly number[];
   sourceRestChildDirection?: readonly number[];
 };
@@ -375,6 +383,7 @@ function buildValidatedPackedRuntimeAnimation(clip: AnimationClip, skeleton?: Sk
     if (buildTrack.joint !== undefined) controller.joint = buildTrack.joint;
     if (buildTrack.humanBone !== undefined) controller.humanBone = buildTrack.humanBone;
     if (buildTrack.jointIndex !== undefined) controller.jointIndex = buildTrack.jointIndex;
+    if (buildTrack.rotationSpace !== undefined) controller.rotationSpace = buildTrack.rotationSpace;
     if (buildTrack.sourceRestQuaternion !== undefined)
       controller.sourceRestQuaternion = buildTrack.sourceRestQuaternion;
     if (buildTrack.sourceRestChildDirection !== undefined)
@@ -434,6 +443,7 @@ function collectPackedRuntimeAnimationTracks(
     if (track.joint !== undefined) buildTrack.joint = track.joint;
     if (track.humanBone !== undefined) buildTrack.humanBone = track.humanBone;
     if (jointIndex >= 0) buildTrack.jointIndex = jointIndex;
+    if (track.rotationSpace !== undefined) buildTrack.rotationSpace = track.rotationSpace;
     if (track.sourceRestQuaternion !== undefined)
       buildTrack.sourceRestQuaternion = freezeNumberArray(track.sourceRestQuaternion);
     if (track.sourceRestChildDirection !== undefined)
@@ -470,12 +480,15 @@ function comparePackedKeyControllers(
 ): number {
   if (a.jointIndex !== undefined && b.jointIndex !== undefined && a.jointIndex !== b.jointIndex)
     return a.jointIndex - b.jointIndex;
-  const targetOrder = a.targetKey.localeCompare(b.targetKey);
+  const targetOrder = String(a.targetKey ?? "").localeCompare(String(b.targetKey ?? ""));
   if (targetOrder !== 0) return targetOrder;
-  const propertyOrder =
-    PACKED_RUNTIME_PROPERTY_RANK[a.normalizedProperty] - PACKED_RUNTIME_PROPERTY_RANK[b.normalizedProperty];
+  const propertyOrder = packedControllerPropertyRank(a) - packedControllerPropertyRank(b);
   if (propertyOrder !== 0) return propertyOrder;
   return a.sourceTrack - b.sourceTrack;
+}
+
+function packedControllerPropertyRank(controller: PackedRuntimeAnimationKeyController): number {
+  return PACKED_RUNTIME_PROPERTY_RANK[controller.normalizedProperty] ?? Number.POSITIVE_INFINITY;
 }
 
 function buildPackedTrackSeekTable(
@@ -513,12 +526,14 @@ function packedTrackTimeBracket(times: readonly number[], time: number): [number
 
 function samplePackedAnimationTime(animation: PackedRuntimeAnimation, timeSeconds: number, loop: boolean): number {
   if (!Number.isFinite(timeSeconds)) return 0;
-  if (loop && animation.duration > 0) return euclideanModulo(timeSeconds, animation.duration);
-  return clamp(timeSeconds, 0, Math.max(0, animation.duration));
+  const duration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : 0;
+  if (loop && duration > 0) return euclideanModulo(timeSeconds, duration);
+  return clamp(timeSeconds, 0, duration);
 }
 
 function samplePackedAnimationRatioToTime(animation: PackedRuntimeAnimation, ratio: number): number {
-  return clamp(Number.isFinite(ratio) ? ratio : 0, 0, 1) * animation.duration;
+  const duration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : 0;
+  return clamp(Number.isFinite(ratio) ? ratio : 0, 0, 1) * duration;
 }
 
 function samplePackedRuntimeAnimationAtResolvedTime(
@@ -700,7 +715,9 @@ function validatePackedArchiveConsistency(
   const archive = animation.archive;
   if (!isPackedArchiveObject(archive)) return;
   const keyCount = controllers.reduce(
-    (sum, controller) => sum + (Number.isInteger(controller.keyCount) ? controller.keyCount : 0),
+    (sum, controller) =>
+      sum +
+      (isPackedKeyControllerObject(controller) && Number.isInteger(controller.keyCount) ? controller.keyCount : 0),
     0
   );
   if (archive.trackCount !== controllers.length)
@@ -904,11 +921,39 @@ function validatePackedKeyController(
     });
   }
   validatePackedControllerTarget(issues, controller, index, property, skeleton, resolvedChannels);
+  validatePackedControllerRotationSpace(issues, controller, index, property);
   validatePackedControllerSourceRest(issues, controller, index, property);
   if (keyCountValid && timeRangeValid && valueRangeValid) {
     validatePackedControllerTimesAndValues(issues, controller, index, duration, property, times, values);
   }
   validatePackedSeekTable(issues, controller, index, iframeTimes, times);
+}
+
+function validatePackedControllerRotationSpace(
+  issues: ClipValidationIssue[],
+  controller: PackedRuntimeAnimationKeyController,
+  index: number,
+  property: NormalizedTrackProperty
+): void {
+  if (controller.rotationSpace === undefined) return;
+  const targetName = controllerTargetName(controller);
+  if (property !== "rotation") {
+    issues.push({
+      track: index,
+      joint: targetName,
+      property: controller.property,
+      message: "rotationSpace is only valid on rotation tracks"
+    });
+    return;
+  }
+  if (controller.rotationSpace !== "local-source" && controller.rotationSpace !== "normalized-humanoid-delta") {
+    issues.push({
+      track: index,
+      joint: targetName,
+      property: controller.property,
+      message: "rotationSpace must be local-source or normalized-humanoid-delta"
+    });
+  }
 }
 
 function validatePackedControllerTarget(
@@ -984,9 +1029,8 @@ function validatePackedControllerTarget(
     }
   }
   if (typeof controller.targetKey === "string" && controller.targetKey.length > 0) {
-    const expectedTargetKey =
-      skeleton && jointIndex >= 0 ? String(jointIndex) : String(controller.joint ?? controller.humanBone ?? "");
-    if (expectedTargetKey.length > 0 && controller.targetKey !== expectedTargetKey) {
+    const expectedTargetKeys = packedControllerExpectedTargetKeys(controller, skeleton, jointIndex);
+    if (expectedTargetKeys.length > 0 && !expectedTargetKeys.includes(controller.targetKey)) {
       issues.push({
         track: index,
         joint: targetName,
@@ -999,7 +1043,7 @@ function validatePackedControllerTarget(
   const channelKey =
     skeleton && jointIndex >= 0
       ? `${jointIndex}:${property}`
-      : `${String(controller.joint ?? controller.humanBone ?? "")}:${property}`;
+      : `${packedControllerUnresolvedTargetKey(controller) || controller.targetKey}:${property}`;
   const existing = resolvedChannels.get(channelKey);
   if (existing) {
     issues.push({
@@ -1066,7 +1110,7 @@ function validatePackedControllerSourceRest(
         property: controller.property,
         message: "sourceRestChildDirection must contain exactly 3 values"
       });
-    } else if (!controller.sourceRestChildDirection.every(Number.isFinite)) {
+    } else if (!hasFiniteArrayLikeComponents(controller.sourceRestChildDirection, 3)) {
       issues.push({
         track: index,
         joint: targetName,
@@ -1290,6 +1334,13 @@ function validateFiniteNumberArray(issues: ClipValidationIssue[], values: readon
   if (values.some((value) => !Number.isFinite(value))) issues.push({ message: `${label} must contain finite numbers` });
 }
 
+function hasFiniteArrayLikeComponents(values: ArrayLike<number>, count: number): boolean {
+  for (let index = 0; index < count; index += 1) {
+    if (!Number.isFinite(values[index])) return false;
+  }
+  return true;
+}
+
 function readDurationRatio(duration: number, time: number): number {
   if (!Number.isFinite(duration) || duration <= 0) return 0;
   return clamp(Number.isFinite(time) ? time / duration : 0, 0, 1);
@@ -1308,6 +1359,38 @@ function controllerTargetName(
   controller: Pick<PackedRuntimeAnimationKeyController, "joint" | "humanBone" | "jointIndex" | "targetKey">
 ): string {
   return String(controller.joint ?? controller.humanBone ?? controller.jointIndex ?? controller.targetKey ?? "");
+}
+
+function packedControllerExpectedTargetKeys(
+  controller: PackedRuntimeAnimationKeyController,
+  skeleton: Skeleton | undefined,
+  jointIndex: number
+): string[] {
+  const keys = new Set<string>();
+  if (skeleton && jointIndex >= 0 && controller.jointIndex !== undefined) {
+    keys.add(String(jointIndex));
+  } else {
+    if (controller.jointIndex !== undefined) keys.add(String(controller.jointIndex));
+    const unresolved = packedControllerUnresolvedTargetKey(controller);
+    if (unresolved.length > 0) keys.add(unresolved);
+    const legacy = packedControllerLegacyTargetKey(controller);
+    if (legacy.length > 0) keys.add(legacy);
+  }
+  return Array.from(keys);
+}
+
+function packedControllerUnresolvedTargetKey(
+  controller: Pick<PackedRuntimeAnimationKeyController, "joint" | "humanBone">
+): string {
+  if (controller.joint !== undefined) return `joint:${controller.joint}`;
+  if (controller.humanBone !== undefined) return `humanBone:${controller.humanBone}`;
+  return "";
+}
+
+function packedControllerLegacyTargetKey(
+  controller: Pick<PackedRuntimeAnimationKeyController, "joint" | "humanBone">
+): string {
+  return String(controller.joint ?? controller.humanBone ?? "");
 }
 
 function isPackedRuntimeAnimationObject(value: unknown): value is PackedRuntimeAnimation {

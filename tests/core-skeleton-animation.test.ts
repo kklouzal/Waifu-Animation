@@ -1222,6 +1222,20 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     /reference pose transform is not finite/,
     "additive builder should fail clearly on non-finite reference transforms"
   );
+  const shortComponentReferencePose = clonePose(skeleton.restPose);
+  shortComponentReferencePose[0] = {
+    translation: [0, 0] as unknown as [number, number, number],
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1]
+  };
+  assert.throws(
+    () =>
+      buildAdditiveAnimationClip(explicitReferenceAdditiveSourceClip, skeleton, {
+        referencePose: shortComponentReferencePose
+      }),
+    /reference pose transform is not finite/,
+    "additive builder should reject short reference transform component tuples"
+  );
 
   const clonedRawAnimation = cloneRawAnimation(rawAnimation);
   assert.notEqual(clonedRawAnimation, rawAnimation, "cloneRawAnimation should create a new raw animation object");
@@ -1508,6 +1522,11 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     () => createFixedRateSamplingTimes(1, 0),
     /frequency must be positive and finite/,
     "fixed-rate sampling should reject invalid frequencies"
+  );
+  assert.throws(
+    () => createFixedRateSamplingTimes(1_000_000, 2),
+    /sample count exceeds/,
+    "fixed-rate sampling should reject impractically large sample counts before allocation"
   );
 
   const rawUtilityPose = sampleRawAnimation(rawUtilityAnimation, 1, { skeleton, loop: false });

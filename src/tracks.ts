@@ -141,66 +141,103 @@ export function defaultUserTrackValue<T extends UserTrackType>(type: T): UserTra
 
 export function validateRawUserTrack(raw: RawUserTrack): UserTrackValidationIssue[] {
   const issues: UserTrackValidationIssue[] = [];
-  if (!USER_TRACK_TYPES.has(raw.type)) {
-    issues.push({ field: "type", message: `unsupported user track type ${String(raw.type)}` });
+  if (!isObjectRecord(raw)) {
+    issues.push({ field: "track", message: "raw user track must be an object" });
+    return issues;
+  }
+  const candidate = raw as Partial<RawUserTrack>;
+  if (!USER_TRACK_TYPES.has(candidate.type as UserTrackType)) {
+    issues.push({ field: "type", message: `unsupported user track type ${String(candidate.type)}` });
+    return issues;
+  }
+  if (candidate.name !== undefined && typeof candidate.name !== "string") {
+    issues.push({ field: "name", message: "raw user track name must be a string" });
+  }
+  const keyframes = Array.isArray(candidate.keyframes) ? candidate.keyframes : null;
+  if (!keyframes) {
+    issues.push({ field: "keyframes", message: "raw user track keyframes must be an array" });
     return issues;
   }
 
   let previousRatio = -1;
-  raw.keyframes.forEach((key, index) => {
-    if (!isFiniteNumber(key.ratio) || key.ratio < 0 || key.ratio > 1) {
+  for (let index = 0; index < keyframes.length; index += 1) {
+    const key = keyframes[index] as Partial<RawUserTrackKeyframe> | undefined;
+    if (!isObjectRecord(key)) {
+      issues.push({ key: index, field: "keyframes", message: "keyframe must be an object" });
+      continue;
+    }
+    const ratio = key.ratio;
+    if (typeof ratio !== "number" || !isFiniteNumber(ratio) || ratio < 0 || ratio > 1) {
       issues.push({ key: index, field: "ratio", message: "keyframe ratio must be finite and in [0,1]" });
+    } else {
+      if (ratio <= previousRatio) {
+        issues.push({ key: index, field: "ratio", message: "keyframe ratios must be in strict ascending order" });
+      }
+      previousRatio = ratio;
     }
-    if (key.ratio <= previousRatio) {
-      issues.push({ key: index, field: "ratio", message: "keyframe ratios must be in strict ascending order" });
-    }
-    previousRatio = key.ratio;
 
-    if (!USER_TRACK_INTERPOLATIONS.has(key.interpolation)) {
+    const interpolation = key.interpolation;
+    if (!USER_TRACK_INTERPOLATIONS.has(interpolation as UserTrackInterpolation)) {
       issues.push({ key: index, field: "interpolation", message: "keyframe interpolation must be linear or step" });
     }
-    validateValue(raw.type, key.value, index, issues);
-  });
+    validateValue(candidate.type as UserTrackType, key.value, index, issues);
+  }
   return issues;
 }
 
 export function validateUserTrack(track: UserTrack): UserTrackValidationIssue[] {
   const issues: UserTrackValidationIssue[] = [];
-  if (!USER_TRACK_TYPES.has(track.type)) {
-    issues.push({ field: "type", message: `unsupported user track type ${String(track.type)}` });
+  if (!isObjectRecord(track)) {
+    issues.push({ field: "track", message: "user track must be an object" });
     return issues;
   }
-  if (!(track.ratios instanceof Float32Array))
+  const candidate = track as Partial<UserTrack>;
+  if (!USER_TRACK_TYPES.has(candidate.type as UserTrackType)) {
+    issues.push({ field: "type", message: `unsupported user track type ${String(candidate.type)}` });
+    return issues;
+  }
+  if (candidate.name !== undefined && typeof candidate.name !== "string") {
+    issues.push({ field: "name", message: "track name must be a string" });
+  }
+  if (!(candidate.ratios instanceof Float32Array))
     issues.push({ field: "ratios", message: "track ratios must be a Float32Array" });
-  if (!(track.values instanceof Float32Array))
+  if (!(candidate.values instanceof Float32Array))
     issues.push({ field: "values", message: "track values must be a Float32Array" });
-  if (!(track.steps instanceof Uint8Array))
+  if (!(candidate.steps instanceof Uint8Array))
     issues.push({ field: "steps", message: "track steps must be a Uint8Array" });
-  if (issues.length > 0) return issues;
+  if (
+    !(candidate.ratios instanceof Float32Array) ||
+    !(candidate.values instanceof Float32Array) ||
+    !(candidate.steps instanceof Uint8Array)
+  ) {
+    return issues;
+  }
 
-  const stride = trackValueSize(track.type);
-  if (track.values.length !== track.ratios.length * stride) {
+  const runtimeTrack = candidate as UserTrack;
+  const stride = trackValueSize(runtimeTrack.type);
+  if (runtimeTrack.values.length !== runtimeTrack.ratios.length * stride) {
     issues.push({ field: "values", message: `track values length must equal ratios length times ${stride}` });
   }
-  if (track.steps.length !== track.ratios.length) {
+  if (runtimeTrack.steps.length !== runtimeTrack.ratios.length) {
     issues.push({ field: "steps", message: "track steps length must equal ratios length" });
   }
 
   let previousRatio = -1;
-  for (let index = 0; index < track.ratios.length; index += 1) {
-    const ratio = track.ratios[index]!;
+  for (let index = 0; index < runtimeTrack.ratios.length; index += 1) {
+    const ratio = runtimeTrack.ratios[index]!;
     if (!isFiniteNumber(ratio) || ratio < 0 || ratio > 1) {
       issues.push({ key: index, field: "ratios", message: "runtime key ratio must be finite and in [0,1]" });
+    } else {
+      if (ratio <= previousRatio) {
+        issues.push({ key: index, field: "ratios", message: "runtime key ratios must be in strict ascending order" });
+      }
+      previousRatio = ratio;
     }
-    if (ratio <= previousRatio) {
-      issues.push({ key: index, field: "ratios", message: "runtime key ratios must be in strict ascending order" });
-    }
-    previousRatio = ratio;
 
-    if (track.steps[index] !== 0 && track.steps[index] !== 1) {
+    if (runtimeTrack.steps[index] !== 0 && runtimeTrack.steps[index] !== 1) {
       issues.push({ key: index, field: "steps", message: "runtime step flag must be 0 or 1" });
     }
-    validateFlatValue(track.type, track.values, index * stride, index, issues);
+    validateFlatValue(runtimeTrack.type, runtimeTrack.values, index * stride, index, issues);
   }
   return issues;
 }
@@ -346,7 +383,7 @@ function decimateRawUserTrackKeys<T extends UserTrackType>(
       let candidate = left;
       for (let index = left + 1; index < right; index += 1) {
         const key = keyframes[index]!;
-        if (!isDecimableKey(key)) {
+        if (!isDecimableKey(keyframes, index)) {
           candidate = index;
           break;
         }
@@ -372,7 +409,7 @@ function decimateRawUserTrackKeys<T extends UserTrackType>(
 
   while (keyframes.length > 0) {
     const back = keyframes[keyframes.length - 1]!;
-    if (keyframes.length > 1 && !isDecimableKey(back)) break;
+    if (keyframes.length > 1 && !isTrailingDecimableKey(back)) break;
     const reference = keyframes.length === 1 ? defaultUserTrackValue(raw.type) : keyframes[keyframes.length - 2]!.value;
     if (valueDistance(raw.type, reference, back.value) > tolerance) break;
     keyframes.pop();
@@ -395,7 +432,13 @@ function cloneOptimizableKey<T extends UserTrackType>(
   };
 }
 
-function isDecimableKey(key: RawUserTrackKeyframe): boolean {
+function isDecimableKey(keyframes: readonly RawUserTrackKeyframe[], index: number): boolean {
+  const key = keyframes[index];
+  if (!key || key.interpolation === "step") return false;
+  return keyframes[index - 1]?.interpolation !== "step";
+}
+
+function isTrailingDecimableKey(key: RawUserTrackKeyframe): boolean {
   return key.interpolation !== "step";
 }
 
@@ -405,6 +448,7 @@ function interpolateOptimizedValue<T extends UserTrackType>(
   right: RawUserTrackKeyframe<T>,
   reference: RawUserTrackKeyframe<T>
 ): UserTrackValue<T> {
+  if (left.interpolation === "step") return left.value;
   const alpha = (reference.ratio - left.ratio) / (right.ratio - left.ratio);
   if (type === "quaternion") return nlerpQuat(left.value as Quat, right.value as Quat, alpha) as UserTrackValue<T>;
   if (type === "float") {
@@ -693,6 +737,10 @@ function isArrayLikeNumberValue(value: unknown, length: number): value is ArrayL
   if (value === null || typeof value !== "object") return false;
   const candidate = value as { length?: unknown };
   return typeof candidate.length === "number" && candidate.length === length;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function trackValidationError(label: string, issues: readonly UserTrackValidationIssue[]): Error {

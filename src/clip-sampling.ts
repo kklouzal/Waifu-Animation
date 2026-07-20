@@ -432,10 +432,9 @@ function isSampleableTrackTarget(track: AnimationTrack): boolean {
 
 export function sampleTime(clip: AnimationClip, timeSeconds: number, loop: boolean): number {
   if (!Number.isFinite(timeSeconds)) return 0;
-  if (loop && clip.duration > 0) {
-    return euclideanModulo(timeSeconds, clip.duration);
-  }
-  return clamp(timeSeconds, 0, Math.max(0, clip.duration));
+  const duration = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0;
+  if (loop && duration > 0) return euclideanModulo(timeSeconds, duration);
+  return clamp(timeSeconds, 0, duration);
 }
 
 export function sampleTrack(
