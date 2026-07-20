@@ -14,6 +14,7 @@ import {
   dampAlpha,
   distributeLookAt,
   limitVisemeStack,
+  mixExpressions,
   zeroVisemes
 } from "./test-api.js";
 
@@ -66,6 +67,13 @@ export function runPresencePlanningTests(): void {
     0.21,
     "directly behind targets should clamp toward the yaw limit instead of collapsing to center"
   );
+  const signedZeroBehindLook = distributeLookAt([-0, -0, -1], { maxYaw: 0.5 });
+  assert.equal(
+    signedZeroBehindLook.eyes.yaw,
+    0.21,
+    "signed-zero behind targets should pick the same deterministic yaw side as positive zero"
+  );
+  assert.equal(Object.is(signedZeroBehindLook.eyes.pitch, -0), false, "look-at pitch should not leak signed zero");
   const hostileLook = distributeLookAt([Number.NaN, Infinity, -1], {
     maxYaw: Number.POSITIVE_INFINITY,
     maxPitch: Number.NaN,
@@ -124,6 +132,14 @@ export function runPresencePlanningTests(): void {
     classifyAttentionTargetSafety({ id: "too-close", position: [0, 0, 0.01], weight: 1 }),
     "tooClose",
     "attention target safety should classify near-zero look-at targets"
+  );
+  assert.equal(
+    classifyAttentionTargetSafety(
+      { id: "negative-max-distance", position: [0, 0, 100], weight: 1 },
+      { maxDistance: -1 }
+    ),
+    "tooFar",
+    "negative max-distance options should fall back to the default safety cap instead of disabling distance safety"
   );
   assert.equal(
     classifyAttentionTargetSafety({ id: "outside-yaw", position: [1, 0, 0], weight: 1 }, { minForwardCosine: 0.5 }),
@@ -292,10 +308,25 @@ export function runPresencePlanningTests(): void {
     "finite-dwell",
     "non-finite dwell and now inputs should not prevent a finite scheduler choice"
   );
+  const sparseAttentionTargets = [
+    undefined,
+    { id: "short-position", position: [0, 0] as never, weight: 10 },
+    { id: "valid-sparse", position: [0, 0, 1], weight: 1 }
+  ] as unknown as Parameters<AttentionScheduler["choose"]>[1];
+  assert.equal(
+    new AttentionScheduler("attention-sparse").choose(10, sparseAttentionTargets)?.id,
+    "valid-sparse",
+    "attention selection should skip sparse or malformed entries without throwing"
+  );
   assert.equal(
     Number.isFinite(breathingWeight(Number.NaN, 0.5)),
     true,
     "breathing weight should ignore non-finite elapsed time"
+  );
+  assert.equal(
+    Number.isFinite(breathingWeight(Number.MAX_VALUE, 1)),
+    true,
+    "breathing weight should remain finite for huge elapsed times"
   );
 
   const presenceA = new PresencePlanner("presence-test", 0);
@@ -372,6 +403,27 @@ export function runPresencePlanningTests(): void {
     Object.values(hostileSpeechPresenceFrame.cueAmounts).every(Number.isFinite),
     "speech performance scheduling should sanitize non-finite duration and start times"
   );
+  const hugePresence = new PresencePlanner("presence-huge", Number.MAX_VALUE);
+  hugePresence.scheduleCue("glance", Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, 0, "left");
+  const hugePresenceFrame = hugePresence.update({
+    nowMs: Number.MAX_VALUE,
+    elapsedSeconds: Number.MAX_VALUE,
+    deltaSeconds: Number.MAX_VALUE,
+    behavior: { state: "invalid" as never, gesture: "invalid" as never, gaze: "invalid" as never },
+    affect: { mood: "invalid" as never },
+    speakingUntilMs: Number.POSITIVE_INFINITY
+  });
+  assert.equal(hugePresenceFrame.activeGaze, "camera", "malformed behavior/gaze options should fall back to camera");
+  assert.ok(
+    Object.values(hugePresenceFrame.cueAmounts).every(Number.isFinite) &&
+      hugePresenceFrame.lookAtTarget.every(Number.isFinite) &&
+      hugePresenceFrame.boneTargets.every(
+        (target) =>
+          target.rotation.every(Number.isFinite) && Number.isFinite(target.influence) && Number.isFinite(target.speed)
+      ) &&
+      Object.values(hugePresenceFrame.motion).every(Number.isFinite),
+    "presence planning should stay finite for huge finite clocks and malformed options"
+  );
 }
 export function runFacialAnimationTests(): void {
   const visemes = new VisemeMixer({ maxTotal: 0.4 });
@@ -402,6 +454,15 @@ export function runFacialAnimationTests(): void {
   assert.ok(
     Object.values(invalidIntensityVisemes.update(1 / 30)).every(Number.isFinite),
     "viseme mixer should keep weights finite for non-finite intensity"
+  );
+  const mutatedVisemes = new VisemeMixer({ maxTotal: 1 });
+  mutatedVisemes.attack = null as never;
+  mutatedVisemes.release = null as never;
+  mutatedVisemes.setTarget(null as never);
+  mutatedVisemes.setTarget({ aa: 0.5 });
+  assert.ok(
+    Object.values(mutatedVisemes.update(1 / 30)).every(Number.isFinite),
+    "viseme mixer should tolerate malformed mutable speed maps and target maps"
   );
 
   const partialAttackVisemes = new VisemeMixer({ attack: { aa: 60 }, release: 20, maxTotal: 1 });
@@ -490,6 +551,19 @@ export function runFacialAnimationTests(): void {
     Number.isFinite(hostileBlink.state.nextAtMs) && Number.isFinite(hostileBlink.state.holdUntilMs),
     "blink scheduler should keep timing state finite after hostile trigger inputs"
   );
+  const hugeBlink = new BlinkScheduler("huge-blink", Number.MAX_VALUE);
+  hugeBlink.trigger(Number.MAX_VALUE, Number.MAX_VALUE);
+  const hugeBlinkValue = hugeBlink.update(Number.MAX_VALUE, Number.MAX_VALUE, 0.5);
+  assert.ok(
+    Number.isFinite(hugeBlinkValue) &&
+      Number.isFinite(hugeBlink.state.nextAtMs) &&
+      Number.isFinite(hugeBlink.state.holdUntilMs),
+    "blink scheduler should saturate huge finite timing state instead of leaking Infinity"
+  );
+  hugeBlink.state.value = Number.NaN;
+  hugeBlink.state.nextAtMs = Number.NaN;
+  hugeBlink.state.holdUntilMs = Number.NaN;
+  assert.equal(Number.isFinite(hugeBlink.update(0, 1 / 60, 0.5)), true, "blink updates should repair mutated state");
 
   const facial = new FacialExpressionMixer({
     visemes: {
@@ -526,4 +600,20 @@ export function runFacialAnimationTests(): void {
     Math.abs(malformedMouthReleaseState.mouthLevel - beforeMalformedMouthRelease * (1 - dampAlpha(18, 1 / 30))) < 1e-6,
     "malformed mouth release speeds should fall back instead of freezing mouth motion"
   );
+  malformedSpeedFacial.mouthLevel = Number.NaN;
+  malformedSpeedFacial.targetMouth = 1;
+  malformedSpeedFacial.mouthAttack = Number.NaN;
+  const repairedMouthState = malformedSpeedFacial.update(1 / 30, { talking: true });
+  assert.ok(
+    Math.abs(repairedMouthState.mouthLevel - dampAlpha(28, 1 / 30)) < 1e-6,
+    "facial mixer updates should repair mutated non-finite mouth state and speeds"
+  );
+  const hostileMixedExpressions = mixExpressions([
+    undefined,
+    { values: null, weight: 1 },
+    { values: { happy: 0.8, blink: Number.POSITIVE_INFINITY }, weight: 0.5 },
+    { values: { happy: 0.8 }, weight: Number.NaN }
+  ] as unknown as Parameters<typeof mixExpressions>[0]);
+  assert.equal(hostileMixedExpressions.happy, 0.4, "expression mixing should keep valid malformed-layer values");
+  assert.equal(hostileMixedExpressions.blink, 0, "expression mixing should sanitize non-finite layer values");
 }

@@ -153,6 +153,29 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
     true,
     "short scale tuples should not poison scale RMS"
   );
+  const sparsePose = clonePose(skeleton.restPose);
+  sparsePose[1] = undefined as never;
+  const sparseRotationMetric = poseRotationMetric(sparsePose, skeleton.restPose);
+  assert.equal(
+    sparseRotationMetric.invalidSamples,
+    1,
+    "pose rotation metrics should count sparse transform samples as invalid instead of throwing"
+  );
+  const sparsePoseDelta = poseDeltaMetric(sparsePose, skeleton.restPose, skeleton);
+  assert.equal(sparsePoseDelta.rotation.invalidSamples, 1);
+  assert.equal(sparsePoseDelta.translation.invalidSamples, 1);
+  assert.equal(sparsePoseDelta.scale.invalidSamples, 1);
+  const hugePoseDeltaA = clonePose(skeleton.restPose);
+  const hugePoseDeltaB = clonePose(skeleton.restPose);
+  hugePoseDeltaA[0]!.translation = [Number.MAX_VALUE, 0, 0];
+  hugePoseDeltaB[0]!.translation = [-Number.MAX_VALUE, 0, 0];
+  const hugePoseDelta = poseDeltaMetric(hugePoseDeltaA, hugePoseDeltaB, skeleton);
+  assert.equal(
+    Number.isFinite(hugePoseDelta.translation.rms),
+    true,
+    "huge finite translation deltas should not overflow metric RMS output"
+  );
+  assert.equal(hugePoseDelta.translation.max, Number.MAX_VALUE);
 
   const frameA = clonePose(skeleton.restPose);
   const frameB = clonePose(skeleton.restPose);
@@ -241,6 +264,15 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
     ["invalid-interval", "invalid-interval", "invalid-interval", "invalid-interval"]
   );
   assert.equal(invalidTimeDiscontinuity.translationVelocityUnitsPerSecond.max, 0);
+  assertFiniteMetricOutput(invalidTimeDiscontinuity);
+
+  const malformedFrameDiscontinuity = poseDiscontinuityMetric(
+    [undefined, { timeSeconds: 1, pose: frameA }] as unknown as Parameters<typeof poseDiscontinuityMetric>[0],
+    skeleton
+  );
+  assert.equal(malformedFrameDiscontinuity.validIntervals, 0);
+  assert.equal(malformedFrameDiscontinuity.invalidIntervals, 1);
+  assertFiniteMetricOutput(malformedFrameDiscontinuity);
 
   const thresholdDiscontinuity = poseDiscontinuityMetric(
     [

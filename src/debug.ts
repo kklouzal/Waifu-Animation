@@ -66,27 +66,41 @@ export type PoseDiscontinuityMetric = {
   issues: PoseDiscontinuityIssue[];
 };
 
+const EMPTY_TRANSFORM_LIST: readonly Transform[] = [];
+const EMPTY_DISCONTINUITY_FRAMES: readonly PoseDiscontinuityFrame[] = [];
+
+function isReadonlyArray<T>(value: readonly T[] | undefined): value is readonly T[] {
+  return Array.isArray(value);
+}
+
+function transformListOrEmpty(value: readonly Transform[] | undefined): readonly Transform[] {
+  return isReadonlyArray(value) ? value : EMPTY_TRANSFORM_LIST;
+}
+
+function frameListOrEmpty(value: readonly PoseDiscontinuityFrame[] | undefined): readonly PoseDiscontinuityFrame[] {
+  return isReadonlyArray(value) ? value : EMPTY_DISCONTINUITY_FRAMES;
+}
+
 export function poseRotationMetric(a: readonly Transform[], b: readonly Transform[]): PoseMetric {
-  const length = Math.min(a.length, b.length);
-  let sum = 0;
+  const poseA = transformListOrEmpty(a);
+  const poseB = transformListOrEmpty(b);
+  const length = Math.min(poseA.length, poseB.length);
+  const rotation = createMetricAccumulator();
   let max = 0;
-  let validSamples = 0;
-  let invalidSamples = 0;
   for (let index = 0; index < length; index += 1) {
-    const delta = rotationDelta(a[index]!, b[index]!);
+    const delta = rotationDelta(poseA[index], poseB[index]);
     if (delta === undefined) {
-      invalidSamples += 1;
+      rotation.invalidSamples += 1;
       continue;
     }
-    sum += delta * delta;
     max = Math.max(max, delta);
-    validSamples += 1;
+    pushFiniteSample(rotation, delta);
   }
   return {
-    rmsRotationDelta: validSamples > 0 ? Math.sqrt(sum / validSamples) : 0,
+    rmsRotationDelta: finishRms(rotation),
     maxRotationDelta: max,
     samples: length,
-    ...(invalidSamples > 0 ? { invalidSamples } : {})
+    ...(rotation.invalidSamples > 0 ? { invalidSamples: rotation.invalidSamples } : {})
   };
 }
 
@@ -95,17 +109,19 @@ export function poseDeltaMetric(
   b: readonly Transform[],
   skeleton?: Skeleton
 ): PoseDeltaMetric {
-  const length = Math.min(a.length, b.length);
+  const poseA = transformListOrEmpty(a);
+  const poseB = transformListOrEmpty(b);
+  const length = Math.min(poseA.length, poseB.length);
   const rotation = createMetricAccumulator();
   const translation = createMetricAccumulator();
   const scale = createMetricAccumulator();
 
   for (let index = 0; index < length; index += 1) {
-    const at = a[index]!;
-    const bt = b[index]!;
+    const at = poseA[index];
+    const bt = poseB[index];
     pushMetricSample(rotation, rotationDelta(at, bt), index);
-    pushMetricSample(translation, vec3Delta(at.translation, bt.translation), index);
-    pushMetricSample(scale, vec3Delta(at.scale, bt.scale), index);
+    pushMetricSample(translation, vec3Delta(at?.translation, bt?.translation), index);
+    pushMetricSample(scale, vec3Delta(at?.scale, bt?.scale), index);
   }
 
   return {
@@ -125,6 +141,7 @@ export function poseDiscontinuityMetric(
   skeleton?: Skeleton,
   thresholds: PoseDiscontinuityThresholds = {}
 ): PoseDiscontinuityMetric {
+  const frameList = frameListOrEmpty(frames);
   const angularVelocity = createVelocityAccumulator();
   const translationVelocity = createVelocityAccumulator();
   const scaleVelocity = createVelocityAccumulator();
@@ -132,13 +149,17 @@ export function poseDiscontinuityMetric(
   let validIntervals = 0;
   let invalidIntervals = 0;
 
-  for (let intervalIndex = 0; intervalIndex < frames.length - 1; intervalIndex += 1) {
-    const previous = frames[intervalIndex]!;
-    const next = frames[intervalIndex + 1]!;
-    const deltaSeconds = next.timeSeconds - previous.timeSeconds;
+  for (let intervalIndex = 0; intervalIndex < frameList.length - 1; intervalIndex += 1) {
+    const previous = frameList[intervalIndex];
+    const next = frameList[intervalIndex + 1];
+    const previousTime = readFrameTime(previous);
+    const nextTime = readFrameTime(next);
+    const deltaSeconds = nextTime - previousTime;
     if (
-      !Number.isFinite(previous.timeSeconds) ||
-      !Number.isFinite(next.timeSeconds) ||
+      !isPoseFrame(previous) ||
+      !isPoseFrame(next) ||
+      !Number.isFinite(previousTime) ||
+      !Number.isFinite(nextTime) ||
       !Number.isFinite(deltaSeconds) ||
       deltaSeconds <= 0
     ) {
@@ -146,8 +167,8 @@ export function poseDiscontinuityMetric(
       issues.push({
         kind: "invalid-interval",
         intervalIndex,
-        fromTimeSeconds: previous.timeSeconds,
-        toTimeSeconds: next.timeSeconds
+        fromTimeSeconds: finiteIssueTime(previousTime),
+        toTimeSeconds: finiteIssueTime(nextTime)
       });
       continue;
     }
@@ -191,7 +212,7 @@ export function poseDiscontinuityMetric(
     angularVelocityMetric.max > angularThreshold
   ) {
     issues.push(
-      createThresholdIssue("angular-velocity-spike", angularVelocityMetric, angularThreshold, frames, skeleton)
+      createThresholdIssue("angular-velocity-spike", angularVelocityMetric, angularThreshold, frameList, skeleton)
     );
   }
   if (
@@ -205,7 +226,7 @@ export function poseDiscontinuityMetric(
         "translation-velocity-spike",
         translationVelocityMetric,
         translationThreshold,
-        frames,
+        frameList,
         skeleton
       )
     );
@@ -216,15 +237,15 @@ export function poseDiscontinuityMetric(
     scaleThreshold >= 0 &&
     scaleVelocityMetric.max > scaleThreshold
   ) {
-    issues.push(createThresholdIssue("scale-velocity-spike", scaleVelocityMetric, scaleThreshold, frames, skeleton));
+    issues.push(createThresholdIssue("scale-velocity-spike", scaleVelocityMetric, scaleThreshold, frameList, skeleton));
   }
 
   return {
     angularVelocityRadiansPerSecond: angularVelocityMetric,
     translationVelocityUnitsPerSecond: translationVelocityMetric,
     scaleVelocityUnitsPerSecond: scaleVelocityMetric,
-    frames: frames.length,
-    intervals: Math.max(0, frames.length - 1),
+    frames: frameList.length,
+    intervals: Math.max(0, frameList.length - 1),
     validIntervals,
     ...(invalidIntervals > 0 ? { invalidIntervals } : {}),
     issues
@@ -232,7 +253,8 @@ export function poseDiscontinuityMetric(
 }
 
 type MetricAccumulator = {
-  sum: number;
+  scale: number;
+  scaledSumSquares: number;
   max: number;
   maxIndex?: number;
   validSamples: number;
@@ -240,7 +262,8 @@ type MetricAccumulator = {
 };
 
 type VelocityAccumulator = {
-  sum: number;
+  scale: number;
+  scaledSumSquares: number;
   max: number;
   maxIntervalIndex?: number;
   maxJointIndex?: number;
@@ -249,20 +272,42 @@ type VelocityAccumulator = {
 };
 
 function createMetricAccumulator(): MetricAccumulator {
-  return { sum: 0, max: 0, validSamples: 0, invalidSamples: 0 };
+  return { scale: 0, scaledSumSquares: 0, max: 0, validSamples: 0, invalidSamples: 0 };
 }
 
 function createVelocityAccumulator(): VelocityAccumulator {
-  return { sum: 0, max: 0, validSamples: 0, invalidSamples: 0 };
+  return { scale: 0, scaledSumSquares: 0, max: 0, validSamples: 0, invalidSamples: 0 };
+}
+
+function pushFiniteSample(
+  metric: Pick<MetricAccumulator, "scale" | "scaledSumSquares" | "validSamples">,
+  sample: number
+): void {
+  const value = Math.abs(sample);
+  if (value > 0) {
+    if (value > metric.scale) {
+      const ratio = metric.scale / value;
+      metric.scaledSumSquares = metric.scaledSumSquares * ratio * ratio + 1;
+      metric.scale = value;
+    } else if (metric.scale > 0) {
+      const ratio = value / metric.scale;
+      metric.scaledSumSquares += ratio * ratio;
+    }
+  }
+  metric.validSamples += 1;
+}
+
+function finishRms(metric: Pick<MetricAccumulator, "scale" | "scaledSumSquares" | "validSamples">): number {
+  if (metric.validSamples <= 0 || metric.scale <= 0) return 0;
+  return metric.scale * Math.sqrt(metric.scaledSumSquares / metric.validSamples);
 }
 
 function pushMetricSample(metric: MetricAccumulator, delta: number | undefined, index: number): void {
-  if (delta === undefined) {
+  if (delta === undefined || !Number.isFinite(delta)) {
     metric.invalidSamples += 1;
     return;
   }
-  metric.sum += delta * delta;
-  metric.validSamples += 1;
+  pushFiniteSample(metric, delta);
   if (delta > metric.max) {
     metric.max = delta;
     metric.maxIndex = index;
@@ -272,7 +317,7 @@ function pushMetricSample(metric: MetricAccumulator, delta: number | undefined, 
 function finishMetricAccumulator(metric: MetricAccumulator, skeleton: Skeleton | undefined): PoseComponentDeltaMetric {
   const maxJoint = metric.maxIndex !== undefined ? skeleton?.joints[metric.maxIndex]?.name : undefined;
   return {
-    rms: metric.validSamples > 0 ? Math.sqrt(metric.sum / metric.validSamples) : 0,
+    rms: finishRms(metric),
     max: metric.max,
     ...(metric.maxIndex !== undefined ? { maxIndex: metric.maxIndex } : {}),
     ...(maxJoint !== undefined ? { maxJoint } : {}),
@@ -290,8 +335,7 @@ function pushVelocitySample(
     metric.invalidSamples += 1;
     return;
   }
-  metric.sum += sample * sample;
-  metric.validSamples += 1;
+  pushFiniteSample(metric, sample);
   if (sample > metric.max) {
     metric.max = sample;
     metric.maxIntervalIndex = intervalIndex;
@@ -305,7 +349,7 @@ function finishVelocityAccumulator(
 ): PoseVelocityComponentMetric {
   const maxJoint = metric.maxJointIndex !== undefined ? skeleton?.joints[metric.maxJointIndex]?.name : undefined;
   return {
-    rms: metric.validSamples > 0 ? Math.sqrt(metric.sum / metric.validSamples) : 0,
+    rms: finishRms(metric),
     max: metric.max,
     ...(metric.maxIntervalIndex !== undefined ? { maxIntervalIndex: metric.maxIntervalIndex } : {}),
     ...(metric.maxJointIndex !== undefined ? { maxJointIndex: metric.maxJointIndex } : {}),
@@ -336,15 +380,29 @@ function createThresholdIssue(
   };
 }
 
+function isPoseFrame(frame: PoseDiscontinuityFrame | undefined): frame is PoseDiscontinuityFrame {
+  return !!frame && typeof frame === "object" && Array.isArray(frame.pose);
+}
+
+function readFrameTime(frame: PoseDiscontinuityFrame | undefined): number {
+  return typeof frame?.timeSeconds === "number" ? frame.timeSeconds : Number.NaN;
+}
+
+function finiteIssueTime(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 function velocity(delta: number | undefined, deltaSeconds: number): number | undefined {
   if (delta === undefined || !Number.isFinite(delta) || !Number.isFinite(deltaSeconds) || deltaSeconds <= 0)
     return undefined;
   return delta / deltaSeconds;
 }
 
-function rotationDelta(a: Transform, b: Transform): number | undefined {
-  if (!isValidMetricRotation(a.rotation) || !isValidMetricRotation(b.rotation)) return undefined;
-  const dot = Math.abs(dotQuat(normalizedMetricRotation(a.rotation), normalizedMetricRotation(b.rotation)));
+function rotationDelta(a: Transform | undefined, b: Transform | undefined): number | undefined {
+  const aRotation = a?.rotation;
+  const bRotation = b?.rotation;
+  if (!isValidMetricRotation(aRotation) || !isValidMetricRotation(bRotation)) return undefined;
+  const dot = Math.abs(dotQuat(normalizedMetricRotation(aRotation), normalizedMetricRotation(bRotation)));
   return 2 * Math.acos(Math.min(1, dot));
 }
 
@@ -352,15 +410,23 @@ function normalizedMetricRotation(rotation: Quat): Quat {
   return normalizeQuat(rotation);
 }
 
-function vec3Delta(a: readonly [number, number, number], b: readonly [number, number, number]): number | undefined {
+function vec3Delta(
+  a: readonly [number, number, number] | undefined,
+  b: readonly [number, number, number] | undefined
+): number | undefined {
   if (!isFiniteVec3(a) || !isFiniteVec3(b)) return undefined;
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const distance = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  return Number.isFinite(distance) ? distance : Number.MAX_VALUE;
 }
 
-function isValidMetricRotation(rotation: Quat): boolean {
-  return rotation.every(Number.isFinite) && Math.hypot(rotation[0], rotation[1], rotation[2], rotation[3]) > EPSILON;
+function isValidMetricRotation(rotation: Quat | undefined): rotation is Quat {
+  if (!rotation || rotation.length !== 4 || !rotation.every(Number.isFinite)) return false;
+  const length = Math.hypot(rotation[0], rotation[1], rotation[2], rotation[3]);
+  return Number.isFinite(length) && length > EPSILON;
 }
 
-function isFiniteVec3(value: readonly [number, number, number]): boolean {
-  return value.length === 3 && value.every(Number.isFinite);
+function isFiniteVec3(
+  value: readonly [number, number, number] | undefined
+): value is readonly [number, number, number] {
+  return !!value && value.length === 3 && value.every(Number.isFinite);
 }

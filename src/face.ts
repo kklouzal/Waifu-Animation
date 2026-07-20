@@ -24,13 +24,25 @@ export type VisemeSpeed = number | Partial<Record<VisemeName, number>>;
 const DEFAULT_ATTACK_SPEED = 30;
 const DEFAULT_RELEASE_SPEED = 20;
 
+function addFiniteNonNegativeTime(a: number, b: number): number {
+  const left = finiteNonNegative(a, 0);
+  const right = finiteNonNegative(b, 0);
+  const sum = left + right;
+  return Number.isFinite(sum) ? sum : Number.MAX_VALUE;
+}
+
+function readableVisemeSource(values: Partial<VisemeWeights> | null | undefined): Partial<VisemeWeights> {
+  return values && typeof values === "object" ? values : {};
+}
+
 export function zeroVisemes(): VisemeWeights {
   return visemeWeights(() => 0);
 }
 
 export function limitVisemeStack(values: VisemeWeights, maxTotal: number): VisemeWeights {
   const safeMaxTotal = finiteNonNegative(maxTotal, 0);
-  const sanitized = visemeWeights((name) => clamp01(values[name]));
+  const source = readableVisemeSource(values);
+  const sanitized = visemeWeights((name) => clamp01(source[name] ?? 0));
   const total = VISEME_NAMES.reduce((sum, name) => sum + sanitized[name], 0);
   if (total <= safeMaxTotal || total <= 0) return sanitized;
   const scale = safeMaxTotal / total;
@@ -53,7 +65,10 @@ export class VisemeMixer {
   }
 
   setTarget(next: Partial<VisemeWeights>): void {
-    for (const name of VISEME_NAMES) this.target[name] = clamp01(next[name] ?? 0) * this.intensity;
+    const source = readableVisemeSource(next);
+    this.intensity = finiteNonNegative(this.intensity, 1);
+    this.maxTotal = finiteNonNegative(this.maxTotal, 0);
+    for (const name of VISEME_NAMES) this.target[name] = clamp01(source[name] ?? 0) * this.intensity;
     Object.assign(this.target, limitVisemeStack(this.target, this.maxTotal));
   }
 
@@ -64,8 +79,12 @@ export class VisemeMixer {
 
   update(deltaSeconds: number, talking = true): VisemeWeights {
     const dt = finiteNonNegative(deltaSeconds, 0);
+    const isTalking = Boolean(talking);
+    this.maxTotal = finiteNonNegative(this.maxTotal, 0);
     for (const name of VISEME_NAMES) {
-      const target = talking ? this.target[name] : 0;
+      this.current[name] = clamp01(this.current[name]);
+      this.target[name] = clamp01(this.target[name]);
+      const target = isTalking ? this.target[name] : 0;
       const speed =
         target > this.current[name]
           ? visemeSpeedFor(this.attack, name, DEFAULT_ATTACK_SPEED)
@@ -79,7 +98,7 @@ export class VisemeMixer {
 }
 
 function visemeSpeedFor(speed: VisemeSpeed, name: VisemeName, defaultSpeed: number): number {
-  const value = typeof speed === "number" ? speed : speed[name];
+  const value = typeof speed === "number" ? speed : speed && typeof speed === "object" ? speed[name] : undefined;
   return finiteNonNegative(value, defaultSpeed);
 }
 
@@ -106,23 +125,32 @@ export class BlinkScheduler {
   constructor(seed: string | number, nowMs = 0) {
     this.random = createSeededRandom(seed);
     const now = finiteNonNegative(nowMs, 0);
-    this.state = { value: 0, nextAtMs: now + randomRange(this.random, 1200, 4200), holdUntilMs: 0 };
+    this.state = {
+      value: 0,
+      nextAtMs: addFiniteNonNegativeTime(now, randomRange(this.random, 1200, 4200)),
+      holdUntilMs: 0
+    };
   }
 
   trigger(nowMs: number, holdMs = 115): void {
+    this.sanitizeState();
     const now = finiteNonNegative(nowMs, 0);
     const hold = finiteNonNegative(holdMs, 115);
     if (now <= this.state.holdUntilMs) {
       this.state.value = 1;
       return;
     }
-    const holdUntil = now + hold;
+    const holdUntil = addFiniteNonNegativeTime(now, hold);
     this.state.value = 1;
     this.state.holdUntilMs = Math.max(this.state.holdUntilMs, holdUntil);
-    this.state.nextAtMs = Math.max(this.state.nextAtMs, this.state.holdUntilMs + randomRange(this.random, 900, 2100));
+    this.state.nextAtMs = Math.max(
+      this.state.nextAtMs,
+      addFiniteNonNegativeTime(this.state.holdUntilMs, randomRange(this.random, 900, 2100))
+    );
   }
 
   maybeTrigger(nowMs: number, probability: number, holdMs = 115): boolean {
+    this.sanitizeState();
     const now = finiteNonNegative(nowMs, 0);
     if (now <= this.state.holdUntilMs) return false;
     if (this.random() >= clamp01(probability)) return false;
@@ -131,6 +159,7 @@ export class BlinkScheduler {
   }
 
   update(nowMs: number, deltaSeconds: number, attentiveness = 0.5): number {
+    this.sanitizeState();
     const now = finiteNonNegative(nowMs, 0);
     const dt = finiteNonNegative(deltaSeconds, 0);
     if (now <= this.state.holdUntilMs) {
@@ -139,13 +168,22 @@ export class BlinkScheduler {
     }
     if (now >= this.state.nextAtMs) {
       this.state.value = 1;
-      this.state.holdUntilMs = now + randomRange(this.random, 90, 145);
-      this.state.nextAtMs = now + randomRange(this.random, 1500, 4300 - clamp01(attentiveness) * 900);
+      this.state.holdUntilMs = addFiniteNonNegativeTime(now, randomRange(this.random, 90, 145));
+      this.state.nextAtMs = addFiniteNonNegativeTime(
+        now,
+        randomRange(this.random, 1500, 4300 - clamp01(attentiveness) * 900)
+      );
       return this.state.value;
     }
     const alpha = dampAlpha(20, dt);
-    this.state.value += (0 - this.state.value) * alpha;
+    this.state.value = clamp01(this.state.value + (0 - this.state.value) * alpha);
     return this.state.value;
+  }
+
+  private sanitizeState(): void {
+    this.state.value = clamp01(this.state.value);
+    this.state.nextAtMs = finiteNonNegative(this.state.nextAtMs, 0);
+    this.state.holdUntilMs = finiteNonNegative(this.state.holdUntilMs, 0);
   }
 }
 
@@ -189,8 +227,8 @@ export class FacialExpressionMixer {
   }
 
   setTarget(target: Pick<FacialExpressionInput, "targetMouth" | "targetVisemes">): void {
-    if (target.targetMouth !== undefined) this.targetMouth = clamp01(target.targetMouth);
-    if (target.targetVisemes) this.visemes.setTarget(target.targetVisemes);
+    if (target?.targetMouth !== undefined) this.targetMouth = clamp01(target.targetMouth);
+    if (target?.targetVisemes) this.visemes.setTarget(target.targetVisemes);
   }
 
   reset(): void {
@@ -202,14 +240,16 @@ export class FacialExpressionMixer {
   update(deltaSeconds: number, input: FacialExpressionInput = {}): FacialExpressionState {
     this.setTarget(input);
     const talking = input.talking ?? true;
+    const dt = finiteNonNegative(deltaSeconds, 0);
+    this.mouthLevel = clamp01(this.mouthLevel);
+    this.targetMouth = clamp01(this.targetMouth);
+    this.mouthAttack = finiteNonNegative(this.mouthAttack, 28);
+    this.mouthRelease = finiteNonNegative(this.mouthRelease, 18);
     const target = talking ? this.targetMouth : 0;
-    this.mouthLevel = dampValue(
-      this.mouthLevel,
-      target,
-      target > this.mouthLevel ? this.mouthAttack : this.mouthRelease,
-      deltaSeconds
+    this.mouthLevel = clamp01(
+      dampValue(this.mouthLevel, target, target > this.mouthLevel ? this.mouthAttack : this.mouthRelease, dt)
     );
-    const visemes = this.visemes.update(deltaSeconds, talking);
+    const visemes = this.visemes.update(dt, talking);
     return {
       mouthLevel: this.mouthLevel,
       visemes,
@@ -252,12 +292,15 @@ export function composeFacialExpressions(
 export function mixExpressions(
   layers: Array<{ values: Record<string, number>; weight: number }>
 ): Record<string, number> {
-  const output: Record<string, number> = {};
-  for (const layer of layers) {
+  const valuesByName = new Map<string, number>();
+  const layerList = Array.isArray(layers) ? layers : [];
+  for (const layer of layerList) {
+    if (!layer || typeof layer !== "object" || !layer.values || typeof layer.values !== "object") continue;
     const weight = clamp01(layer.weight);
+    if (weight <= 0) continue;
     for (const [name, value] of Object.entries(layer.values)) {
-      output[name] = clamp01((output[name] ?? 0) + clamp01(value) * weight);
+      valuesByName.set(name, clamp01((valuesByName.get(name) ?? 0) + clamp01(value) * weight));
     }
   }
-  return output;
+  return Object.fromEntries(valuesByName);
 }

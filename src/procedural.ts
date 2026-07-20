@@ -34,6 +34,29 @@ function finiteOption01(value: number | undefined, fallback: number): number {
   return clamp01(finiteSigned(value, fallback));
 }
 
+const TAU = Math.PI * 2;
+
+function canonicalZero(value: number): number {
+  return Object.is(value, -0) ? 0 : value;
+}
+
+function addFiniteNonNegativeTime(a: number, b: number): number {
+  const left = finiteNonNegative(a, 0);
+  const right = finiteNonNegative(b, 0);
+  const sum = left + right;
+  return Number.isFinite(sum) ? sum : Number.MAX_VALUE;
+}
+
+function periodicSin(elapsedSeconds: number, angularFrequency: number, phase = 0): number {
+  const elapsed = finiteNonNegative(elapsedSeconds, 0);
+  const frequency = finiteSigned(angularFrequency, 0);
+  const safePhase = Number.isFinite(phase) ? phase % TAU : 0;
+  if (frequency === 0) return Math.sin(safePhase);
+  const period = TAU / Math.abs(frequency);
+  const wrappedElapsed = Number.isFinite(period) && period > 0 ? elapsed % period : 0;
+  return Math.sin(wrappedElapsed * frequency + safePhase);
+}
+
 export function sanitizeAttentionTargetWeight(value: number): number {
   return Number.isFinite(value) ? clamp01(value) : 0;
 }
@@ -66,8 +89,13 @@ const DEFAULT_ATTENTION_TARGET_SAFETY: Required<
   minForwardZ: 0
 };
 
-function finiteDistanceOption(value: number | undefined, fallback: number): number {
+function finiteMinDistanceOption(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+function finiteMaxDistanceOption(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return value < 0 ? fallback : value;
 }
 
 function finiteCosineOption(value: number | undefined): number | undefined {
@@ -78,15 +106,24 @@ export function classifyAttentionTargetSafety(
   target: AttentionTarget,
   options: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
 ): AttentionTargetSafety {
-  if (finiteAttentionWeight(target.weight) <= 0) return "nonPositiveWeight";
-  const x = target.position[0];
-  const y = target.position[1];
-  const z = target.position[2];
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return "nonFinitePosition";
+  const candidate = target as Partial<AttentionTarget> | undefined;
+  if (finiteAttentionWeight(candidate?.weight as number) <= 0) return "nonPositiveWeight";
+  const x = candidate?.position?.[0];
+  const y = candidate?.position?.[1];
+  const z = candidate?.position?.[2];
+  if (
+    typeof x !== "number" ||
+    typeof y !== "number" ||
+    typeof z !== "number" ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    !Number.isFinite(z)
+  )
+    return "nonFinitePosition";
   const distanceSq = x * x + y * y + z * z;
-  const minDistance = finiteDistanceOption(options.minDistance, DEFAULT_ATTENTION_TARGET_SAFETY.minDistance);
+  const minDistance = finiteMinDistanceOption(options.minDistance, DEFAULT_ATTENTION_TARGET_SAFETY.minDistance);
   if (distanceSq < minDistance * minDistance) return "tooClose";
-  const maxDistance = finiteDistanceOption(options.maxDistance, DEFAULT_ATTENTION_TARGET_SAFETY.maxDistance);
+  const maxDistance = finiteMaxDistanceOption(options.maxDistance, DEFAULT_ATTENTION_TARGET_SAFETY.maxDistance);
   if (maxDistance > 0 && distanceSq > maxDistance * maxDistance) return "tooFar";
   const minForwardZ =
     typeof options.minForwardZ === "number" && Number.isFinite(options.minForwardZ)
@@ -105,12 +142,23 @@ export function isSafeAttentionTarget(
   return classifyAttentionTargetSafety(target, options) === "safe";
 }
 
+function isSelectableAttentionTarget(
+  target: AttentionTarget | undefined,
+  options: AttentionTargetSafetyOptions
+): target is AttentionTarget {
+  const id = (target as Partial<AttentionTarget> | undefined)?.id;
+  return typeof id === "string" && isSafeAttentionTarget(target as AttentionTarget, options);
+}
+
 export function distributeLookAt(localTarget: Vec3, options: LookAtOptions = {}): LookAtDistribution {
   const direction = normalizeVec3(localTarget, [0, 0, 1]);
   const maxYaw = finiteNonNegative(options.maxYaw, 0.85);
   const maxPitch = finiteNonNegative(options.maxPitch, 0.52);
-  const yaw = clamp(Math.atan2(direction[0], direction[2]), -maxYaw, maxYaw);
-  const pitch = clamp(Math.atan2(direction[1], Math.hypot(direction[0], direction[2])), -maxPitch, maxPitch);
+  const directionX = canonicalZero(direction[0]);
+  const directionY = canonicalZero(direction[1]);
+  const directionZ = canonicalZero(direction[2]);
+  const yaw = canonicalZero(clamp(Math.atan2(directionX, directionZ), -maxYaw, maxYaw));
+  const pitch = canonicalZero(clamp(Math.atan2(directionY, Math.hypot(directionX, directionZ)), -maxPitch, maxPitch));
   const eyeLead = finiteOption01(options.eyeLead, 0.42);
   const headWeight = finiteOption01(options.headWeight, 0.42);
   const neckWeight = finiteOption01(options.neckWeight, 0.22);
@@ -131,6 +179,12 @@ export type AttentionTarget = {
   weight: number;
 };
 
+const EMPTY_ATTENTION_TARGETS: readonly AttentionTarget[] = [];
+
+function attentionTargetsOrEmpty(targets: readonly AttentionTarget[] | undefined): readonly AttentionTarget[] {
+  return Array.isArray(targets) ? targets : EMPTY_ATTENTION_TARGETS;
+}
+
 export class AttentionScheduler {
   private readonly random: RandomSource;
   private nextSwitchAt = 0;
@@ -147,21 +201,24 @@ export class AttentionScheduler {
     maxDwellMs = 3200,
     safetyOptions: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
   ): AttentionTarget | null {
-    if (targets.length === 0) {
+    const targetList = attentionTargetsOrEmpty(targets);
+    if (targetList.length === 0) {
       this.currentId = null;
       this.nextSwitchAt = 0;
       return null;
     }
     const now = finiteNonNegative(nowMs, 0);
     const currentTarget = this.currentId
-      ? (targets.find((target) => target.id === this.currentId && isSafeAttentionTarget(target, safetyOptions)) ?? null)
+      ? (targetList.find(
+          (target) => isSelectableAttentionTarget(target, safetyOptions) && target.id === this.currentId
+        ) ?? null)
       : null;
     if (now >= this.nextSwitchAt || !currentTarget || !isSafeAttentionTarget(currentTarget, safetyOptions)) {
       let maxWeight = 0;
       let lastEligible = -1;
-      for (let i = 0; i < targets.length; i += 1) {
-        const target = targets[i]!;
-        if (!isSafeAttentionTarget(target, safetyOptions)) continue;
+      for (let i = 0; i < targetList.length; i += 1) {
+        const target = targetList[i];
+        if (!isSelectableAttentionTarget(target, safetyOptions)) continue;
         maxWeight = Math.max(maxWeight, finiteAttentionWeight(target.weight));
         lastEligible = i;
       }
@@ -171,16 +228,16 @@ export class AttentionScheduler {
         return null;
       }
       let total = 0;
-      for (let i = 0; i < targets.length; i += 1) {
-        const target = targets[i]!;
-        if (!isSafeAttentionTarget(target, safetyOptions)) continue;
+      for (let i = 0; i < targetList.length; i += 1) {
+        const target = targetList[i];
+        if (!isSelectableAttentionTarget(target, safetyOptions)) continue;
         total += finiteAttentionWeight(target.weight) / maxWeight;
       }
       let pick = this.random() * total;
-      this.currentId = targets[lastEligible]!.id;
-      for (let i = 0; i < targets.length; i += 1) {
-        const target = targets[i]!;
-        if (!isSafeAttentionTarget(target, safetyOptions)) continue;
+      this.currentId = targetList[lastEligible]!.id;
+      for (let i = 0; i < targetList.length; i += 1) {
+        const target = targetList[i];
+        if (!isSelectableAttentionTarget(target, safetyOptions)) continue;
         pick -= finiteAttentionWeight(target.weight) / maxWeight;
         if (pick <= 0) {
           this.currentId = target.id;
@@ -189,9 +246,11 @@ export class AttentionScheduler {
       }
       const minDwell = finiteNonNegative(minDwellMs, 900);
       const maxDwell = Math.max(minDwell, finiteNonNegative(maxDwellMs, 3200));
-      this.nextSwitchAt = now + randomRange(this.random, minDwell, maxDwell);
+      this.nextSwitchAt = addFiniteNonNegativeTime(now, randomRange(this.random, minDwell, maxDwell));
       return (
-        targets.find((target) => target.id === this.currentId && isSafeAttentionTarget(target, safetyOptions)) ?? null
+        targetList.find(
+          (target) => isSelectableAttentionTarget(target, safetyOptions) && target.id === this.currentId
+        ) ?? null
       );
     }
     return currentTarget;
@@ -199,8 +258,8 @@ export class AttentionScheduler {
 }
 
 export function breathingWeight(elapsedSeconds: number, energy: number): number {
-  const elapsed = finiteNonNegative(elapsedSeconds, 0);
-  return Math.sin(elapsed * (1.15 + clamp01(energy) * 0.55)) * (0.5 + clamp01(energy) * 0.5);
+  const safeEnergy = clamp01(energy);
+  return periodicSin(elapsedSeconds, 1.15 + safeEnergy * 0.55) * (0.5 + safeEnergy * 0.5);
 }
 
 export type PresenceState = "idle" | "listening" | "speaking" | "thinking";
@@ -318,6 +377,10 @@ const CUE_KINDS: PresenceCueKind[] = [
   "thinkingPulse"
 ];
 
+function isPresenceCueKind(value: unknown): value is PresenceCueKind {
+  return CUE_KINDS.includes(value as PresenceCueKind);
+}
+
 const DEFAULT_BEHAVIOR: Required<PresenceBehavior> = {
   state: "idle",
   energy: 0.35,
@@ -332,6 +395,37 @@ const DEFAULT_AFFECT: Required<PresenceAffect> = {
   curiosity: 0.48,
   attentiveness: 0.78
 };
+
+function isPresenceState(value: unknown): value is PresenceState {
+  return value === "idle" || value === "listening" || value === "speaking" || value === "thinking";
+}
+
+function isPresenceGesture(value: unknown): value is PresenceGesture {
+  return (
+    value === "idle" ||
+    value === "explain" ||
+    value === "emphasize" ||
+    value === "nod" ||
+    value === "thinking" ||
+    value === "wave" ||
+    value === "shrug"
+  );
+}
+
+function isPresenceGaze(value: unknown): value is PresenceGaze {
+  return value === "camera" || value === "audience" || value === "down" || value === "left" || value === "right";
+}
+
+function isPresenceMood(value: unknown): value is Required<PresenceAffect>["mood"] {
+  return (
+    value === "neutral" ||
+    value === "warm" ||
+    value === "playful" ||
+    value === "focused" ||
+    value === "concerned" ||
+    value === "sleepy"
+  );
+}
 
 function emptyCueAmounts(): PresenceCueAmounts {
   return {
@@ -349,16 +443,16 @@ function emptyCueAmounts(): PresenceCueAmounts {
 
 function normalizeBehavior(value: PresenceBehavior | undefined): Required<PresenceBehavior> {
   return {
-    state: value?.state ?? DEFAULT_BEHAVIOR.state,
+    state: isPresenceState(value?.state) ? value.state : DEFAULT_BEHAVIOR.state,
     energy: clamp01(value?.energy ?? DEFAULT_BEHAVIOR.energy),
-    gesture: value?.gesture ?? DEFAULT_BEHAVIOR.gesture,
-    gaze: value?.gaze ?? DEFAULT_BEHAVIOR.gaze
+    gesture: isPresenceGesture(value?.gesture) ? value.gesture : DEFAULT_BEHAVIOR.gesture,
+    gaze: isPresenceGaze(value?.gaze) ? value.gaze : DEFAULT_BEHAVIOR.gaze
   };
 }
 
 function normalizeAffect(value: PresenceAffect | undefined): Required<PresenceAffect> {
   return {
-    mood: value?.mood ?? DEFAULT_AFFECT.mood,
+    mood: isPresenceMood(value?.mood) ? value.mood : DEFAULT_AFFECT.mood,
     arousal: clamp01(value?.arousal ?? DEFAULT_AFFECT.arousal),
     rapport: clamp01(value?.rapport ?? DEFAULT_AFFECT.rapport),
     curiosity: clamp01(value?.curiosity ?? DEFAULT_AFFECT.curiosity),
@@ -383,7 +477,12 @@ function pushTarget(
   influence: number,
   speed: number
 ): void {
-  targets.push({ bone, rotation: [x, y, z], influence: clamp01(influence), speed });
+  targets.push({
+    bone,
+    rotation: [canonicalZero(finiteSigned(x, 0)), canonicalZero(finiteSigned(y, 0)), canonicalZero(finiteSigned(z, 0))],
+    influence: clamp01(influence),
+    speed: finiteNonNegative(speed, 0)
+  });
 }
 
 function pushArmTargets(targets: PresenceBoneTarget[], side: "left" | "right", input: PresenceArmSideInput): void {
@@ -485,9 +584,9 @@ export class PresencePlanner {
     this.random = createSeededRandom(seed);
     this.aliveSeed = randomRange(this.random, 0, 1000);
     const now = finiteNonNegative(nowMs, 0);
-    this.nextIdleShiftAt = now + 1200;
-    this.nextBackchannelAt = now + 3200;
-    this.nextSaccadeAt = now + 700;
+    this.nextIdleShiftAt = addFiniteNonNegativeTime(now, 1200);
+    this.nextBackchannelAt = addFiniteNonNegativeTime(now, 3200);
+    this.nextSaccadeAt = addFiniteNonNegativeTime(now, 700);
   }
 
   scheduleCue(
@@ -498,16 +597,18 @@ export class PresencePlanner {
     intensity = 1,
     gaze?: PresenceGaze
   ): void {
+    if (!isPresenceCueKind(kind)) return;
     const now = finiteNonNegative(nowMs, 0);
     const delay = finiteNonNegative(delayMs, 0);
     const duration = Math.max(1, finiteNonNegative(durationMs, 1));
+    const safeGaze = isPresenceGaze(gaze) ? gaze : undefined;
     const cue: PresenceCue = {
       kind,
-      startMs: now + delay,
+      startMs: addFiniteNonNegativeTime(now, delay),
       durationMs: duration,
       intensity: clamp01(intensity)
     };
-    if (gaze) cue.gaze = gaze;
+    if (safeGaze) cue.gaze = safeGaze;
     this.cues.push(cue);
   }
 
@@ -515,7 +616,8 @@ export class PresencePlanner {
     const affect = normalizeAffect(affectInput);
     const now = finiteNonNegative(nowMs, 0);
     const duration = finiteNonNegative(durationMs, 0);
-    const words = text.trim().split(/\s+/).filter(Boolean);
+    const safeText = typeof text === "string" ? text : "";
+    const words = safeText.trim().split(/\s+/).filter(Boolean);
     const beatCount = Math.min(12, Math.max(3, Math.ceil(words.length / 4)));
     this.scheduleCue("lookCamera", now, 80, Math.min(900, duration * 0.22), 0.8, "camera");
     this.scheduleCue("blink", now, Math.min(420, duration * 0.18), 140, 0.8);
@@ -555,7 +657,10 @@ export class PresencePlanner {
       this.scheduleCue("lookCamera", now, 760, 620, 0.48, "camera");
     }
     if (behavior.state === "listening") {
-      this.nextBackchannelAt = now + randomRange(this.random, 900, 2300) - affect.attentiveness * 120;
+      this.nextBackchannelAt = addFiniteNonNegativeTime(
+        now,
+        randomRange(this.random, 900, 2300) - affect.attentiveness * 120
+      );
     }
   }
 
@@ -567,9 +672,10 @@ export class PresencePlanner {
     const affect = normalizeAffect(input.affect);
     const energy = behavior.energy;
     const targetMouth = clamp01(input.targetMouth ?? 0);
-    const speaking = behavior.state === "speaking" || nowMs < (input.speakingUntilMs ?? 0);
+    const speakingUntilMs = finiteNonNegative(input.speakingUntilMs, 0);
+    const speaking = behavior.state === "speaking" || nowMs < speakingUntilMs;
 
-    this.cues = this.cues.filter((cue) => nowMs < cue.startMs + cue.durationMs + 120);
+    this.cues = this.cues.filter((cue) => nowMs < addFiniteNonNegativeTime(cue.startMs, cue.durationMs + 120));
     const targets = emptyCueAmounts();
     for (const cue of this.cues) {
       const target = smoothPulse((nowMs - cue.startMs) / cue.durationMs) * cue.intensity;
@@ -584,12 +690,13 @@ export class PresencePlanner {
       (cue) =>
         (cue.kind === "glance" || cue.kind === "lookCamera") &&
         cue.gaze &&
+        cue.intensity > 0 &&
         nowMs >= cue.startMs &&
-        nowMs <= cue.startMs + cue.durationMs
+        nowMs <= addFiniteNonNegativeTime(cue.startMs, cue.durationMs)
     );
     if (gazeCue?.gaze) {
       this.attentionGaze = gazeCue.gaze;
-      this.attentionGazeUntil = gazeCue.startMs + gazeCue.durationMs;
+      this.attentionGazeUntil = addFiniteNonNegativeTime(gazeCue.startMs, gazeCue.durationMs);
     } else if (nowMs > this.attentionGazeUntil) {
       this.attentionGaze = null;
     }
@@ -598,14 +705,17 @@ export class PresencePlanner {
       const liveliness = 0.42 + affect.arousal * 0.48 + affect.curiosity * 0.24;
       this.idleShiftX = (this.random() - 0.5) * 0.085 * liveliness;
       this.idleShiftZ = (this.random() - 0.5) * 0.072 * liveliness;
-      this.nextIdleShiftAt = nowMs + randomRange(this.random, 760, 2360);
+      this.nextIdleShiftAt = addFiniteNonNegativeTime(nowMs, randomRange(this.random, 760, 2360));
     }
 
     if (nowMs >= this.nextSaccadeAt) {
       const scope = behavior.state === "speaking" ? 0.045 : 0.075 + affect.curiosity * 0.055;
       this.attentionOffsetX = (this.random() - 0.5) * scope;
       this.attentionOffsetY = (this.random() - 0.5) * scope * 0.58;
-      this.nextSaccadeAt = nowMs + 520 + this.random() * (behavior.state === "thinking" ? 1050 : 2100);
+      this.nextSaccadeAt = addFiniteNonNegativeTime(
+        nowMs,
+        520 + this.random() * (behavior.state === "thinking" ? 1050 : 2100)
+      );
     }
 
     this.idleShiftX = dampValue(this.idleShiftX, 0, 0.7, deltaSeconds);
@@ -615,7 +725,10 @@ export class PresencePlanner {
 
     if ((behavior.state === "listening" || behavior.state === "idle") && nowMs >= this.nextBackchannelAt) {
       this.scheduleBackchannel(nowMs, affect);
-      this.nextBackchannelAt = nowMs + 2100 + this.random() * 3600 - affect.attentiveness * 700;
+      this.nextBackchannelAt = addFiniteNonNegativeTime(
+        nowMs,
+        2100 + this.random() * 3600 - affect.attentiveness * 700
+      );
     }
 
     const cueAmounts = { ...this.cueAmounts };
@@ -648,11 +761,11 @@ export class PresencePlanner {
   ): PresenceFrame["motion"] {
     const energy = behavior.energy;
     const speechPulse = speaking ? clamp01(Math.max(cueAmounts.beat, targetMouth * 0.9, cueAmounts.nod * 0.35)) : 0;
-    const weightShift = Math.sin(elapsedSeconds * 0.55 + this.aliveSeed) * (0.024 + energy * 0.02) + this.idleShiftZ;
+    const weightShift = periodicSin(elapsedSeconds, 0.55, this.aliveSeed) * (0.024 + energy * 0.02) + this.idleShiftZ;
     return {
-      breath: Math.sin(elapsedSeconds * (1.4 + energy * 0.6)) * (0.012 + energy * 0.01),
-      headYaw: Math.sin(elapsedSeconds * 0.42) * (0.025 + energy * 0.035),
-      headPitch: Math.sin(elapsedSeconds * 0.63 + 1.4) * (0.018 + energy * 0.025),
+      breath: periodicSin(elapsedSeconds, 1.4 + energy * 0.6) * (0.012 + energy * 0.01),
+      headYaw: periodicSin(elapsedSeconds, 0.42) * (0.025 + energy * 0.035),
+      headPitch: periodicSin(elapsedSeconds, 0.63, 1.4) * (0.018 + energy * 0.025),
       speechPulse,
       idleShiftX: this.idleShiftX,
       idleShiftZ: this.idleShiftZ,
@@ -671,12 +784,12 @@ export class PresencePlanner {
   ): Vec3 {
     const live = 0.45 + affect.attentiveness * 0.35 + affect.curiosity * 0.2;
     const driftX =
-      Math.sin(elapsedSeconds * 0.37 + this.aliveSeed) * (0.1 + energy * 0.08) +
-      Math.sin(elapsedSeconds * 1.7 + this.aliveSeed * 0.3) * 0.018 * live +
+      periodicSin(elapsedSeconds, 0.37, this.aliveSeed) * (0.1 + energy * 0.08) +
+      periodicSin(elapsedSeconds, 1.7, this.aliveSeed * 0.3) * 0.018 * live +
       this.attentionOffsetX;
     const driftY =
-      Math.sin(elapsedSeconds * 0.51 + 0.9 + this.aliveSeed) * 0.052 +
-      Math.sin(elapsedSeconds * 1.3 + this.aliveSeed * 0.7) * 0.014 * live +
+      periodicSin(elapsedSeconds, 0.51, 0.9 + this.aliveSeed) * 0.052 +
+      periodicSin(elapsedSeconds, 1.3, this.aliveSeed * 0.7) * 0.014 * live +
       this.attentionOffsetY;
     switch (this.attentionGaze ?? behavior.gaze) {
       case "left":
@@ -703,13 +816,13 @@ export class PresencePlanner {
   ): PresenceBoneTarget[] {
     const targets: PresenceBoneTarget[] = [];
     const listen = behavior.state === "listening" || behavior.state === "idle" ? 1 : 0;
-    const tinyAsymmetry = Math.sin(elapsedSeconds * 1.17 + this.aliveSeed) * (0.006 + affect.arousal * 0.006);
+    const tinyAsymmetry = periodicSin(elapsedSeconds, 1.17, this.aliveSeed) * (0.006 + affect.arousal * 0.006);
     const nod = Math.max(
       gestureAmount(behavior, "nod") * 0.65,
       cueAmounts.nod,
       motion.speechPulse > 0 ? 0.1 + motion.speechPulse * 0.12 : 0
     );
-    const nodMotion = Math.sin(elapsedSeconds * 7.2) * (0.055 + cueAmounts.nod * 0.075) * nod;
+    const nodMotion = periodicSin(elapsedSeconds, 7.2) * (0.055 + cueAmounts.nod * 0.075) * nod;
     const attentionLean =
       listen * (0.014 + affect.attentiveness * 0.018) +
       (motion.speechPulse > 0 ? 0.01 + motion.speechPulse * 0.018 : 0);
@@ -727,12 +840,12 @@ export class PresencePlanner {
     const emphasize = clamp01(Math.max(gestureAmount(behavior, "emphasize"), cueAmounts.beat * 0.74));
     const conversationalGesture = clamp01(Math.max(explain, emphasize * 0.82));
     const shrug = clamp01(Math.max(cueAmounts.shrug, gestureAmount(behavior, "shrug") * 0.24));
-    const shoulderLift = shrug * (0.14 + Math.sin(elapsedSeconds * 5.6 + this.aliveSeed) * 0.012);
+    const shoulderLift = shrug * (0.14 + periodicSin(elapsedSeconds, 5.6, this.aliveSeed) * 0.012);
     const armOverlayDucking = 1 - overlayInfluence * 0.98;
     const armTarget = 0.55 * baseDucking * armOverlayDucking;
-    const rightLead = clamp01(conversationalGesture * (0.72 + Math.sin(elapsedSeconds * 3.8 + this.aliveSeed) * 0.08));
+    const rightLead = clamp01(conversationalGesture * (0.72 + periodicSin(elapsedSeconds, 3.8, this.aliveSeed) * 0.08));
     const leftLead = clamp01(
-      conversationalGesture * (0.44 + Math.sin(elapsedSeconds * 3.2 + this.aliveSeed + 1.2) * 0.06)
+      conversationalGesture * (0.44 + periodicSin(elapsedSeconds, 3.2, this.aliveSeed + 1.2) * 0.06)
     );
     const rightGesture = clamp01(Math.max(rightLead, shrug * 0.52));
     const leftGesture = clamp01(Math.max(leftLead, shrug * 0.52));
