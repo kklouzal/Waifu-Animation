@@ -74,6 +74,13 @@ export function runPresencePlanningTests(): void {
     "signed-zero behind targets should pick the same deterministic yaw side as positive zero"
   );
   assert.equal(Object.is(signedZeroBehindLook.eyes.pitch, -0), false, "look-at pitch should not leak signed zero");
+  const nullOptionsLook = distributeLookAt([0.1, 0.2, 1], null as never);
+  assert.ok(
+    Object.values(nullOptionsLook).every(
+      (part) => Number.isFinite(part.yaw) && Number.isFinite(part.pitch) && Number.isFinite(part.weight)
+    ),
+    "malformed look-at options should fall back to defaults"
+  );
   const hostileLook = distributeLookAt([Number.NaN, Infinity, -1], {
     maxYaw: Number.POSITIVE_INFINITY,
     maxPitch: Number.NaN,
@@ -140,6 +147,15 @@ export function runPresencePlanningTests(): void {
     ),
     "tooFar",
     "negative max-distance options should fall back to the default safety cap instead of disabling distance safety"
+  );
+  const malformedSafetyOptions: unknown = null;
+  assert.equal(
+    classifyAttentionTargetSafety(
+      { id: "null-safety-options", position: [0, 0, 100], weight: 1 },
+      malformedSafetyOptions as Parameters<typeof classifyAttentionTargetSafety>[1]
+    ),
+    "tooFar",
+    "malformed safety options should fall back to default distance safety"
   );
   assert.equal(
     classifyAttentionTargetSafety({ id: "outside-yaw", position: [1, 0, 0], weight: 1 }, { minForwardCosine: 0.5 }),
@@ -318,6 +334,26 @@ export function runPresencePlanningTests(): void {
     "valid-sparse",
     "attention selection should skip sparse or malformed entries without throwing"
   );
+  const malformedAttentionTargets: unknown = null;
+  assert.equal(
+    new AttentionScheduler("attention-null-targets").choose(
+      10,
+      malformedAttentionTargets as Parameters<AttentionScheduler["choose"]>[1]
+    ),
+    null,
+    "malformed attention target arrays should be treated as empty"
+  );
+  assert.equal(
+    new AttentionScheduler("attention-null-options").choose(
+      10,
+      [{ id: "default-safe", position: [0, 0, 100], weight: 1 }],
+      900,
+      900,
+      malformedSafetyOptions as Parameters<AttentionScheduler["choose"]>[4]
+    ),
+    null,
+    "malformed attention safety options should retain default safety filtering"
+  );
   assert.equal(
     Number.isFinite(breathingWeight(Number.NaN, 0.5)),
     true,
@@ -449,6 +485,16 @@ export function runFacialAnimationTests(): void {
     Object.values(invalidVisemes.update(Number.NaN)).every(Number.isFinite),
     "viseme mixer should keep weights finite for non-finite timing and limits"
   );
+  assert.ok(
+    Object.values(invalidVisemes.target).reduce((sum, value) => sum + value, 0) > 0,
+    "viseme mixer should repair malformed max totals to the default instead of muting all visemes"
+  );
+  const malformedOptionsVisemes = new VisemeMixer(null as never);
+  malformedOptionsVisemes.setTarget({ aa: 1 });
+  assert.ok(
+    Object.values(malformedOptionsVisemes.update(1 / 30)).every(Number.isFinite),
+    "viseme mixer constructor should tolerate malformed option objects"
+  );
   const invalidIntensityVisemes = new VisemeMixer({ intensity: Number.NaN });
   invalidIntensityVisemes.setTarget({ aa: 1 });
   assert.ok(
@@ -529,6 +575,11 @@ export function runFacialAnimationTests(): void {
     }),
     "composeFacialExpressions should clamp direct viseme/blink inputs to finite morph weights"
   );
+  const nullComposedExpressions = composeFacialExpressions(null as never);
+  assert.ok(
+    facialScalarNames.every((name) => Number.isFinite(nullComposedExpressions[name]!)),
+    "composeFacialExpressions should tolerate malformed input objects"
+  );
 
   const blink = new BlinkScheduler("test", 0);
   assert.equal(Number.isFinite(blink.update(16, 1 / 60, 0.5)), true);
@@ -587,6 +638,18 @@ export function runFacialAnimationTests(): void {
   assert.ok(faceState.visemes.aa + faceState.visemes.ee <= 0.4201);
   assert.equal(faceState.expressions.blink, 1);
   assert.ok((faceState.expressions.happy ?? 0) > 0.1);
+  const nullInputFacial = new FacialExpressionMixer();
+  assert.equal(
+    Number.isFinite(nullInputFacial.update(1 / 30, null as never).mouthLevel),
+    true,
+    "facial mixer updates should tolerate malformed input objects"
+  );
+  const malformedOptionsFacial = new FacialExpressionMixer(null as never);
+  assert.equal(
+    Number.isFinite(malformedOptionsFacial.update(1 / 30, { targetMouth: 1 }).mouthLevel),
+    true,
+    "facial mixer constructor should tolerate malformed option objects"
+  );
   const malformedSpeedFacial = new FacialExpressionMixer({ mouthAttack: Number.NaN, mouthRelease: Number.NaN });
   malformedSpeedFacial.setTarget({ targetMouth: 1 });
   const malformedMouthAttackState = malformedSpeedFacial.update(1 / 30, { talking: true });

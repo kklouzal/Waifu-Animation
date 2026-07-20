@@ -68,17 +68,26 @@ export type PoseDiscontinuityMetric = {
 
 const EMPTY_TRANSFORM_LIST: readonly Transform[] = [];
 const EMPTY_DISCONTINUITY_FRAMES: readonly PoseDiscontinuityFrame[] = [];
+const EMPTY_DISCONTINUITY_THRESHOLDS: PoseDiscontinuityThresholds = {};
 
-function isReadonlyArray<T>(value: readonly T[] | undefined): value is readonly T[] {
+function isReadonlyArray<T>(value: readonly T[] | null | undefined): value is readonly T[] {
   return Array.isArray(value);
 }
 
-function transformListOrEmpty(value: readonly Transform[] | undefined): readonly Transform[] {
+function transformListOrEmpty(value: readonly Transform[] | null | undefined): readonly Transform[] {
   return isReadonlyArray(value) ? value : EMPTY_TRANSFORM_LIST;
 }
 
-function frameListOrEmpty(value: readonly PoseDiscontinuityFrame[] | undefined): readonly PoseDiscontinuityFrame[] {
+function frameListOrEmpty(
+  value: readonly PoseDiscontinuityFrame[] | null | undefined
+): readonly PoseDiscontinuityFrame[] {
   return isReadonlyArray(value) ? value : EMPTY_DISCONTINUITY_FRAMES;
+}
+
+function discontinuityThresholdsOrEmpty(
+  value: PoseDiscontinuityThresholds | null | undefined
+): PoseDiscontinuityThresholds {
+  return value && typeof value === "object" ? value : EMPTY_DISCONTINUITY_THRESHOLDS;
 }
 
 export function poseRotationMetric(a: readonly Transform[], b: readonly Transform[]): PoseMetric {
@@ -142,6 +151,7 @@ export function poseDiscontinuityMetric(
   thresholds: PoseDiscontinuityThresholds = {}
 ): PoseDiscontinuityMetric {
   const frameList = frameListOrEmpty(frames);
+  const safeThresholds = discontinuityThresholdsOrEmpty(thresholds);
   const angularVelocity = createVelocityAccumulator();
   const translationVelocity = createVelocityAccumulator();
   const scaleVelocity = createVelocityAccumulator();
@@ -186,13 +196,13 @@ export function poseDiscontinuityMetric(
       );
       pushVelocitySample(
         translationVelocity,
-        velocity(vec3Delta(previousTransform.translation, nextTransform.translation), deltaSeconds),
+        velocity(vec3Delta(previousTransform?.translation, nextTransform?.translation), deltaSeconds),
         intervalIndex,
         jointIndex
       );
       pushVelocitySample(
         scaleVelocity,
-        velocity(vec3Delta(previousTransform.scale, nextTransform.scale), deltaSeconds),
+        velocity(vec3Delta(previousTransform?.scale, nextTransform?.scale), deltaSeconds),
         intervalIndex,
         jointIndex
       );
@@ -202,9 +212,9 @@ export function poseDiscontinuityMetric(
   const angularVelocityMetric = finishVelocityAccumulator(angularVelocity, skeleton);
   const translationVelocityMetric = finishVelocityAccumulator(translationVelocity, skeleton);
   const scaleVelocityMetric = finishVelocityAccumulator(scaleVelocity, skeleton);
-  const angularThreshold = thresholds.angularVelocityRadiansPerSecond;
-  const translationThreshold = thresholds.translationVelocityUnitsPerSecond;
-  const scaleThreshold = thresholds.scaleVelocityUnitsPerSecond;
+  const angularThreshold = safeThresholds.angularVelocityRadiansPerSecond;
+  const translationThreshold = safeThresholds.translationVelocityUnitsPerSecond;
+  const scaleThreshold = safeThresholds.scaleVelocityUnitsPerSecond;
   if (
     angularThreshold !== undefined &&
     Number.isFinite(angularThreshold) &&
@@ -315,7 +325,7 @@ function pushMetricSample(metric: MetricAccumulator, delta: number | undefined, 
 }
 
 function finishMetricAccumulator(metric: MetricAccumulator, skeleton: Skeleton | undefined): PoseComponentDeltaMetric {
-  const maxJoint = metric.maxIndex !== undefined ? skeleton?.joints[metric.maxIndex]?.name : undefined;
+  const maxJoint = skeletonJointName(skeleton, metric.maxIndex);
   return {
     rms: finishRms(metric),
     max: metric.max,
@@ -347,7 +357,7 @@ function finishVelocityAccumulator(
   metric: VelocityAccumulator,
   skeleton: Skeleton | undefined
 ): PoseVelocityComponentMetric {
-  const maxJoint = metric.maxJointIndex !== undefined ? skeleton?.joints[metric.maxJointIndex]?.name : undefined;
+  const maxJoint = skeletonJointName(skeleton, metric.maxJointIndex);
   return {
     rms: finishRms(metric),
     max: metric.max,
@@ -367,12 +377,12 @@ function createThresholdIssue(
 ): PoseDiscontinuityIssue {
   const intervalIndex = metric.maxIntervalIndex ?? 0;
   const jointIndex = metric.maxJointIndex;
-  const jointName = jointIndex !== undefined ? skeleton?.joints[jointIndex]?.name : undefined;
+  const jointName = skeletonJointName(skeleton, jointIndex);
   return {
     kind,
     intervalIndex,
-    fromTimeSeconds: frames[intervalIndex]?.timeSeconds ?? 0,
-    toTimeSeconds: frames[intervalIndex + 1]?.timeSeconds ?? 0,
+    fromTimeSeconds: finiteIssueTime(frames[intervalIndex]?.timeSeconds),
+    toTimeSeconds: finiteIssueTime(frames[intervalIndex + 1]?.timeSeconds),
     ...(jointIndex !== undefined ? { jointIndex } : {}),
     ...(jointName !== undefined ? { jointName } : {}),
     value: metric.max,
@@ -380,16 +390,20 @@ function createThresholdIssue(
   };
 }
 
-function isPoseFrame(frame: PoseDiscontinuityFrame | undefined): frame is PoseDiscontinuityFrame {
+function skeletonJointName(skeleton: Skeleton | undefined, index: number | undefined): string | undefined {
+  return index !== undefined ? skeleton?.joints?.[index]?.name : undefined;
+}
+
+function isPoseFrame(frame: PoseDiscontinuityFrame | null | undefined): frame is PoseDiscontinuityFrame {
   return !!frame && typeof frame === "object" && Array.isArray(frame.pose);
 }
 
-function readFrameTime(frame: PoseDiscontinuityFrame | undefined): number {
+function readFrameTime(frame: PoseDiscontinuityFrame | null | undefined): number {
   return typeof frame?.timeSeconds === "number" ? frame.timeSeconds : Number.NaN;
 }
 
-function finiteIssueTime(value: number): number {
-  return Number.isFinite(value) ? value : 0;
+function finiteIssueTime(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function velocity(delta: number | undefined, deltaSeconds: number): number | undefined {

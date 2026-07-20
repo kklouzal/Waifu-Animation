@@ -23,6 +23,12 @@ export type VisemeSpeed = number | Partial<Record<VisemeName, number>>;
 
 const DEFAULT_ATTACK_SPEED = 30;
 const DEFAULT_RELEASE_SPEED = 20;
+const DEFAULT_MAX_TOTAL = 0.36;
+const EMPTY_VISEME_OPTIONS: VisemeMixerOptions = {};
+
+function visemeOptionsOrEmpty(value: VisemeMixerOptions | null | undefined): VisemeMixerOptions {
+  return value && typeof value === "object" ? value : EMPTY_VISEME_OPTIONS;
+}
 
 function addFiniteNonNegativeTime(a: number, b: number): number {
   const left = finiteNonNegative(a, 0);
@@ -58,16 +64,17 @@ export class VisemeMixer {
   intensity: number;
 
   constructor(options: VisemeMixerOptions = {}) {
-    this.attack = options.attack ?? DEFAULT_ATTACK_SPEED;
-    this.release = options.release ?? DEFAULT_RELEASE_SPEED;
-    this.maxTotal = finiteNonNegative(options.maxTotal, 0.36);
-    this.intensity = finiteNonNegative(options.intensity, 1);
+    const safeOptions = visemeOptionsOrEmpty(options);
+    this.attack = safeOptions.attack ?? DEFAULT_ATTACK_SPEED;
+    this.release = safeOptions.release ?? DEFAULT_RELEASE_SPEED;
+    this.maxTotal = finiteNonNegative(safeOptions.maxTotal, DEFAULT_MAX_TOTAL);
+    this.intensity = finiteNonNegative(safeOptions.intensity, 1);
   }
 
   setTarget(next: Partial<VisemeWeights>): void {
     const source = readableVisemeSource(next);
     this.intensity = finiteNonNegative(this.intensity, 1);
-    this.maxTotal = finiteNonNegative(this.maxTotal, 0);
+    this.maxTotal = finiteNonNegative(this.maxTotal, DEFAULT_MAX_TOTAL);
     for (const name of VISEME_NAMES) this.target[name] = clamp01(source[name] ?? 0) * this.intensity;
     Object.assign(this.target, limitVisemeStack(this.target, this.maxTotal));
   }
@@ -80,7 +87,7 @@ export class VisemeMixer {
   update(deltaSeconds: number, talking = true): VisemeWeights {
     const dt = finiteNonNegative(deltaSeconds, 0);
     const isTalking = Boolean(talking);
-    this.maxTotal = finiteNonNegative(this.maxTotal, 0);
+    this.maxTotal = finiteNonNegative(this.maxTotal, DEFAULT_MAX_TOTAL);
     for (const name of VISEME_NAMES) {
       this.current[name] = clamp01(this.current[name]);
       this.target[name] = clamp01(this.target[name]);
@@ -193,6 +200,12 @@ export type FacialExpressionMixerOptions = {
   visemes?: VisemeMixerOptions;
 };
 
+const EMPTY_FACIAL_OPTIONS: FacialExpressionMixerOptions = {};
+
+function facialOptionsOrEmpty(value: FacialExpressionMixerOptions | null | undefined): FacialExpressionMixerOptions {
+  return value && typeof value === "object" ? value : EMPTY_FACIAL_OPTIONS;
+}
+
 export type FacialExpressionInput = {
   talking?: boolean;
   targetMouth?: number;
@@ -206,6 +219,14 @@ export type FacialExpressionInput = {
   cueSmile?: number;
   cueThinking?: number;
 };
+
+const EMPTY_FACIAL_INPUT: FacialExpressionInput & { visemes?: VisemeWeights } = {};
+
+function facialInputOrEmpty(
+  input: (FacialExpressionInput & { visemes?: VisemeWeights }) | null | undefined
+): FacialExpressionInput & { visemes?: VisemeWeights } {
+  return input && typeof input === "object" ? input : EMPTY_FACIAL_INPUT;
+}
 
 export type FacialExpressionState = {
   mouthLevel: number;
@@ -221,9 +242,10 @@ export class FacialExpressionMixer {
   mouthRelease: number;
 
   constructor(options: FacialExpressionMixerOptions = {}) {
-    this.visemes = new VisemeMixer(options.visemes);
-    this.mouthAttack = finiteNonNegative(options.mouthAttack, 28);
-    this.mouthRelease = finiteNonNegative(options.mouthRelease, 18);
+    const safeOptions = facialOptionsOrEmpty(options);
+    this.visemes = new VisemeMixer(safeOptions.visemes);
+    this.mouthAttack = finiteNonNegative(safeOptions.mouthAttack, 28);
+    this.mouthRelease = finiteNonNegative(safeOptions.mouthRelease, 18);
   }
 
   setTarget(target: Pick<FacialExpressionInput, "targetMouth" | "targetVisemes">): void {
@@ -238,8 +260,9 @@ export class FacialExpressionMixer {
   }
 
   update(deltaSeconds: number, input: FacialExpressionInput = {}): FacialExpressionState {
-    this.setTarget(input);
-    const talking = input.talking ?? true;
+    const safeInput = facialInputOrEmpty(input);
+    this.setTarget(safeInput);
+    const talking = safeInput.talking ?? true;
     const dt = finiteNonNegative(deltaSeconds, 0);
     this.mouthLevel = clamp01(this.mouthLevel);
     this.targetMouth = clamp01(this.targetMouth);
@@ -253,7 +276,7 @@ export class FacialExpressionMixer {
     return {
       mouthLevel: this.mouthLevel,
       visemes,
-      expressions: composeFacialExpressions({ ...input, visemes })
+      expressions: composeFacialExpressions({ ...safeInput, visemes })
     };
   }
 }
@@ -261,14 +284,15 @@ export class FacialExpressionMixer {
 export function composeFacialExpressions(
   input: FacialExpressionInput & { visemes?: VisemeWeights }
 ): Record<string, number> {
-  const talking = input.talking ?? true;
-  const energy = clamp01(input.energy ?? 0);
-  const rapport = clamp01(input.rapport ?? 0);
-  const cueSmile = clamp01(input.cueSmile ?? 0);
-  const cueThinking = clamp01(input.cueThinking ?? 0);
-  const mood = input.mood ?? "neutral";
-  const emotion = input.emotion ?? "neutral";
-  const state = input.state ?? "idle";
+  const safeInput = facialInputOrEmpty(input);
+  const talking = safeInput.talking ?? true;
+  const energy = clamp01(safeInput.energy ?? 0);
+  const rapport = clamp01(safeInput.rapport ?? 0);
+  const cueSmile = clamp01(safeInput.cueSmile ?? 0);
+  const cueThinking = clamp01(safeInput.cueThinking ?? 0);
+  const mood = safeInput.mood ?? "neutral";
+  const emotion = safeInput.emotion ?? "neutral";
+  const state = safeInput.state ?? "idle";
   const warmSmile = mood === "warm" || mood === "playful" ? 0.05 + rapport * 0.07 : 0;
   const speechSmile = talking ? 1 : 0.26;
   const smile = clamp01(
@@ -277,10 +301,10 @@ export function composeFacialExpressions(
       (emotion === "happy" || emotion === "amused" ? (0.12 + energy * 0.16) * speechSmile : 0)
   );
   const thoughtful = emotion === "thinking" || state === "thinking" ? 0.18 + cueThinking * 0.16 : 0;
-  const visemes = input.visemes ? visemeWeights((name) => clamp01(input.visemes?.[name] ?? 0)) : zeroVisemes();
+  const visemes = safeInput.visemes ? visemeWeights((name) => clamp01(safeInput.visemes?.[name] ?? 0)) : zeroVisemes();
   return {
     ...visemes,
-    blink: clamp01(input.blink ?? 0),
+    blink: clamp01(safeInput.blink ?? 0),
     happy: smile,
     surprised: emotion === "surprised" ? 0.35 + energy * 0.35 : 0,
     relaxed: state === "listening" ? warmSmile * 0.8 : 0,

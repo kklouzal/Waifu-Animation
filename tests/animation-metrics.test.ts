@@ -273,6 +273,28 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
   assert.equal(malformedFrameDiscontinuity.validIntervals, 0);
   assert.equal(malformedFrameDiscontinuity.invalidIntervals, 1);
   assertFiniteMetricOutput(malformedFrameDiscontinuity);
+  const nullFrameListDiscontinuity = poseDiscontinuityMetric(null as never, skeleton, null as never);
+  assert.equal(nullFrameListDiscontinuity.frames, 0, "malformed frame lists should be treated as empty");
+  assertFiniteMetricOutput(nullFrameListDiscontinuity);
+  const sparseFrameA = clonePose(skeleton.restPose);
+  const sparseFrameB = clonePose(skeleton.restPose);
+  sparseFrameA[1] = undefined as never;
+  sparseFrameB[2] = undefined as never;
+  const sparseFrameDiscontinuity = poseDiscontinuityMetric(
+    [
+      { timeSeconds: 0, pose: sparseFrameA },
+      { timeSeconds: 1, pose: sparseFrameB }
+    ],
+    skeleton
+  );
+  assert.equal(
+    sparseFrameDiscontinuity.translationVelocityUnitsPerSecond.invalidSamples,
+    2,
+    "pose discontinuity metrics should count sparse interval transforms as invalid samples"
+  );
+  assert.equal(sparseFrameDiscontinuity.angularVelocityRadiansPerSecond.invalidSamples, 2);
+  assert.equal(sparseFrameDiscontinuity.scaleVelocityUnitsPerSecond.invalidSamples, 2);
+  assertFiniteMetricOutput(sparseFrameDiscontinuity);
 
   const thresholdDiscontinuity = poseDiscontinuityMetric(
     [
@@ -319,6 +341,18 @@ export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime[
     hostileThresholdDiscontinuity.issues.map((issue) => issue.kind),
     [],
     "non-finite and negative pose discontinuity thresholds should be ignored"
+  );
+  assert.deepEqual(
+    poseDiscontinuityMetric(
+      [
+        { timeSeconds: 0, pose: frameA },
+        { timeSeconds: 1, pose: frameB }
+      ],
+      skeleton,
+      null as never
+    ).issues,
+    [],
+    "malformed threshold options should be ignored instead of throwing"
   );
 }
 

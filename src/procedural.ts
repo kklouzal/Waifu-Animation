@@ -34,6 +34,12 @@ function finiteOption01(value: number | undefined, fallback: number): number {
   return clamp01(finiteSigned(value, fallback));
 }
 
+const EMPTY_LOOK_AT_OPTIONS: LookAtOptions = {};
+
+function lookAtOptionsOrEmpty(value: LookAtOptions | null | undefined): LookAtOptions {
+  return value && typeof value === "object" ? value : EMPTY_LOOK_AT_OPTIONS;
+}
+
 const TAU = Math.PI * 2;
 
 function canonicalZero(value: number): number {
@@ -89,6 +95,12 @@ const DEFAULT_ATTENTION_TARGET_SAFETY: Required<
   minForwardZ: 0
 };
 
+function attentionSafetyOptionsOrDefault(
+  value: AttentionTargetSafetyOptions | null | undefined
+): AttentionTargetSafetyOptions {
+  return value && typeof value === "object" ? value : DEFAULT_ATTENTION_TARGET_SAFETY;
+}
+
 function finiteMinDistanceOption(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
@@ -104,8 +116,9 @@ function finiteCosineOption(value: number | undefined): number | undefined {
 
 export function classifyAttentionTargetSafety(
   target: AttentionTarget,
-  options: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
+  options: AttentionTargetSafetyOptions | null | undefined = DEFAULT_ATTENTION_TARGET_SAFETY
 ): AttentionTargetSafety {
+  const safeOptions = attentionSafetyOptionsOrDefault(options);
   const candidate = target as Partial<AttentionTarget> | undefined;
   if (finiteAttentionWeight(candidate?.weight as number) <= 0) return "nonPositiveWeight";
   const x = candidate?.position?.[0];
@@ -121,55 +134,56 @@ export function classifyAttentionTargetSafety(
   )
     return "nonFinitePosition";
   const distanceSq = x * x + y * y + z * z;
-  const minDistance = finiteMinDistanceOption(options.minDistance, DEFAULT_ATTENTION_TARGET_SAFETY.minDistance);
+  const minDistance = finiteMinDistanceOption(safeOptions.minDistance, DEFAULT_ATTENTION_TARGET_SAFETY.minDistance);
   if (distanceSq < minDistance * minDistance) return "tooClose";
-  const maxDistance = finiteMaxDistanceOption(options.maxDistance, DEFAULT_ATTENTION_TARGET_SAFETY.maxDistance);
+  const maxDistance = finiteMaxDistanceOption(safeOptions.maxDistance, DEFAULT_ATTENTION_TARGET_SAFETY.maxDistance);
   if (maxDistance > 0 && distanceSq > maxDistance * maxDistance) return "tooFar";
   const minForwardZ =
-    typeof options.minForwardZ === "number" && Number.isFinite(options.minForwardZ)
-      ? options.minForwardZ
+    typeof safeOptions.minForwardZ === "number" && Number.isFinite(safeOptions.minForwardZ)
+      ? safeOptions.minForwardZ
       : DEFAULT_ATTENTION_TARGET_SAFETY.minForwardZ;
   if (z < minForwardZ) return "behind";
-  const minForwardCosine = finiteCosineOption(options.minForwardCosine);
+  const minForwardCosine = finiteCosineOption(safeOptions.minForwardCosine);
   if (minForwardCosine !== undefined && z / Math.sqrt(distanceSq) < minForwardCosine) return "outsideYaw";
   return "safe";
 }
 
 export function isSafeAttentionTarget(
   target: AttentionTarget,
-  options: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
+  options: AttentionTargetSafetyOptions | null | undefined = DEFAULT_ATTENTION_TARGET_SAFETY
 ): boolean {
   return classifyAttentionTargetSafety(target, options) === "safe";
 }
 
 function isSelectableAttentionTarget(
   target: AttentionTarget | undefined,
-  options: AttentionTargetSafetyOptions
+  options: AttentionTargetSafetyOptions | null | undefined
 ): target is AttentionTarget {
   const id = (target as Partial<AttentionTarget> | undefined)?.id;
   return typeof id === "string" && isSafeAttentionTarget(target as AttentionTarget, options);
 }
 
 export function distributeLookAt(localTarget: Vec3, options: LookAtOptions = {}): LookAtDistribution {
+  const safeOptions = lookAtOptionsOrEmpty(options);
   const direction = normalizeVec3(localTarget, [0, 0, 1]);
-  const maxYaw = finiteNonNegative(options.maxYaw, 0.85);
-  const maxPitch = finiteNonNegative(options.maxPitch, 0.52);
+  const maxYaw = finiteNonNegative(safeOptions.maxYaw, 0.85);
+  const maxPitch = finiteNonNegative(safeOptions.maxPitch, 0.52);
   const directionX = canonicalZero(direction[0]);
   const directionY = canonicalZero(direction[1]);
   const directionZ = canonicalZero(direction[2]);
   const yaw = canonicalZero(clamp(Math.atan2(directionX, directionZ), -maxYaw, maxYaw));
   const pitch = canonicalZero(clamp(Math.atan2(directionY, Math.hypot(directionX, directionZ)), -maxPitch, maxPitch));
-  const eyeLead = finiteOption01(options.eyeLead, 0.42);
-  const headWeight = finiteOption01(options.headWeight, 0.42);
-  const neckWeight = finiteOption01(options.neckWeight, 0.22);
-  const spineWeight = finiteOption01(options.spineWeight, 0.11);
-  const torsoWeight = finiteOption01(options.torsoWeight, 0.05);
+  const eyeLead = finiteOption01(safeOptions.eyeLead, 0.42);
+  const headWeight = finiteOption01(safeOptions.headWeight, 0.42);
+  const neckWeight = finiteOption01(safeOptions.neckWeight, 0.22);
+  const spineWeight = finiteOption01(safeOptions.spineWeight, 0.11);
+  const torsoWeight = finiteOption01(safeOptions.torsoWeight, 0.05);
   return {
     eyes: { yaw: yaw * eyeLead, pitch: pitch * eyeLead, weight: 1 },
-    head: { yaw: yaw * headWeight, pitch: pitch * finiteOption01(options.headWeight, 0.46), weight: 1 },
-    neck: { yaw: yaw * neckWeight, pitch: pitch * finiteOption01(options.neckWeight, 0.2), weight: 1 },
-    spine: { yaw: yaw * spineWeight, pitch: pitch * finiteOption01(options.spineWeight, 0.07), weight: 1 },
-    torso: { yaw: yaw * torsoWeight, pitch: pitch * finiteOption01(options.torsoWeight, 0.03), weight: 1 }
+    head: { yaw: yaw * headWeight, pitch: pitch * finiteOption01(safeOptions.headWeight, 0.46), weight: 1 },
+    neck: { yaw: yaw * neckWeight, pitch: pitch * finiteOption01(safeOptions.neckWeight, 0.2), weight: 1 },
+    spine: { yaw: yaw * spineWeight, pitch: pitch * finiteOption01(safeOptions.spineWeight, 0.07), weight: 1 },
+    torso: { yaw: yaw * torsoWeight, pitch: pitch * finiteOption01(safeOptions.torsoWeight, 0.03), weight: 1 }
   };
 }
 
@@ -181,7 +195,7 @@ export type AttentionTarget = {
 
 const EMPTY_ATTENTION_TARGETS: readonly AttentionTarget[] = [];
 
-function attentionTargetsOrEmpty(targets: readonly AttentionTarget[] | undefined): readonly AttentionTarget[] {
+function attentionTargetsOrEmpty(targets: readonly AttentionTarget[] | null | undefined): readonly AttentionTarget[] {
   return Array.isArray(targets) ? targets : EMPTY_ATTENTION_TARGETS;
 }
 
@@ -196,12 +210,13 @@ export class AttentionScheduler {
 
   choose(
     nowMs: number,
-    targets: readonly AttentionTarget[],
+    targets: readonly AttentionTarget[] | null | undefined,
     minDwellMs = 900,
     maxDwellMs = 3200,
-    safetyOptions: AttentionTargetSafetyOptions = DEFAULT_ATTENTION_TARGET_SAFETY
+    safetyOptions: AttentionTargetSafetyOptions | null | undefined = DEFAULT_ATTENTION_TARGET_SAFETY
   ): AttentionTarget | null {
     const targetList = attentionTargetsOrEmpty(targets);
+    const safeSafetyOptions = attentionSafetyOptionsOrDefault(safetyOptions);
     if (targetList.length === 0) {
       this.currentId = null;
       this.nextSwitchAt = 0;
@@ -210,15 +225,15 @@ export class AttentionScheduler {
     const now = finiteNonNegative(nowMs, 0);
     const currentTarget = this.currentId
       ? (targetList.find(
-          (target) => isSelectableAttentionTarget(target, safetyOptions) && target.id === this.currentId
+          (target) => isSelectableAttentionTarget(target, safeSafetyOptions) && target.id === this.currentId
         ) ?? null)
       : null;
-    if (now >= this.nextSwitchAt || !currentTarget || !isSafeAttentionTarget(currentTarget, safetyOptions)) {
+    if (now >= this.nextSwitchAt || !currentTarget || !isSafeAttentionTarget(currentTarget, safeSafetyOptions)) {
       let maxWeight = 0;
       let lastEligible = -1;
       for (let i = 0; i < targetList.length; i += 1) {
         const target = targetList[i];
-        if (!isSelectableAttentionTarget(target, safetyOptions)) continue;
+        if (!isSelectableAttentionTarget(target, safeSafetyOptions)) continue;
         maxWeight = Math.max(maxWeight, finiteAttentionWeight(target.weight));
         lastEligible = i;
       }
@@ -230,14 +245,14 @@ export class AttentionScheduler {
       let total = 0;
       for (let i = 0; i < targetList.length; i += 1) {
         const target = targetList[i];
-        if (!isSelectableAttentionTarget(target, safetyOptions)) continue;
+        if (!isSelectableAttentionTarget(target, safeSafetyOptions)) continue;
         total += finiteAttentionWeight(target.weight) / maxWeight;
       }
       let pick = this.random() * total;
       this.currentId = targetList[lastEligible]!.id;
       for (let i = 0; i < targetList.length; i += 1) {
         const target = targetList[i];
-        if (!isSelectableAttentionTarget(target, safetyOptions)) continue;
+        if (!isSelectableAttentionTarget(target, safeSafetyOptions)) continue;
         pick -= finiteAttentionWeight(target.weight) / maxWeight;
         if (pick <= 0) {
           this.currentId = target.id;
@@ -249,7 +264,7 @@ export class AttentionScheduler {
       this.nextSwitchAt = addFiniteNonNegativeTime(now, randomRange(this.random, minDwell, maxDwell));
       return (
         targetList.find(
-          (target) => isSelectableAttentionTarget(target, safetyOptions) && target.id === this.currentId
+          (target) => isSelectableAttentionTarget(target, safeSafetyOptions) && target.id === this.currentId
         ) ?? null
       );
     }
