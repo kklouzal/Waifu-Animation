@@ -219,6 +219,23 @@ function runBlendTransitionMissingAndMismatchTests(): void {
   });
   assert.equal(mismatch.playback.length, 0);
   assert.ok(mismatch.issues.some((issue) => issue.code === "layer-mismatch"));
+
+  const invalidActionKind = registry.resolve({
+    ...makeGraphOutput(),
+    playback: [],
+    actions: [
+      {
+        type: "action",
+        layer: "action",
+        requestId: "action:pickup",
+        command: { commandId: "bad-kind-1", kind: "teleport" as never },
+        priority: 300,
+        fadeSeconds: 0.1
+      }
+    ]
+  });
+  assert.equal(invalidActionKind.actions.length, 0, "binding resolver should reject unsupported action kinds");
+  assert.ok(invalidActionKind.issues.some((issue) => issue.field === "actions.command.kind"));
 }
 
 function runBoundsHostileInputAndOutputReuseTests(): void {

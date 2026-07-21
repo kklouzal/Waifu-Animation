@@ -13,7 +13,9 @@ import {
 
 export function runCharacterAnimationRuntimeApplierTests(): void {
   runIdleToGaitCrossfadeAndGaitChangeTests();
+  runRepeatedApplyPreservesRuntimeTimeTests();
   runPostureBlendAndMaskTests();
+  runRuntimeLayerMaskReplacementTests();
   runAirborneRiseFallLandingTests();
   runActionOverlayIdentitySnapshotAndReplayTests();
   runMissingClipMaskConflictAndIsolationTests();
@@ -71,6 +73,34 @@ function runIdleToGaitCrossfadeAndGaitChangeTests(): void {
   assert.equal(runResult.faded.length, 0, "same runtime layer gait replacement should not stale-fade itself");
 }
 
+function runRepeatedApplyPreservesRuntimeTimeTests(): void {
+  const { clips, masks } = makeResources();
+  const runtime = new AnimationRuntime(testSkeleton);
+  const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
+
+  applier.apply(runtime, makeBindingOutput({ locomotionWeight: 1, gait: "walk", phase: 0.25 }), { clips, masks });
+  runtime.update(0.25);
+  const advancedTime = runtime.evaluate().activeLayers.find((layer) => layer.id === "test:base:base:gait")?.time;
+  assert.ok(advancedTime !== undefined && advancedTime > 0.5, "runtime should advance the applied gait layer time");
+
+  const repeat = applier.apply(runtime, makeBindingOutput({ locomotionWeight: 1, gait: "walk", phase: 0 }), {
+    clips,
+    masks
+  });
+  assert.deepEqual(
+    repeat.applied
+      .filter((layer) => layer.runtimeLayerId === "test:base:base:gait")
+      .map((layer) => [layer.resetTime, layer.time]),
+    [[false, undefined]],
+    "reapplying the same clip should refresh weight/fade metadata without re-seeding phase time"
+  );
+  assert.equal(
+    runtime.evaluate().activeLayers.find((layer) => layer.id === "test:base:base:gait")?.time,
+    advancedTime,
+    "applier refreshes must not stomp AnimationRuntime-owned layer time for an unchanged clip"
+  );
+}
+
 function runPostureBlendAndMaskTests(): void {
   const { clips, masks } = makeResources();
   const runtime = new AnimationRuntime(testSkeleton);
@@ -90,6 +120,42 @@ function runPostureBlendAndMaskTests(): void {
   runtime.update(0.2);
   const activePosture = runtime.evaluate().activeLayers.filter((layer) => layer.id.startsWith("test:posture"));
   assert.equal(activePosture.length, 2);
+}
+
+function runRuntimeLayerMaskReplacementTests(): void {
+  const { clips, masks } = makeResources();
+  clips.set("clip:masked-full", makeFullBodyTranslationClip("clip:masked-full", 1, 1));
+  clips.set("clip:unmasked-full", makeFullBodyTranslationClip("clip:unmasked-full", 1, 2));
+  masks.set("mask:head-only", createJointMask(testSkeleton, 0, { head: 1 }));
+  const runtime = new AnimationRuntime(testSkeleton);
+  const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
+
+  applier.apply(runtime, makeSinglePlaybackOutput("clip:masked-full", { maskId: "mask:head-only", fadeSeconds: 0 }), {
+    clips,
+    masks
+  });
+  runtime.update(0);
+  const maskedPose = runtime.evaluate().localPose;
+  assert.equal(maskedPose[2]?.translation[0], 1);
+  assert.equal(maskedPose[4]?.translation[0], 0, "the first masked apply should not affect unmasked leg joints");
+
+  const unmasked = applier.apply(runtime, makeSinglePlaybackOutput("clip:unmasked-full", { fadeSeconds: 0 }), {
+    clips,
+    masks
+  });
+  assert.deepEqual(
+    unmasked.applied.map((layer) => [layer.runtimeLayerId, layer.maskId]),
+    [["test:base:shared", undefined]],
+    "unmasked replacement should report no mask ownership"
+  );
+  runtime.update(0);
+  const unmaskedPose = runtime.evaluate().localPose;
+  assert.equal(unmaskedPose[2]?.translation[0], 2);
+  assert.equal(
+    unmaskedPose[4]?.translation[0],
+    2,
+    "replacing a masked owned layer with an unmasked command must clear the stale runtime mask"
+  );
 }
 
 function runAirborneRiseFallLandingTests(): void {
@@ -192,6 +258,38 @@ function runMissingClipMaskConflictAndIsolationTests(): void {
     "masked layers should not substitute an arbitrary mask when the configured mask id is missing"
   );
 
+  const throwingClip = createCharacterAnimationRuntimeApplier({ namespace: "test" }).apply(
+    new AnimationRuntime(testSkeleton),
+    makeBindingOutput({ locomotionWeight: 1 }),
+    {
+      clips: () => {
+        throw new Error("clip lookup failed");
+      },
+      masks
+    }
+  );
+  assert.ok(
+    throwingClip.issues.some((issue) => issue.field === "clips" && issue.code === "resolver-threw"),
+    "throwing clip resolvers should report invalid-resource issues instead of escaping apply()"
+  );
+
+  const throwingMask = createCharacterAnimationRuntimeApplier({ namespace: "test" }).apply(
+    new AnimationRuntime(testSkeleton),
+    makeBindingOutput({ postureWeight: 0.5 }),
+    {
+      clips,
+      masks: () => {
+        throw new Error("mask lookup failed");
+      }
+    }
+  );
+  assert.equal(
+    throwingMask.applied.some((layer) => layer.graphLayer === "posture"),
+    false,
+    "throwing mask resolvers should not apply masked posture layers"
+  );
+  assert.ok(throwingMask.issues.some((issue) => issue.field === "masks" && issue.code === "resolver-threw"));
+
   const conflict = applier.apply(runtime, makeBindingOutput({ conflict: true }), { clips, masks });
   assert.ok(conflict.issues.some((issue) => issue.type === "layer-conflict"));
 
@@ -235,6 +333,26 @@ function runMalformedHostileBoundedInputTests(): void {
     /maxRecordsPerApply/,
     "applier config should reject non-finite bounds"
   );
+
+  const invalidActionKind = applier.apply(
+    runtime,
+    {
+      schemaVersion: 1,
+      sequence: 8,
+      playback: [],
+      blends: [],
+      transitions: [],
+      actions: [{ ...action("invalid-kind-1"), command: { commandId: "invalid-kind-1", kind: "teleport" as never } }],
+      issues: []
+    },
+    { clips, masks }
+  );
+  assert.equal(
+    invalidActionKind.applied.some((layer) => layer.source === "action"),
+    false,
+    "runtime applier should reject resolved actions with unsupported public action kinds"
+  );
+  assert.ok(invalidActionKind.issues.some((issue) => issue.field === "actions.command.kind"));
 }
 
 const testSkeleton = createSkeleton([
@@ -291,6 +409,43 @@ function makeClip(id: string, duration: number): AnimationClip {
         values: toFloat32Array([0, 0, 0, duration, 0, 0])
       }
     ]
+  };
+}
+
+function makeFullBodyTranslationClip(id: string, duration: number, x: number): AnimationClip {
+  return {
+    id,
+    duration,
+    loop: true,
+    tracks: [
+      {
+        humanBone: "head",
+        property: "translation",
+        times: toFloat32Array([0, duration]),
+        values: toFloat32Array([x, 0, 0, x, 0, 0])
+      },
+      {
+        humanBone: "leftUpperLeg",
+        property: "translation",
+        times: toFloat32Array([0, duration]),
+        values: toFloat32Array([x, 0, 0, x, 0, 0])
+      }
+    ]
+  };
+}
+
+function makeSinglePlaybackOutput(
+  clipId: string,
+  options: { maskId?: string; fadeSeconds?: number } = {}
+): CharacterAnimationBindingOutput {
+  return {
+    schemaVersion: 1,
+    sequence: 1,
+    playback: [playback("locomotion:gait:walk", clipId, "locomotion", "base", "shared", 1, options)],
+    blends: [],
+    transitions: [],
+    actions: [],
+    issues: []
   };
 }
 

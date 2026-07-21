@@ -251,6 +251,7 @@ const MAX_PRIORITY = 1_000_000;
 const IMMEDIATE_FADE_SPEED = 1_000_000;
 const VALID_GRAPH_LAYERS = new Set<CharacterAnimationGraphLayerId>(["locomotion", "posture", "airborne", "action"]);
 const VALID_BLEND_MODES = new Set<LayerBlendMode>(["override", "additive"]);
+const VALID_ACTION_KINDS = new Set(["pickup", "drop", "equip", "unequip", "sit", "stand", "use", "custom"]);
 const SOURCE_ORDER: Record<CharacterAnimationRuntimeApplySource, number> = {
   blend: 0,
   playback: 1,
@@ -646,7 +647,27 @@ export class CharacterAnimationRuntimeApplier {
       context.sourceIndex,
       context.runtimeLayerId
     );
-    const clip = resolveClip(context.resources.clips, context.endpoint.clipId, lookupContext);
+    let clip: AnimationClip | null | undefined;
+    try {
+      clip = resolveClip(context.resources.clips, context.endpoint.clipId, lookupContext);
+    } catch {
+      pushIssue(
+        context.output.issues,
+        {
+          type: "invalid-resource",
+          field: "clips",
+          code: "resolver-threw",
+          message: "character animation runtime applier clip resolver threw while resolving a requested clip id",
+          source: context.source,
+          sourceIndex: context.sourceIndex,
+          requestId: context.endpoint.requestId,
+          clipId: context.endpoint.clipId,
+          runtimeLayerId: context.runtimeLayerId
+        },
+        this.config.maxIssues
+      );
+      return null;
+    }
     if (!clip) {
       pushIssue(
         context.output.issues,
@@ -720,6 +741,7 @@ export class CharacterAnimationRuntimeApplier {
   #applyCommand(runtime: AnimationRuntime, command: LayerCommand, output: CharacterAnimationRuntimeApplyResult): void {
     const previous = this.#ownedLayers.get(command.runtimeLayerId);
     const resetTime = previous === undefined || command.source === "action" || previous.clipId !== command.clipId;
+    const seedTime = resetTime && command.time !== undefined;
     const initialWeight = previous === undefined && command.fadeSeconds > 0 ? 0 : command.targetWeight;
     const options = {
       blendMode: command.blendMode,
@@ -731,7 +753,8 @@ export class CharacterAnimationRuntimeApplier {
       fadeSpeed: fadeSecondsToFadeSpeed(command.fadeSeconds),
       resetTime,
       fadeOutExisting: false,
-      ...(command.time !== undefined ? { time: command.time } : {}),
+      clearMask: command.mask === undefined,
+      ...(seedTime ? { time: command.time } : {}),
       ...(command.mask ? { mask: command.mask } : {})
     };
     runtime.crossfade(command.runtimeLayerId, command.clip, options);
@@ -777,7 +800,7 @@ export class CharacterAnimationRuntimeApplier {
       sourceIndex: command.sourceIndex,
       ...(command.maskId !== undefined ? { maskId: command.maskId } : {}),
       ...(command.phase !== undefined ? { phase: command.phase } : {}),
-      ...(command.time !== undefined ? { time: command.time } : {}),
+      ...(seedTime ? { time: command.time } : {}),
       ...(command.actionIdentity !== undefined ? { actionIdentity: command.actionIdentity } : {})
     });
   }
@@ -1164,8 +1187,16 @@ function sanitizeActionRecord(
   }
   const commandId = readBoundedId(rawRecord.command.commandId);
   const kind = readBoundedId(rawRecord.command.kind);
-  if (!commandId || !kind) {
-    rejectRecord("actions.command", "id", "action", sourceIndex, issues, maxIssues);
+  if (!commandId) {
+    rejectRecord("actions.command.commandId", "id", "action", sourceIndex, issues, maxIssues);
+    return null;
+  }
+  if (!kind) {
+    rejectRecord("actions.command.kind", "id", "action", sourceIndex, issues, maxIssues);
+    return null;
+  }
+  if (!VALID_ACTION_KINDS.has(kind)) {
+    rejectRecord("actions.command.kind", "enum", "action", sourceIndex, issues, maxIssues);
     return null;
   }
   return {
@@ -1421,7 +1452,28 @@ function resolveOptionalMask(
     pushMissingMaskIssue(context, issues, config.maxIssues);
     return null;
   }
-  const mask = resolveMask(resources.masks, context.maskId, context);
+  let mask: JointMask | null | undefined;
+  try {
+    mask = resolveMask(resources.masks, context.maskId, context);
+  } catch {
+    pushIssue(
+      issues,
+      {
+        type: "invalid-resource",
+        field: "masks",
+        code: "resolver-threw",
+        message: "character animation runtime applier mask resolver threw while resolving a requested mask id",
+        source: context.source,
+        sourceIndex: context.sourceIndex,
+        requestId: context.requestId,
+        clipId: context.clipId,
+        maskId: context.maskId,
+        runtimeLayerId: context.runtimeLayerId
+      },
+      config.maxIssues
+    );
+    return null;
+  }
   if (!mask) {
     pushMissingMaskIssue(context, issues, config.maxIssues);
     return null;

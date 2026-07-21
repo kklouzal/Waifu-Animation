@@ -199,6 +199,16 @@ const MAX_PLAYBACK_SPEED = 16;
 const MAX_WEIGHT_SCALE = 16;
 const VALID_GRAPH_LAYERS = new Set<CharacterAnimationGraphLayerId>(["locomotion", "posture", "airborne", "action"]);
 const VALID_BLEND_MODES = new Set<LayerBlendMode>(["override", "additive"]);
+const VALID_ACTION_KINDS = new Set<CharacterActionIntent["kind"]>([
+  "pickup",
+  "drop",
+  "equip",
+  "unequip",
+  "sit",
+  "stand",
+  "use",
+  "custom"
+]);
 const VALID_PLAYBACK_REASONS = new Set<CharacterAnimationGraphPlaybackReason>(["idle", "gait", "posture", "airborne"]);
 const VALID_BLEND_REASONS = new Set<CharacterAnimationBlendRequest["reason"]>(["idle", "gait", "posture", "airborne"]);
 const VALID_TRANSITION_REASONS = new Set<CharacterAnimationTransitionRequest["reason"]>([
@@ -1260,6 +1270,10 @@ function sanitizeActionCommand(
   const commandId = readRequestId(rawCommand.commandId, "actions.command.commandId", sourceIndex, issues, maxIssues);
   const kind = readRequestId(rawCommand.kind, "actions.command.kind", sourceIndex, issues, maxIssues);
   if (!commandId || !kind) return null;
+  if (!VALID_ACTION_KINDS.has(kind as CharacterActionIntent["kind"])) {
+    rejectRequest("actions.command.kind", "enum", sourceIndex, issues, maxIssues);
+    return null;
+  }
   const itemId = readOptionalActionId(rawCommand.itemId, "actions.command.itemId", sourceIndex, issues, maxIssues);
   const socketId = readOptionalActionId(
     rawCommand.socketId,

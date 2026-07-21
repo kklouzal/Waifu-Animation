@@ -65,6 +65,8 @@ export type AnimationLayerOptions = Partial<Omit<AnimationLayer, "id" | "clip" |
 export type CrossfadeOptions = AnimationLayerOptions & {
   /** Reset the target layer's time and current weight before fading in. Defaults to true for new layers and false when replacing the same id. */
   resetTime?: boolean;
+  /** When true and `mask` is omitted, clear any mask previously stored on the target layer. */
+  clearMask?: boolean;
   /** Optional source override layer ids to fade out. Defaults to all same-priority override layers except the target. */
   fromIds?: readonly string[];
   /** Override layer ids to keep active even when they match the crossfade scope. */
@@ -268,7 +270,13 @@ export class AnimationRuntime {
         : existing?.motionCarrier
           ? { motionCarrier: existing.motionCarrier }
           : {}),
-      ...(options.mask ? { mask: options.mask } : existing?.mask ? { mask: existing.mask } : {}),
+      ...(options.mask
+        ? { mask: options.mask }
+        : options.clearMask
+          ? {}
+          : existing?.mask
+            ? { mask: existing.mask }
+            : {}),
       ...(options.sourceBasisQuaternion
         ? { sourceBasisQuaternion: options.sourceBasisQuaternion }
         : existing?.sourceBasisQuaternion
