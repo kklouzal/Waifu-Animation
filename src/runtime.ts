@@ -313,6 +313,10 @@ export class AnimationRuntime {
     this.layers.delete(id);
   }
 
+  hasLayer(id: string): boolean {
+    return this.layers.has(id);
+  }
+
   clear(): void {
     this.layers.clear();
   }

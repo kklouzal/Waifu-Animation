@@ -14,6 +14,7 @@ import {
 export function runCharacterAnimationRuntimeApplierTests(): void {
   runIdleToGaitCrossfadeAndGaitChangeTests();
   runRepeatedApplyPreservesRuntimeTimeTests();
+  runFadingLayerReactivationTests();
   runPostureBlendAndMaskTests();
   runRuntimeLayerMaskReplacementTests();
   runAirborneRiseFallLandingTests();
@@ -98,6 +99,54 @@ function runRepeatedApplyPreservesRuntimeTimeTests(): void {
     runtime.evaluate().activeLayers.find((layer) => layer.id === "test:base:base:gait")?.time,
     advancedTime,
     "applier refreshes must not stomp AnimationRuntime-owned layer time for an unchanged clip"
+  );
+}
+
+function runFadingLayerReactivationTests(): void {
+  const { clips, masks } = makeResources();
+  const runtime = new AnimationRuntime(testSkeleton);
+  const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
+
+  applier.apply(runtime, makeBindingOutput({ locomotionWeight: 0, phase: 0.2 }), { clips, masks });
+  runtime.update(0.4);
+  applier.apply(runtime, makeBindingOutput({ locomotionWeight: 1, phase: 0.3 }), { clips, masks });
+  runtime.update(0.03);
+  const fadingIdle = runtime.evaluate().activeLayers.find((layer) => layer.id === "test:base:base:idle");
+  assert.ok(fadingIdle && fadingIdle.weight > 0, "retired idle layer should still be fading inside runtime");
+
+  const reactivated = applier.apply(runtime, makeBindingOutput({ locomotionWeight: 0, phase: 0.9 }), { clips, masks });
+  assert.deepEqual(
+    reactivated.applied
+      .filter((layer) => layer.runtimeLayerId === "test:base:base:idle")
+      .map((layer) => [layer.resetTime, layer.time]),
+    [[false, undefined]],
+    "reactivating a still-fading owned layer should reuse runtime time instead of restarting it"
+  );
+  assert.equal(
+    runtime.evaluate().activeLayers.find((layer) => layer.id === "test:base:base:idle")?.time,
+    fadingIdle.time,
+    "reactivated fading layers should preserve their runtime-owned local time"
+  );
+
+  const snapshot = applier.snapshot();
+  assert.equal(
+    snapshot.retiringLayers?.length,
+    1,
+    "snapshot should retain fading stale-layer handles for deterministic restore"
+  );
+  const restored = createCharacterAnimationRuntimeApplier({ namespace: "test" });
+  restored.restore(snapshot);
+  assert.deepEqual(restored.snapshot(), snapshot, "retiring layer handles should round-trip through snapshot/restore");
+
+  applier.apply(runtime, makeBindingOutput({ locomotionWeight: 1, phase: 0.1 }), { clips, masks });
+  runtime.update(2);
+  const freshIdle = applier.apply(runtime, makeBindingOutput({ locomotionWeight: 0, phase: 0.4 }), { clips, masks });
+  assert.deepEqual(
+    freshIdle.applied
+      .filter((layer) => layer.runtimeLayerId === "test:base:base:idle")
+      .map((layer) => [layer.resetTime, layer.time]),
+    [[true, 0.4]],
+    "retiring handles should be pruned once the runtime has removed the faded layer"
   );
 }
 

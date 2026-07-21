@@ -174,6 +174,7 @@ export type CharacterAnimationRuntimeApplierSnapshot = Readonly<{
   namespace: string;
   applyCount: number;
   ownedLayers: readonly CharacterAnimationRuntimeApplierLayerSnapshot[];
+  retiringLayers?: readonly CharacterAnimationRuntimeApplierLayerSnapshot[];
   activeActions: readonly CharacterAnimationRuntimeApplierActionSnapshot[];
   seenActionIdentities: readonly string[];
 }>;
@@ -264,6 +265,7 @@ export class CharacterAnimationRuntimeApplier {
   readonly config: CharacterAnimationRuntimeApplierResolvedConfig;
   #applyCount = 0;
   #ownedLayers = new Map<string, OwnedLayerState>();
+  #retiringLayers = new Map<string, OwnedLayerState>();
   #activeActions = new Map<string, ActiveActionState>();
   #seenActionIdentityOrder: string[] = [];
   #seenActionIdentities = new Set<string>();
@@ -323,6 +325,7 @@ export class CharacterAnimationRuntimeApplier {
       return output;
     }
 
+    this.#pruneRetiringLayers(runtime);
     this.#advanceActionTimers(
       runtime,
       readOptionalDeltaSeconds(options.deltaSeconds, output.issues, this.config),
@@ -455,6 +458,9 @@ export class CharacterAnimationRuntimeApplier {
     const ownedLayers = Array.from(this.#ownedLayers.values())
       .sort((a, b) => compareString(a.runtimeLayerId, b.runtimeLayerId))
       .map((layer): CharacterAnimationRuntimeApplierLayerSnapshot => freezeOptionalActionIdentity({ ...layer }));
+    const retiringLayers = Array.from(this.#retiringLayers.values())
+      .sort((a, b) => compareString(a.runtimeLayerId, b.runtimeLayerId))
+      .map((layer): CharacterAnimationRuntimeApplierLayerSnapshot => freezeOptionalActionIdentity({ ...layer }));
     const activeActions = Array.from(this.#activeActions.values())
       .sort((a, b) => compareString(a.identity, b.identity))
       .map((action): CharacterAnimationRuntimeApplierActionSnapshot => Object.freeze({ ...action }));
@@ -463,6 +469,7 @@ export class CharacterAnimationRuntimeApplier {
       namespace: this.config.namespace,
       applyCount: this.#applyCount,
       ownedLayers: Object.freeze(ownedLayers),
+      ...(retiringLayers.length > 0 ? { retiringLayers: Object.freeze(retiringLayers) } : {}),
       activeActions: Object.freeze(activeActions),
       seenActionIdentities: Object.freeze([...this.#seenActionIdentityOrder])
     });
@@ -472,6 +479,9 @@ export class CharacterAnimationRuntimeApplier {
     const restored = validateRuntimeApplierSnapshot(snapshot, this.config);
     this.#applyCount = restored.applyCount;
     this.#ownedLayers = new Map(restored.ownedLayers.map((layer) => [layer.runtimeLayerId, { ...layer }]));
+    this.#retiringLayers = new Map(
+      (restored.retiringLayers ?? []).map((layer) => [layer.runtimeLayerId, { ...layer }])
+    );
     this.#activeActions = new Map(restored.activeActions.map((action) => [action.identity, { ...action }]));
     this.#seenActionIdentityOrder = [...restored.seenActionIdentities];
     this.#seenActionIdentities = new Set(restored.seenActionIdentities);
@@ -480,6 +490,7 @@ export class CharacterAnimationRuntimeApplier {
   reset(): void {
     this.#applyCount = 0;
     this.#ownedLayers.clear();
+    this.#retiringLayers.clear();
     this.#activeActions.clear();
     this.#seenActionIdentities.clear();
     this.#seenActionIdentityOrder.length = 0;
@@ -739,7 +750,7 @@ export class CharacterAnimationRuntimeApplier {
   }
 
   #applyCommand(runtime: AnimationRuntime, command: LayerCommand, output: CharacterAnimationRuntimeApplyResult): void {
-    const previous = this.#ownedLayers.get(command.runtimeLayerId);
+    const previous = this.#ownedLayers.get(command.runtimeLayerId) ?? this.#retiringLayers.get(command.runtimeLayerId);
     const resetTime = previous === undefined || command.source === "action" || previous.clipId !== command.clipId;
     const seedTime = resetTime && command.time !== undefined;
     const initialWeight = previous === undefined && command.fadeSeconds > 0 ? 0 : command.targetWeight;
@@ -758,6 +769,7 @@ export class CharacterAnimationRuntimeApplier {
       ...(command.mask ? { mask: command.mask } : {})
     };
     runtime.crossfade(command.runtimeLayerId, command.clip, options);
+    this.#retiringLayers.delete(command.runtimeLayerId);
     this.#ownedLayers.set(command.runtimeLayerId, {
       runtimeLayerId: command.runtimeLayerId,
       laneId: command.laneId,
@@ -833,14 +845,17 @@ export class CharacterAnimationRuntimeApplier {
     reason: RetireReason,
     output: CharacterAnimationRuntimeApplyResult
   ): void {
+    const state = this.#ownedLayers.get(runtimeLayerId) ?? this.#retiringLayers.get(runtimeLayerId);
     const safeFadeSeconds = sanitizeFadeSeconds(fadeSeconds);
     const fadeSpeed = fadeSecondsToFadeSpeed(safeFadeSeconds);
     if (safeFadeSeconds <= EPSILON) {
       runtime.removeLayer(runtimeLayerId);
       output.removed.push({ runtimeLayerId, fadeSeconds: safeFadeSeconds, fadeSpeed, reason });
+      this.#retiringLayers.delete(runtimeLayerId);
     } else {
       runtime.fadeOut(runtimeLayerId, fadeSpeed);
       output.faded.push({ runtimeLayerId, fadeSeconds: safeFadeSeconds, fadeSpeed, reason });
+      if (state) this.#retiringLayers.set(runtimeLayerId, state);
     }
     this.#ownedLayers.delete(runtimeLayerId);
     for (const [identity, action] of this.#activeActions) {
@@ -848,9 +863,16 @@ export class CharacterAnimationRuntimeApplier {
     }
   }
 
+  #pruneRetiringLayers(runtime: AnimationRuntime): void {
+    for (const runtimeLayerId of Array.from(this.#retiringLayers.keys())) {
+      if (!runtime.hasLayer(runtimeLayerId)) this.#retiringLayers.delete(runtimeLayerId);
+    }
+  }
+
   #enforceOwnedLayerLimit(runtime: AnimationRuntime, output: CharacterAnimationRuntimeApplyResult): void {
-    if (this.#ownedLayers.size <= this.config.maxOwnedLayers) return;
-    const overflow = this.#ownedLayers.size - this.config.maxOwnedLayers;
+    const trackedLayerCount = this.#ownedLayers.size + this.#retiringLayers.size;
+    if (trackedLayerCount <= this.config.maxOwnedLayers) return;
+    let overflow = trackedLayerCount - this.config.maxOwnedLayers;
     pushIssue(
       output.issues,
       {
@@ -861,8 +883,12 @@ export class CharacterAnimationRuntimeApplier {
       },
       this.config.maxIssues
     );
-    const victims = Array.from(this.#ownedLayers.keys()).slice(0, overflow).sort(compareString);
-    for (const runtimeLayerId of victims) this.#retireOwnedLayer(runtime, runtimeLayerId, 0, "bounded", output);
+    const retiringVictims = Array.from(this.#retiringLayers.keys()).slice(0, overflow).sort(compareString);
+    for (const runtimeLayerId of retiringVictims) this.#retireOwnedLayer(runtime, runtimeLayerId, 0, "bounded", output);
+    overflow -= retiringVictims.length;
+    if (overflow <= 0) return;
+    const ownedVictims = Array.from(this.#ownedLayers.keys()).slice(0, overflow).sort(compareString);
+    for (const runtimeLayerId of ownedVictims) this.#retireOwnedLayer(runtime, runtimeLayerId, 0, "bounded", output);
   }
 
   #rememberActionIdentity(identity: string): void {
@@ -1789,12 +1815,19 @@ function validateRuntimeApplierSnapshot(
   if (!Number.isSafeInteger(snapshot.applyCount) || snapshot.applyCount < 0)
     throw new Error("character animation runtime applier snapshot applyCount must be a non-negative safe integer");
   const ownedLayers: readonly unknown[] = Array.isArray(snapshot.ownedLayers) ? snapshot.ownedLayers : [];
+  const retiringLayers: readonly unknown[] = Array.isArray(snapshot.retiringLayers) ? snapshot.retiringLayers : [];
   const activeActions: readonly unknown[] = Array.isArray(snapshot.activeActions) ? snapshot.activeActions : [];
   const seenActionIdentities: readonly unknown[] = Array.isArray(snapshot.seenActionIdentities)
     ? snapshot.seenActionIdentities
     : [];
   if (!Array.isArray(snapshot.ownedLayers) || ownedLayers.length > config.maxOwnedLayers)
     throw new Error("character animation runtime applier snapshot ownedLayers are invalid or exceed maxOwnedLayers");
+  if (
+    (snapshot.retiringLayers !== undefined && !Array.isArray(snapshot.retiringLayers)) ||
+    retiringLayers.length > config.maxOwnedLayers ||
+    ownedLayers.length + retiringLayers.length > config.maxOwnedLayers
+  )
+    throw new Error("character animation runtime applier snapshot retiringLayers are invalid or exceed maxOwnedLayers");
   if (!Array.isArray(snapshot.activeActions) || activeActions.length > config.maxOwnedLayers)
     throw new Error("character animation runtime applier snapshot activeActions are invalid or exceed maxOwnedLayers");
   if (!Array.isArray(snapshot.seenActionIdentities) || seenActionIdentities.length > config.maxActionIdentities)
@@ -1802,6 +1835,7 @@ function validateRuntimeApplierSnapshot(
       "character animation runtime applier snapshot seenActionIdentities are invalid or exceed maxActionIdentities"
     );
   for (const layer of ownedLayers) validateLayerSnapshot(layer);
+  for (const layer of retiringLayers) validateLayerSnapshot(layer);
   for (const action of activeActions) validateActionSnapshot(action);
   for (const identity of seenActionIdentities) {
     if (!readBoundedId(identity))
