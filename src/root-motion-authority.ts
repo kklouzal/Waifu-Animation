@@ -294,7 +294,7 @@ export class RootMotionReconciler {
     } satisfies RootMotionAppliedBreakdown;
     const residual = {
       displacement: subVec3(gatedRequested.displacement, consumed.displacement),
-      yawDelta: wrapYaw(gatedRequested.yawDelta - consumed.yawDelta)
+      yawDelta: gatedRequested.yawDelta - consumed.yawDelta
     } satisfies RootMotionMotionBreakdown;
 
     return {
@@ -558,14 +558,64 @@ function resolveRootMotionAuthorityPolicy(
     "policy.physicsDeltaSpace",
     actorId
   );
-  return {
-    ...fallback,
-    ...policy,
+  const resolved: {
+    mode: RootMotionAuthorityMode;
+    animationDeltaSpace: RootMotionDeltaSpace;
+    physicsDeltaSpace: RootMotionDeltaSpace;
+    doubleApplyPolicy: RootMotionDoubleApplyPolicy;
+    carrierBindings?: RootMotionCarrierBinding[];
+    animationTranslationWeight?: number;
+    animationYawWeight?: number;
+    maxRequestedTranslation?: number;
+    maxRequestedYawRadians?: number;
+  } = {
     mode,
     animationDeltaSpace,
     physicsDeltaSpace,
     doubleApplyPolicy: sanitizeDoubleApplyPolicy(policy?.doubleApplyPolicy ?? fallback.doubleApplyPolicy)
   };
+  const animationTranslationWeight = optionalPolicyUnitInterval(
+    policy?.animationTranslationWeight,
+    fallback.animationTranslationWeight,
+    "policy.animationTranslationWeight",
+    issues,
+    actorId
+  );
+  if (animationTranslationWeight !== undefined) resolved.animationTranslationWeight = animationTranslationWeight;
+  const animationYawWeight = optionalPolicyUnitInterval(
+    policy?.animationYawWeight,
+    fallback.animationYawWeight,
+    "policy.animationYawWeight",
+    issues,
+    actorId
+  );
+  if (animationYawWeight !== undefined) resolved.animationYawWeight = animationYawWeight;
+  const maxRequestedTranslation = optionalPolicyPositive(
+    policy?.maxRequestedTranslation,
+    fallback.maxRequestedTranslation,
+    MAX_REQUESTED_TRANSLATION,
+    "policy.maxRequestedTranslation",
+    issues,
+    actorId
+  );
+  if (maxRequestedTranslation !== undefined) resolved.maxRequestedTranslation = maxRequestedTranslation;
+  const maxRequestedYawRadians = optionalPolicyPositive(
+    policy?.maxRequestedYawRadians,
+    fallback.maxRequestedYawRadians,
+    MAX_REQUESTED_YAW,
+    "policy.maxRequestedYawRadians",
+    issues,
+    actorId
+  );
+  if (maxRequestedYawRadians !== undefined) resolved.maxRequestedYawRadians = maxRequestedYawRadians;
+  if (policy?.carrierBindings !== undefined || fallback.carrierBindings !== undefined) {
+    resolved.carrierBindings = normalizeCarrierBindings(
+      policy?.carrierBindings ?? fallback.carrierBindings,
+      issues,
+      actorId
+    );
+  }
+  return resolved;
 }
 
 function sourceBreakdown(
@@ -607,7 +657,7 @@ function physicsBreakdown(
   }
   return {
     displacement: sanitizeVec3(worldDisplacement, [0, 0, 0], issues, "physics.worldDisplacement", actor.actorId),
-    yawDelta: wrapYaw(Number.isFinite(rawYaw) ? rawYaw! : 0)
+    yawDelta: Number.isFinite(rawYaw) ? rawYaw! : 0
   };
 }
 
@@ -628,7 +678,7 @@ function applyAuthorityPolicy(
       physics.displacement[1] * (1 - translationWeight) + animation.worldDisplacement[1] * translationWeight,
       physics.displacement[2] * (1 - translationWeight) + animation.worldDisplacement[2] * translationWeight
     ],
-    yawDelta: wrapYaw(physics.yawDelta * (1 - yawWeight) + animation.yawDelta * yawWeight)
+    yawDelta: physics.yawDelta * (1 - yawWeight) + animation.yawDelta * yawWeight
   };
 }
 
@@ -658,7 +708,17 @@ function boundRequestedMotion(
       actorId
     );
   }
-  let yawDelta = wrapYaw(requested.yawDelta);
+  let yawDelta = Number.isFinite(requested.yawDelta) ? requested.yawDelta : 0;
+  if (!Number.isFinite(requested.yawDelta)) {
+    pushIssue(
+      issues,
+      "input-rejected",
+      "requested.yawDelta",
+      "finite",
+      "root motion requested yaw must be finite",
+      actorId
+    );
+  }
   if (Math.abs(yawDelta) > maxYaw) {
     yawDelta = Math.sign(yawDelta) * maxYaw;
     pushIssue(
@@ -680,14 +740,10 @@ function shouldRejectForOwnership(
   actorId: CharacterActorId | undefined
 ): boolean {
   if (ownership.duplicateToken) return true;
-  const hasWorldOwner = ownership.translationOwner !== "none" || ownership.yawOwner !== "none";
-  const hasMotion = lengthVec3(requested.displacement) > EPSILON || Math.abs(requested.yawDelta) > EPSILON;
-  if (
-    !ownership.skeletonPoseContainsRootMotion ||
-    !hasWorldOwner ||
-    !hasMotion ||
-    ownership.doubleApplyPolicy === "allow"
-  ) {
+  const hasWorldOwnedMotion =
+    (ownership.translationOwner !== "none" && lengthVec3(requested.displacement) > EPSILON) ||
+    (ownership.yawOwner !== "none" && Math.abs(requested.yawDelta) > EPSILON);
+  if (!ownership.skeletonPoseContainsRootMotion || !hasWorldOwnedMotion || ownership.doubleApplyPolicy === "allow") {
     return false;
   }
   pushIssue(
@@ -765,7 +821,8 @@ function resolveWorldMotion(
   }
 
   const blocked = resolution.blocked === true;
-  let displacement = blocked ? ([0, 0, 0] as Vec3) : cloneVec3(requested.displacement);
+  if (blocked) return { displacement: [0, 0, 0], yawDelta: 0 };
+  let displacement = cloneVec3(requested.displacement);
   if (resolution.position !== undefined) {
     const position = readFiniteVec3(resolution.position);
     if (!position) {
@@ -803,7 +860,7 @@ function resolveWorldMotion(
     actor.actorId
   );
 
-  let yawDelta = blocked ? 0 : requested.yawDelta;
+  let yawDelta = requested.yawDelta;
   if (resolution.yaw !== undefined) {
     if (!Number.isFinite(resolution.yaw)) {
       pushIssue(
@@ -829,7 +886,7 @@ function resolveWorldMotion(
       );
       return { displacement: [0, 0, 0], yawDelta: 0 };
     }
-    yawDelta = wrapYaw(resolution.yawDelta);
+    yawDelta = resolution.yawDelta;
   }
   yawDelta = limitYawNoGain(yawDelta, requested.yawDelta, issues, actor.actorId);
   return { displacement, yawDelta };
@@ -927,6 +984,7 @@ function normalizeRuntimeLayers(
     if (
       !isRecord(layer.carrier) ||
       !Number.isInteger(layer.carrier.jointIndex) ||
+      layer.carrier.jointIndex < 0 ||
       !isNonEmptyString(layer.carrier.joint)
     ) {
       pushIssue(
@@ -1234,7 +1292,7 @@ function limitYawNoGain(
       );
     return 0;
   }
-  if (valueAbs <= requestedAbs + EPSILON) return wrapYaw(value);
+  if (valueAbs <= requestedAbs + EPSILON) return value;
   pushIssue(
     issues,
     "bounded",
@@ -1264,6 +1322,36 @@ function finitePriority(value: number | undefined): number {
   if (value === undefined) return 0;
   if (!Number.isFinite(value)) return 0;
   return Math.max(-1_000_000, Math.min(1_000_000, value));
+}
+
+function optionalPolicyUnitInterval(
+  value: number | undefined,
+  fallback: number | undefined,
+  field: string,
+  issues: RootMotionIssue[],
+  actorId: CharacterActorId | undefined
+): number | undefined {
+  const selected = value ?? fallback;
+  if (selected === undefined) return undefined;
+  if (Number.isFinite(selected)) return Math.max(0, Math.min(1, selected));
+  if (value !== undefined) pushIssue(issues, "input-rejected", field, "finite", `${field} must be finite`, actorId);
+  return fallback !== undefined && Number.isFinite(fallback) ? Math.max(0, Math.min(1, fallback)) : undefined;
+}
+
+function optionalPolicyPositive(
+  value: number | undefined,
+  fallback: number | undefined,
+  max: number,
+  field: string,
+  issues: RootMotionIssue[],
+  actorId: CharacterActorId | undefined
+): number | undefined {
+  const selected = value ?? fallback;
+  if (selected === undefined) return undefined;
+  if (Number.isFinite(selected) && selected > 0) return Math.min(selected, max);
+  if (value !== undefined)
+    pushIssue(issues, "input-rejected", field, "finite", `${field} must be finite and positive`, actorId);
+  return fallback !== undefined && Number.isFinite(fallback) && fallback > 0 ? Math.min(fallback, max) : undefined;
 }
 
 function clamp01Finite(value: number | undefined, fallback: number): number {

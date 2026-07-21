@@ -69,6 +69,22 @@ function runInvalidPathAndAvoidanceHandlingTests(): void {
   assert.equal(invalid.needsRepath, true);
   assert.ok(invalid.issues.some((issue) => issue.field === "path.destination.position"));
 
+  const badRadius = follower.update(
+    makePath("bad-radius", [[0, 0, 0.5]], [0, 0, 1], { radius: "wide" as unknown as number }),
+    controller.snapshot(),
+    { deltaSeconds: 0.1 }
+  );
+  assert.equal(badRadius.status, "following");
+  assert.ok(badRadius.issues.some((issue) => issue.field === "path.destination.radius"));
+
+  const badWaypointRadiusPath = makePath("bad-waypoint-radius", [[0, 0, 0.5]], [0, 0, 1]);
+  const badWaypointRadius = follower.update(
+    { ...badWaypointRadiusPath, waypoints: [{ position: [0, 0, 0.5], radius: "wide" as unknown as number }] },
+    controller.snapshot(),
+    { deltaSeconds: 0.1 }
+  );
+  assert.ok(badWaypointRadius.issues.some((issue) => issue.field === "path.waypoints[0].radius"));
+
   const path = makePath("avoid", [], [0, 0, 1]);
   const avoided = follower.update(path, controller.snapshot(), {
     deltaSeconds: 0.1,
@@ -81,6 +97,40 @@ function runInvalidPathAndAvoidanceHandlingTests(): void {
   const badController = { ...controller.snapshot(), position: [0, Number.POSITIVE_INFINITY, 0] as Vec3 };
   const rejected = follower.update(path, badController, { deltaSeconds: 0.1 });
   assert.equal(rejected.status, "invalid");
+
+  const neighborPosition: Vec3 = [1, 0, 0];
+  const obstaclePosition: Vec3 = [2, 0, 0];
+  let observedNeighborPosition: Vec3 | undefined;
+  let observedObstaclePosition: Vec3 | undefined;
+  const sanitizedAvoidance = follower.update(path, controller.snapshot(), {
+    deltaSeconds: 0.1,
+    neighbors: [
+      {
+        actorId: "neighbor",
+        position: neighborPosition,
+        velocity: [0, 0, 0],
+        radius: 0.4,
+        desiredVelocity: [0, 0, 1],
+        priority: 3
+      },
+      { position: [Number.NaN, 0, 0], velocity: [0, 0, 0], radius: 0.4, desiredVelocity: [0, 0, 1], priority: 0 }
+    ],
+    obstacles: [
+      { id: "pillar", position: obstaclePosition, radius: 0.5, velocity: [0, 0, 0] },
+      { id: "bad", position: [0, 0, 0], radius: 0.5, velocity: [Number.POSITIVE_INFINITY, 0, 0] }
+    ],
+    localAvoidance(query) {
+      observedNeighborPosition = query.neighbors?.[0]?.position;
+      observedObstaclePosition = query.obstacles?.[0]?.position;
+      if (observedNeighborPosition) observedNeighborPosition[0] = 99;
+      if (observedObstaclePosition) observedObstaclePosition[0] = 99;
+      return undefined;
+    }
+  });
+  assert.equal(sanitizedAvoidance.status, "following");
+  assert.equal(sanitizedAvoidance.issues.filter((issue) => issue.type === "input-rejected").length, 2);
+  assert.deepEqual(neighborPosition, [1, 0, 0], "avoidance neighbor query should not alias caller vectors");
+  assert.deepEqual(obstaclePosition, [2, 0, 0], "avoidance obstacle query should not alias caller vectors");
 }
 
 function runBlockedAndRepathOutcomeTests(): void {
@@ -106,6 +156,18 @@ function runBlockedAndRepathOutcomeTests(): void {
     localAvoidance: () => ({ requestRepath: true })
   });
   assert.equal(avoidanceRepath.status, "needs-repath");
+
+  const turningFollower = new CharacterPathFollower({
+    slowDownRadius: 1,
+    turnInPlaceAngleRadians: Math.PI / 8,
+    blockedTimeoutSeconds: 0.1
+  });
+  const turnPath = makePath("turn-only", [], [0, 0, -0.5]);
+  for (let step = 0; step < 5; step += 1) {
+    const turning = turningFollower.update(turnPath, controller.snapshot(), { deltaSeconds: 0.1 });
+    assert.equal(turning.status, "turning");
+    assert.equal(turningFollower.snapshot().blockedSeconds, 0, "turn-in-place should not accrue blocked time");
+  }
 }
 
 function runCoordinatorConflictOrderingTests(): void {
@@ -143,6 +205,32 @@ function runCoordinatorConflictOrderingTests(): void {
   ]);
   assert.equal(priorityResult.actors.find((actor) => actor.id === "beta")!.grantedReservations.length, 1);
   assert.equal(priorityResult.actors.find((actor) => actor.id === "alpha")!.deniedReservations.length, 1);
+
+  const duplicateOwnReservation = new CharacterWorldCoordinator([
+    { id: "solo", controller: makeController(), pathFollower: new CharacterPathFollower() }
+  ]);
+  const duplicateResult = duplicateOwnReservation.update(0.1, [
+    {
+      id: "solo",
+      path: shared,
+      reservations: [{ key: "chair-1", kind: "destination", exclusive: true }]
+    }
+  ]);
+  const soloResult = duplicateResult.actors[0]!;
+  assert.equal(soloResult.grantedReservations.length, 1, "same-actor duplicate exclusive reservations should coalesce");
+  assert.equal(soloResult.deniedReservations.length, 0);
+  assert.equal(soloResult.pathOutput?.status, "following");
+
+  const invalidBlockers = duplicateOwnReservation.update(0.1, [
+    { id: "solo", pathBlockers: "door" as unknown as string[] }
+  ]);
+  assert.ok(invalidBlockers.issues.some((issue) => issue.field === "pathBlockers"));
+
+  const invalidReservationReason = duplicateOwnReservation.update(0.1, [
+    { id: "solo", reservations: [{ key: "custom-lock", kind: "custom", reason: 7 as unknown as string }] }
+  ]);
+  assert.ok(invalidReservationReason.issues.some((issue) => issue.field === "reservations.reason"));
+  assert.equal(invalidReservationReason.actors[0]?.grantedReservations[0]?.reason, undefined);
 }
 
 function runSnapshotReplayEqualityTests(): void {
@@ -175,6 +263,48 @@ function runSnapshotReplayEqualityTests(): void {
     restoredOutputs.push(summarizeUpdate(restored.update(0.05, requests)));
   }
   assert.deepEqual(restoredOutputs, originalOutputs, "restored coordinator replay should exactly match original");
+
+  const missingFollower = {
+    ...snapshot,
+    actors: snapshot.actors.map((actorSnapshot) => {
+      if (actorSnapshot.id !== "a") return actorSnapshot;
+      const { pathFollower: _pathFollower, ...withoutFollower } = actorSnapshot;
+      return withoutFollower;
+    })
+  };
+  assert.throws(
+    () => restored.restore(missingFollower),
+    /missing path follower state/,
+    "restore should reject snapshots that omit registered follower state"
+  );
+
+  const atomic = new CharacterWorldCoordinator(
+    [
+      { id: "a", controller: makeController(), pathFollower: new CharacterPathFollower() },
+      { id: "b", controller: makeController(), pathFollower: new CharacterPathFollower() }
+    ],
+    { seed: "atomic" }
+  );
+  const atomicSnapshot = atomic.snapshot();
+  const corrupted = {
+    ...atomicSnapshot,
+    actors: atomicSnapshot.actors.map((actorSnapshot) => {
+      if (actorSnapshot.id === "a")
+        return { ...actorSnapshot, controller: { ...actorSnapshot.controller, position: [5, 0, 0] as Vec3 } };
+      if (actorSnapshot.id === "b")
+        return {
+          ...actorSnapshot,
+          controller: { ...actorSnapshot.controller, position: [Number.NaN, 0, 0] as Vec3 }
+        };
+      return actorSnapshot;
+    })
+  };
+  assert.throws(() => atomic.restore(corrupted), /position/, "failed restore should reject invalid actor snapshots");
+  assert.deepEqual(
+    atomic.snapshot().actors.find((actorSnapshot) => actorSnapshot.id === "a")?.controller.position,
+    [0, 0, 0],
+    "failed restore should roll back earlier actor mutations"
+  );
 }
 
 function runDeterministicActorReplayFixtureTests(): void {

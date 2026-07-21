@@ -472,6 +472,7 @@ export class CharacterPathFollower {
       yawError > this.config.turnInPlaceAngleRadians && distanceToWaypoint <= this.config.slowDownRadius;
     if (shouldTurnInPlace) {
       const input = turnInput(yawToTarget, this.config);
+      this.state.blockedSeconds = 0;
       this.state.status = "turning";
       return this.output("turning", target.position, distanceToWaypoint, distanceToGoal, false, false, input, issues);
     }
@@ -481,6 +482,8 @@ export class CharacterPathFollower {
     let avoidanceRequestsRepath = false;
     let avoidanceBlocked = false;
     if (options.localAvoidance) {
+      const neighbors = sanitizeAvoidanceAgents(options.neighbors, issues, tick, "neighbors");
+      const obstacles = sanitizeAvoidanceObstacles(options.obstacles, issues, tick, "obstacles");
       const avoided = applyLocalAvoidance(
         options.localAvoidance,
         {
@@ -495,8 +498,8 @@ export class CharacterPathFollower {
             desiredVelocity: [direction[0] * magnitude, 0, direction[2] * magnitude],
             priority: sanitizePriority(options.priority)
           },
-          ...(options.neighbors !== undefined ? { neighbors: options.neighbors } : {}),
-          ...(options.obstacles !== undefined ? { obstacles: options.obstacles } : {})
+          ...(neighbors !== undefined ? { neighbors } : {}),
+          ...(obstacles !== undefined ? { obstacles } : {})
         },
         issues,
         tick
@@ -890,13 +893,7 @@ function sanitizeNavigationPath(
     }
     targets.push({
       position,
-      radius: readRadius(
-        typeof waypoint.radius === "number" ? waypoint.radius : undefined,
-        config.waypointRadius,
-        `path.waypoints[${index}].radius`,
-        issues,
-        tick
-      ),
+      radius: readRadius(waypoint.radius, config.waypointRadius, `path.waypoints[${index}].radius`, issues, tick),
       final: false,
       facingYaw: null
     });
@@ -1102,14 +1099,14 @@ function cloneControllerInput(input: CharacterControllerInput): CharacterControl
 }
 
 function readRadius(
-  value: number | undefined,
+  value: unknown,
   fallback: number,
   field: string,
   issues: PathFollowerIssue[],
   tick: number
 ): number {
   if (value === undefined) return fallback;
-  if (Number.isFinite(value) && value >= 0) return value;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
   issues.push(createPathIssue("input-rejected", field, "finite", `${field} must be finite and non-negative`, tick));
   return fallback;
 }
@@ -1175,6 +1172,113 @@ function sanitizeActorRadius(value: number | undefined): number {
 
 function sanitizePriority(value: number | undefined): number {
   return value !== undefined && Number.isFinite(value) ? value : 0;
+}
+
+function sanitizeAvoidanceAgents(
+  agents: readonly NavigationLocalAvoidanceAgent[] | undefined,
+  issues: PathFollowerIssue[],
+  tick: number,
+  field: string
+): NavigationLocalAvoidanceAgent[] | undefined {
+  if (agents === undefined) return undefined;
+  if (!isReadonlyArray(agents)) {
+    issues.push(createPathIssue("input-rejected", field, "type", `path follower ${field} must be an array`, tick));
+    return [];
+  }
+  const sanitized: NavigationLocalAvoidanceAgent[] = [];
+  for (let index = 0; index < agents.length; index += 1) {
+    const agent = agents[index] ?? null;
+    if (!isRecord(agent)) {
+      issues.push(
+        createPathIssue("input-rejected", `${field}[${index}]`, "type", "avoidance agent must be an object", tick)
+      );
+      continue;
+    }
+    const position = readFiniteVec3(agent.position);
+    const velocity = readFiniteVec3(agent.velocity);
+    const desiredVelocity = readFiniteVec3(agent.desiredVelocity);
+    if (!position || !velocity || !desiredVelocity) {
+      issues.push(
+        createPathIssue(
+          "input-rejected",
+          `${field}[${index}]`,
+          "finite",
+          "avoidance agent vectors must be finite",
+          tick
+        )
+      );
+      continue;
+    }
+    sanitized.push({
+      ...(isNonEmptyString(agent.actorId) ? { actorId: agent.actorId } : {}),
+      position,
+      velocity,
+      radius: sanitizeActorRadius(agent.radius),
+      desiredVelocity,
+      priority: sanitizePriority(agent.priority)
+    });
+  }
+  return sanitized;
+}
+
+function sanitizeAvoidanceObstacles(
+  obstacles: readonly NavigationLocalAvoidanceObstacle[] | undefined,
+  issues: PathFollowerIssue[],
+  tick: number,
+  field: string
+): NavigationLocalAvoidanceObstacle[] | undefined {
+  if (obstacles === undefined) return undefined;
+  if (!isReadonlyArray(obstacles)) {
+    issues.push(createPathIssue("input-rejected", field, "type", `path follower ${field} must be an array`, tick));
+    return [];
+  }
+  const sanitized: NavigationLocalAvoidanceObstacle[] = [];
+  for (let index = 0; index < obstacles.length; index += 1) {
+    const obstacle = obstacles[index] ?? null;
+    if (!isRecord(obstacle)) {
+      issues.push(
+        createPathIssue("input-rejected", `${field}[${index}]`, "type", "avoidance obstacle must be an object", tick)
+      );
+      continue;
+    }
+    const position = readFiniteVec3(obstacle.position);
+    if (!position) {
+      issues.push(
+        createPathIssue(
+          "input-rejected",
+          `${field}[${index}].position`,
+          "finite",
+          "avoidance obstacle position must be finite",
+          tick
+        )
+      );
+      continue;
+    }
+    let velocity: Vec3 | undefined;
+    if (obstacle.velocity !== undefined) {
+      const candidateVelocity = readFiniteVec3(obstacle.velocity);
+      if (candidateVelocity === null) {
+        issues.push(
+          createPathIssue(
+            "input-rejected",
+            `${field}[${index}].velocity`,
+            "finite",
+            "avoidance obstacle velocity must be finite",
+            tick
+          )
+        );
+        continue;
+      }
+      velocity = candidateVelocity;
+    }
+    sanitized.push({
+      ...(isNonEmptyString(obstacle.id) ? { id: obstacle.id } : {}),
+      position,
+      radius: sanitizeActorRadius(obstacle.radius),
+      ...(velocity !== undefined ? { velocity } : {})
+    });
+  }
+  return sanitized;
 }
 
 function optionalFiniteNonNegative(value: number | undefined, fallback: number, field: string): number {

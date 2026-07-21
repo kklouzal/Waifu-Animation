@@ -29,6 +29,7 @@ export function runInteractionCoordinatorTests(): void {
   runCancellationAndInterruptionTests();
   runTimingBoundaryTests();
   runSnapshotReplayEqualityTests();
+  runSnapshotRestoreInvariantTests();
   runDeterministicActorFixtureTests();
   runControllerActionBridgeTests();
 }
@@ -111,6 +112,23 @@ function runLifecycleTests(): void {
   assert.equal(allAttachments(unequip).filter((change) => change.type === "detach").length, 1);
   assert.equal(allAttachments(unequip).filter((change) => change.type === "attach").length, 1);
 
+  const equippedDropCoordinator = makeCoordinator();
+  runCommand(equippedDropCoordinator, {
+    actorId: "alice",
+    action: "equip",
+    commandId: "equip-sword-before-drop",
+    resourceId: "sword",
+    socketId: "back"
+  });
+  const dropEquipped = runCommand(equippedDropCoordinator, {
+    actorId: "alice",
+    action: "drop",
+    commandId: "drop-equipped-sword",
+    resourceId: "sword"
+  });
+  assert.equal(dropEquipped.terminal.phase, "completed");
+  assert.equal(allAttachments(dropEquipped).find((change) => change.type === "detach")?.socketId, "back");
+
   const sit = runCommand(coordinator, {
     actorId: "alice",
     action: "sit",
@@ -120,6 +138,32 @@ function runLifecycleTests(): void {
   assert.equal(sit.terminal.phase, "completed");
   assert.equal(coordinator.resourceState("chair")?.owner?.mode, "seated");
   assert.ok(allEvents(sit).some((event) => event.type === "seated"));
+  assert.ok(allEvents(sit).some((event) => event.type === "reach-window-close"));
+
+  const sitWindowCoordinator = makeCoordinator(uniformTimings(0.05));
+  let sitWindow = sitWindowCoordinator.update(0, [
+    { actorId: "alice", action: "sit", commandId: "sit-window", resourceId: "chair" }
+  ]);
+  for (let step = 0; step < 4 && actor(sitWindow, "alice").phase !== "seated"; step += 1) {
+    sitWindow = sitWindowCoordinator.update(0.05);
+  }
+  assert.equal(actor(sitWindow, "alice").phase, "seated");
+  assert.equal(actor(sitWindow, "alice").reach[0]?.window.closedByPhase, "seated");
+
+  const inferredStandCoordinator = makeCoordinator();
+  runCommand(inferredStandCoordinator, {
+    actorId: "alice",
+    action: "sit",
+    commandId: "sit-before-inferred-stand",
+    resourceId: "chair"
+  });
+  const inferredStand = runCommand(
+    inferredStandCoordinator,
+    interactionRequestFromControllerAction("alice", { kind: "stand", commandId: "stand-inferred-seat" }),
+    { clearance: () => ({ clear: true }) }
+  );
+  assert.equal(inferredStand.terminal.phase, "completed");
+  assert.equal(inferredStandCoordinator.resourceState("chair")?.owner, undefined);
 
   const stand = runCommand(
     coordinator,
@@ -170,8 +214,33 @@ function runConflictAndLockTests(): void {
   assert.equal(actor(socketDenied, "alpha").phase, "failed");
   assert.ok(actor(socketDenied, "alpha").issues.some((issue) => issue.code === "socket-owned"));
 
+  const unequipCarriedCoordinator = makeCoordinator();
+  runCommand(unequipCarriedCoordinator, {
+    actorId: "alpha",
+    action: "pickup",
+    commandId: "pickup-sword-before-invalid-unequip",
+    resourceId: "sword",
+    socketId: "right-hand"
+  });
+  const unequipCarried = unequipCarriedCoordinator.update(0, [
+    {
+      actorId: "alpha",
+      action: "unequip",
+      commandId: "invalid-unequip-carried",
+      resourceId: "sword",
+      socketId: "right-hand"
+    }
+  ]);
+  assert.equal(actor(unequipCarried, "alpha").phase, "failed");
+  assert.ok(actor(unequipCarried, "alpha").issues.some((issue) => issue.code === "not-equipped"));
+
   const seatCoordinator = makeCoordinator();
   runCommand(seatCoordinator, { actorId: "alpha", action: "sit", commandId: "alpha-sit", resourceId: "chair" });
+  const repeatSeat = seatCoordinator.update(0, [
+    { actorId: "alpha", action: "sit", commandId: "alpha-sit-repeat", resourceId: "chair" }
+  ]);
+  assert.equal(actor(repeatSeat, "alpha").phase, "failed");
+  assert.ok(actor(repeatSeat, "alpha").issues.some((issue) => issue.code === "already-seated"));
   const deniedSeat = seatCoordinator.update(0, [
     { actorId: "beta", action: "sit", commandId: "beta-sit", resourceId: "chair" }
   ]);
@@ -201,6 +270,28 @@ function runConflictAndLockTests(): void {
   );
   assert.equal(actor(blockedStand, "alpha").phase, "failed");
   assert.ok(actor(blockedStand, "alpha").issues.some((issue) => issue.type === "blocked"));
+  assert.equal(seatCoordinator.resourceState("chair")?.owner?.mode, "seated");
+
+  const throwingStand = seatCoordinator.update(
+    0,
+    [{ actorId: "alpha", action: "stand", commandId: "alpha-stand-throwing", resourceId: "chair" }],
+    {
+      clearance: () => {
+        throw new Error("clearance exploded");
+      }
+    }
+  );
+  assert.equal(actor(throwingStand, "alpha").phase, "failed");
+  assert.ok(actor(throwingStand, "alpha").issues.some((issue) => issue.code === "threw"));
+  assert.equal(seatCoordinator.resourceState("chair")?.owner?.mode, "seated");
+
+  const invalidStandClearance = seatCoordinator.update(
+    0,
+    [{ actorId: "alpha", action: "stand", commandId: "alpha-stand-invalid-clearance", resourceId: "chair" }],
+    { clearance: () => "clear" as unknown as { clear: boolean } }
+  );
+  assert.equal(actor(invalidStandClearance, "alpha").phase, "failed");
+  assert.ok(actor(invalidStandClearance, "alpha").issues.some((issue) => issue.code === "type"));
   assert.equal(seatCoordinator.resourceState("chair")?.owner?.mode, "seated");
 
   const world = new CharacterWorldCoordinator([
@@ -276,6 +367,45 @@ function runConflictAndLockTests(): void {
   ]);
   assert.equal(actor(externalDenied, "alpha").phase, "failed");
   assert.ok(actor(externalDenied, "alpha").issues.some((issue) => issue.type === "reservation-denied"));
+
+  const foreignDeniedGrant: WorldCoordinatorReservationGrant = {
+    key: interactionResourceReservationKey("mug"),
+    kind: "resource",
+    granted: false,
+    holderId: "holder",
+    requesterId: "beta"
+  };
+  const actorScopedGrant: WorldCoordinatorReservationGrant = {
+    key: interactionResourceReservationKey("mug"),
+    kind: "resource",
+    granted: true,
+    holderId: "alpha",
+    requesterId: "alpha"
+  };
+  const ignoredForeignDenial = makeCoordinator().update(0, [
+    {
+      actorId: "alpha",
+      action: "pickup",
+      commandId: "foreign-denial-ignored",
+      resourceId: "mug",
+      socketId: "right-hand",
+      reservationGrants: [actorScopedGrant, foreignDeniedGrant]
+    }
+  ]);
+  assert.equal(actor(ignoredForeignDenial, "alpha").phase, "approach");
+
+  const invalidGrantShape = makeCoordinator().update(0, [
+    {
+      actorId: "alpha",
+      action: "pickup",
+      commandId: "invalid-grants-shape",
+      resourceId: "mug",
+      socketId: "right-hand",
+      reservationGrants: "not-an-array" as unknown as WorldCoordinatorReservationGrant[]
+    }
+  ]);
+  assert.equal(actor(invalidGrantShape, "alpha").phase, "approach");
+  assert.ok(invalidGrantShape.issues.some((issue) => issue.field === "reservationGrants"));
 }
 
 function runInvalidInputTests(): void {
@@ -410,6 +540,16 @@ function runTimingBoundaryTests(): void {
     ).length,
     1
   );
+
+  const useAnchorCoordinator = makeCoordinator(uniformTimings(0.05));
+  let useAnchor = useAnchorCoordinator.update(0, [
+    { actorId: "alice", action: "use", commandId: "station-use-anchor", resourceId: "station" }
+  ]);
+  for (let step = 0; step < 4 && actor(useAnchor, "alice").phase !== "use"; step += 1) {
+    useAnchor = useAnchorCoordinator.update(0.05);
+  }
+  assert.equal(actor(useAnchor, "alice").phase, "use");
+  assert.equal(actor(useAnchor, "alice").reach[0]?.anchorId, "station-use");
 }
 
 function runSnapshotReplayEqualityTests(): void {
@@ -430,6 +570,81 @@ function runSnapshotReplayEqualityTests(): void {
     restoredSummaries.push(summarize(restored.update(0.05)));
   }
   assert.deepEqual(restoredSummaries, originalSummaries, "interaction snapshot replay should be deterministic");
+}
+
+function runSnapshotRestoreInvariantTests(): void {
+  const activeCoordinator = makeCoordinator(uniformTimings(0.05));
+  activeCoordinator.update(0, [
+    { actorId: "alice", action: "pickup", commandId: "active-pickup", resourceId: "mug", socketId: "right-hand" }
+  ]);
+  const activeSnapshot = activeCoordinator.snapshot();
+  const missingReservation = {
+    ...activeSnapshot,
+    resources: activeSnapshot.resources.map((state) => {
+      if (state.id !== "mug") return state;
+      const { reservation: _reservation, ...withoutReservation } = state;
+      return withoutReservation;
+    })
+  };
+  assert.throws(
+    () => makeCoordinator(uniformTimings(0.05)).restore(missingReservation),
+    /active actor has no matching resource reservation/,
+    "restore should reject active machines without matching resource reservations"
+  );
+
+  const duplicatedResource = {
+    ...activeSnapshot,
+    resources: [...activeSnapshot.resources, activeSnapshot.resources[0]!]
+  };
+  assert.throws(
+    () => makeCoordinator(uniformTimings(0.05)).restore(duplicatedResource),
+    /duplicated/,
+    "restore should reject duplicate resource state entries"
+  );
+
+  const useCoordinator = makeCoordinator(uniformTimings(0.05));
+  useCoordinator.update(0, [{ actorId: "alice", action: "use", commandId: "active-use", resourceId: "station" }]);
+  useCoordinator.update(0.2);
+  const useSnapshot = useCoordinator.snapshot();
+  const danglingUse = {
+    ...useSnapshot,
+    resources: useSnapshot.resources.map((state) =>
+      state.id === "station"
+        ? { ...state, use: { actorId: "ghost", commandId: "ghost-use", action: "use" as const } }
+        : state
+    )
+  };
+  assert.throws(
+    () => makeCoordinator(uniformTimings(0.05)).restore(danglingUse),
+    /use lock has no matching active use actor/,
+    "restore should reject dangling transient use locks"
+  );
+
+  const ownerCoordinator = makeCoordinator();
+  runCommand(ownerCoordinator, {
+    actorId: "alice",
+    action: "pickup",
+    commandId: "owned-mug",
+    resourceId: "mug",
+    socketId: "right-hand"
+  });
+  const ownerSnapshot = ownerCoordinator.snapshot();
+  const duplicatedSocketOwner = {
+    ...ownerSnapshot,
+    resources: ownerSnapshot.resources.map((state) =>
+      state.id === "sword"
+        ? {
+            ...state,
+            owner: { actorId: "alice", mode: "carried" as const, commandId: "corrupt", socketId: "right-hand" }
+          }
+        : state
+    )
+  };
+  assert.throws(
+    () => makeCoordinator().restore(duplicatedSocketOwner),
+    /actor socket owns multiple resources/,
+    "restore should reject impossible same-actor socket ownership aliases"
+  );
 }
 
 function runDeterministicActorFixtureTests(): void {

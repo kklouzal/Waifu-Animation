@@ -510,10 +510,14 @@ export class CharacterInteractionCoordinator {
     const nextResources = new Map<InteractionResourceId, MutableResourceState>();
     for (const resource of this.resources.list())
       nextResources.set(resource.id, { id: resource.id, mutationSequence: 0 });
+    const snapshotResourceIds = new Set<InteractionResourceId>();
     for (const state of snapshot.resources) {
       const cloned = mutableResourceStateFromSnapshot(state);
       if (!this.resources.has(cloned.id))
         throw new Error(`interaction snapshot resource ${cloned.id} is not registered`);
+      if (snapshotResourceIds.has(cloned.id))
+        throw new Error(`interaction snapshot resource ${cloned.id} is duplicated`);
+      snapshotResourceIds.add(cloned.id);
       nextResources.set(cloned.id, cloned);
     }
 
@@ -566,7 +570,17 @@ export class CharacterInteractionCoordinator {
       if (actor.active !== undefined) {
         if (
           request.reservationGrants !== undefined &&
-          hasExternalReservationDenial(actor.active, request.reservationGrants)
+          hasExternalReservationDenial(
+            actor.active,
+            sanitizeReservationGrants(
+              request.reservationGrants,
+              issues,
+              tick,
+              request.actorId,
+              actor.active.resourceId,
+              actor.active.commandId
+            )
+          )
         ) {
           resultByActor.set(
             actor.actorId,
@@ -582,7 +596,13 @@ export class CharacterInteractionCoordinator {
         }
         continue;
       }
-      const resolved = resolveInteractionRequest(request, actor, issues, tick);
+      const resolved = resolveInteractionRequest(
+        request,
+        actor,
+        issues,
+        tick,
+        this.findActorSeatedResource(request.actorId, "")
+      );
       if (resolved !== undefined) starters.push(resolved);
       else if (!resultByActor.has(request.actorId)) {
         resultByActor.set(
@@ -668,7 +688,8 @@ export class CharacterInteractionCoordinator {
       );
       return terminalStartResult(request, "failed", tick, localIssues);
     }
-    const socketId = resolveSocketId(request, resource);
+    const resourceState = this.ensureResourceState(resource.id);
+    const socketId = resolveSocketId(request, resource, resourceState);
     const validationIssue = this.validateStart(request, resource, socketId, options, tick);
     if (validationIssue !== undefined)
       return terminalStartResult({ ...request, ...(socketId !== undefined ? { socketId } : {}) }, "failed", tick, [
@@ -694,7 +715,6 @@ export class CharacterInteractionCoordinator {
       appliedKeys: new Set<string>()
     };
     actor.active = machine;
-    const resourceState = this.ensureResourceState(machine.resourceId);
     resourceState.reservation = {
       actorId: machine.actorId,
       commandId: machine.commandId,
@@ -779,7 +799,7 @@ export class CharacterInteractionCoordinator {
       );
     }
     if (request.action === "sit") {
-      const seatedResourceId = this.findActorSeatedResource(request.actorId, resource.id);
+      const seatedResourceId = this.findActorSeatedResource(request.actorId, "");
       if (seatedResourceId !== undefined) {
         return createIssue(
           "conflict",
@@ -834,6 +854,18 @@ export class CharacterInteractionCoordinator {
           tick
         );
       }
+      if (request.action === "unequip" && state.owner.mode !== "equipped") {
+        return createIssue(
+          "conflict",
+          request.actorId,
+          resource.id,
+          request.commandId,
+          "resourceId",
+          "not-equipped",
+          "actor cannot unequip an item that is not equipped",
+          tick
+        );
+      }
     } else if (request.action === "stand") {
       if (state.owner?.actorId !== request.actorId || state.owner.mode !== "seated") {
         return createIssue(
@@ -847,14 +879,40 @@ export class CharacterInteractionCoordinator {
           tick
         );
       }
-      const clearance = options.clearance?.({
-        actorId: request.actorId,
-        resourceId: resource.id,
-        commandId: request.commandId,
-        action: "stand",
-        tick,
-        ...anchorForOutput(resource, "exit")
-      });
+      let clearance: InteractionClearanceResult | null | undefined;
+      try {
+        clearance = options.clearance?.({
+          actorId: request.actorId,
+          resourceId: resource.id,
+          commandId: request.commandId,
+          action: "stand",
+          tick,
+          ...anchorForOutput(resource, "exit")
+        });
+      } catch (error) {
+        return createIssue(
+          "blocked",
+          request.actorId,
+          resource.id,
+          request.commandId,
+          "clearance",
+          "threw",
+          error instanceof Error ? error.message : "stand clearance adapter threw",
+          tick
+        );
+      }
+      if (clearance !== null && clearance !== undefined && !isRecord(clearance)) {
+        return createIssue(
+          "input-rejected",
+          request.actorId,
+          resource.id,
+          request.commandId,
+          "clearance",
+          "type",
+          "stand clearance adapter result must be an object",
+          tick
+        );
+      }
       if (clearance?.clear === false) {
         return createIssue(
           "blocked",
@@ -989,6 +1047,7 @@ export class CharacterInteractionCoordinator {
       emitOnce(machine, "contact", phase, tick, output.events);
       emitOnce(machine, "reach-window-close", phase, tick, output.events);
     }
+    if (phase === "seated") emitOnce(machine, "reach-window-close", phase, tick, output.events);
     this.applyPhaseMutation(machine, phase, tick, output);
   }
 
@@ -1424,7 +1483,8 @@ function resolveInteractionRequest(
   request: InteractionActorRequest,
   actor: ActorRuntime,
   issues: InteractionIssue[],
-  tick: number
+  tick: number,
+  seatedResourceId: InteractionResourceId | undefined
 ): ResolvedInteractionRequest | undefined {
   const action = request.action ?? controllerActionToInteraction(request.controllerAction?.kind);
   const commandId = request.commandId ?? request.controllerAction?.commandId;
@@ -1433,7 +1493,7 @@ function resolveInteractionRequest(
     request.itemId ??
     request.controllerAction?.itemId ??
     request.controllerAction?.interactionId ??
-    inferActorResource(actor, action);
+    inferActorResource(actor, action, seatedResourceId);
   if (!isSupportedInteractionAction(action)) {
     issues.push(
       createIssue(
@@ -1517,24 +1577,34 @@ function resolveInteractionRequest(
     resourceId,
     ...(socketId !== undefined ? { socketId } : {}),
     priority: optionalFinite(request.priority, 0),
-    reservationGrants: request.reservationGrants ?? [],
+    reservationGrants: sanitizeReservationGrants(
+      request.reservationGrants,
+      issues,
+      tick,
+      request.actorId,
+      resourceId,
+      commandId
+    ),
     ...(request.timings !== undefined ? { timings: request.timings } : {})
   };
 }
 
 function inferActorResource(
   actor: ActorRuntime,
-  action: InteractionActionKind | undefined
+  action: InteractionActionKind | undefined,
+  seatedResourceId: InteractionResourceId | undefined
 ): InteractionResourceId | undefined {
   if (action === undefined) return undefined;
-  if (action === "stand") return actor.active?.resourceId;
+  if (action === "stand") return seatedResourceId ?? actor.active?.resourceId;
   return undefined;
 }
 
 function resolveSocketId(
   request: ResolvedInteractionRequest,
-  resource: InteractableResourceDefinition
+  resource: InteractableResourceDefinition,
+  state?: MutableResourceState
 ): CharacterSocketId | undefined {
+  if (request.action === "drop") return state?.owner?.socketId ?? request.socketId ?? resource.actionSockets?.drop;
   return request.socketId ?? resource.actionSockets?.[request.action] ?? resource.defaultSocketId;
 }
 
@@ -1578,7 +1648,9 @@ function hasExternalReservationDenialFor(
 ): boolean {
   const keys = new Set([resourceId, interactionResourceReservationKey(resourceId)]);
   if (socketId !== undefined) keys.add(interactionSocketReservationKey(request.actorId, socketId));
-  return request.reservationGrants.some((grant) => grant.granted === false && keys.has(grant.key));
+  return request.reservationGrants.some(
+    (grant) => grant.granted === false && grant.requesterId === request.actorId && keys.has(grant.key)
+  );
 }
 
 function hasExternalReservationDenial(
@@ -1587,7 +1659,70 @@ function hasExternalReservationDenial(
 ): boolean {
   const keys = new Set([machine.resourceId, interactionResourceReservationKey(machine.resourceId)]);
   if (machine.socketId !== undefined) keys.add(interactionSocketReservationKey(machine.actorId, machine.socketId));
-  return grants.some((grant) => grant.granted === false && keys.has(grant.key));
+  return grants.some(
+    (grant) => grant.granted === false && grant.requesterId === machine.actorId && keys.has(grant.key)
+  );
+}
+
+function sanitizeReservationGrants(
+  grants: readonly WorldCoordinatorReservationGrant[] | undefined,
+  issues: InteractionIssue[],
+  tick: number,
+  actorId: CharacterActorId,
+  resourceId: InteractionResourceId | undefined,
+  commandId: string | undefined
+): WorldCoordinatorReservationGrant[] {
+  if (grants === undefined) return [];
+  if (!isReadonlyArray(grants)) {
+    issues.push(
+      createIssue(
+        "input-rejected",
+        actorId,
+        resourceId,
+        commandId,
+        "reservationGrants",
+        "type",
+        "interaction reservationGrants must be an array",
+        tick
+      )
+    );
+    return [];
+  }
+  const sanitized: WorldCoordinatorReservationGrant[] = [];
+  for (let index = 0; index < grants.length; index += 1) {
+    const grant = grants[index] ?? null;
+    if (
+      !isRecord(grant) ||
+      !isNonEmptyString(grant.key) ||
+      !isWorldReservationKind(grant.kind) ||
+      typeof grant.granted !== "boolean" ||
+      !isNonEmptyString(grant.holderId) ||
+      !isNonEmptyString(grant.requesterId)
+    ) {
+      issues.push(
+        createIssue(
+          "input-rejected",
+          actorId,
+          resourceId,
+          commandId,
+          `reservationGrants[${index}]`,
+          "type",
+          "interaction reservation grant is invalid",
+          tick
+        )
+      );
+      continue;
+    }
+    sanitized.push({
+      key: grant.key,
+      kind: grant.kind,
+      granted: grant.granted,
+      holderId: grant.holderId,
+      requesterId: grant.requesterId,
+      ...(typeof grant.reason === "string" ? { reason: grant.reason } : {})
+    });
+  }
+  return sanitized;
 }
 
 function terminalStartResult(
@@ -1831,7 +1966,7 @@ function reachForPhase(
 ): InteractionReachOutput[] {
   if (phase !== "reach" && phase !== "contact" && phase !== "transfer" && phase !== "use" && phase !== "seated")
     return [];
-  const anchor = anchorFor(resource, machine.action === "sit" ? "seat" : "contact");
+  const anchor = reachAnchorForPhase(resource, machine, phase);
   return [
     {
       actorId: machine.actorId,
@@ -1849,7 +1984,7 @@ function reachForPhase(
       window: {
         active: phase === "reach" || phase === "contact",
         openedByPhase: "reach",
-        closedByPhase: "contact",
+        closedByPhase: machine.action === "sit" ? "seated" : "contact",
         normalizedTime
       }
     }
@@ -1858,6 +1993,16 @@ function reachForPhase(
 
 function isLoopHintPhase(phase: ActiveInteractionPhase): boolean {
   return phase === "carry" || phase === "equipped" || phase === "seated" || phase === "use";
+}
+
+function reachAnchorForPhase(
+  resource: InteractableResourceDefinition,
+  machine: InteractionMachineRuntime,
+  phase: ActiveInteractionPhase
+): InteractionAnchorDefinition | undefined {
+  if (machine.action === "sit") return anchorFor(resource, "seat");
+  if (phase === "use") return anchorFor(resource, "use") ?? anchorFor(resource, "contact");
+  return anchorFor(resource, "contact");
 }
 
 function cloneSocketDefinition(socket: CharacterSocketDefinition): CharacterSocketDefinition {
@@ -2160,18 +2305,57 @@ function validateSnapshotLocks(
   resources: ReadonlyMap<InteractionResourceId, MutableResourceState>,
   actors: ReadonlyMap<CharacterActorId, ActorRuntime>
 ): void {
-  const owners = new Map<string, string>();
+  const seatedActors = new Map<CharacterActorId, InteractionResourceId>();
+  const socketOwners = new Map<string, InteractionResourceId>();
+
+  for (const actor of actors.values()) {
+    const machine = actor.active;
+    if (machine === undefined) continue;
+    const state = resources.get(machine.resourceId);
+    if (
+      state?.reservation?.actorId !== machine.actorId ||
+      state.reservation.commandId !== machine.commandId ||
+      state.reservation.action !== machine.action
+    ) {
+      throw new Error("interaction snapshot active actor has no matching resource reservation");
+    }
+  }
+
   for (const state of resources.values()) {
     if (state.reservation !== undefined) {
       const actor = actors.get(state.reservation.actorId);
-      if (actor?.active?.resourceId !== state.id || actor.active.commandId !== state.reservation.commandId)
+      if (
+        actor?.active?.resourceId !== state.id ||
+        actor.active.commandId !== state.reservation.commandId ||
+        actor.active.action !== state.reservation.action
+      ) {
         throw new Error("interaction snapshot reservation has no matching active actor");
+      }
+    }
+    if (state.use !== undefined) {
+      const actor = actors.get(state.use.actorId);
+      if (
+        actor?.active?.resourceId !== state.id ||
+        actor.active.commandId !== state.use.commandId ||
+        actor.active.action !== "use"
+      ) {
+        throw new Error("interaction snapshot use lock has no matching active use actor");
+      }
     }
     if (state.owner !== undefined) {
-      const previous = owners.get(state.id);
-      if (previous !== undefined && previous !== state.owner.actorId)
-        throw new Error("interaction snapshot resource has multiple owners");
-      owners.set(state.id, state.owner.actorId);
+      if (state.owner.mode === "seated") {
+        const seatedResource = seatedActors.get(state.owner.actorId);
+        if (seatedResource !== undefined && seatedResource !== state.id)
+          throw new Error("interaction snapshot actor is seated on multiple resources");
+        seatedActors.set(state.owner.actorId, state.id);
+      }
+      if (state.owner.socketId !== undefined) {
+        const socketKey = `${state.owner.actorId}:${state.owner.socketId}`;
+        const socketResource = socketOwners.get(socketKey);
+        if (socketResource !== undefined && socketResource !== state.id)
+          throw new Error("interaction snapshot actor socket owns multiple resources");
+        socketOwners.set(socketKey, state.id);
+      }
     }
   }
 }
@@ -2364,6 +2548,10 @@ function isAnchorKind(value: unknown): value is InteractionAnchorKind {
 
 function isOwnerMode(value: unknown): value is InteractionOwnerMode {
   return value === "held" || value === "carried" || value === "equipped" || value === "seated";
+}
+
+function isWorldReservationKind(value: unknown): value is WorldCoordinatorReservationGrant["kind"] {
+  return value === "destination" || value === "resource" || value === "path-blocker" || value === "custom";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

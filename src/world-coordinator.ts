@@ -203,7 +203,9 @@ export class CharacterWorldCoordinator {
     if (
       !config.controller ||
       typeof config.controller.update !== "function" ||
-      typeof config.controller.snapshot !== "function"
+      typeof config.controller.snapshot !== "function" ||
+      typeof config.controller.restore !== "function" ||
+      !isRecord(config.controller.config)
     )
       throw new Error("world coordinator actor controller must be a CharacterController-like instance");
     if (config.pathFollower !== undefined && !(config.pathFollower instanceof CharacterPathFollower))
@@ -259,11 +261,17 @@ export class CharacterWorldCoordinator {
     if (!isRecord(snapshot)) throw new Error("world coordinator snapshot must be an object");
     if (snapshot.schemaVersion !== WORLD_COORDINATOR_SCHEMA_VERSION)
       throw new Error("unsupported world coordinator snapshot schemaVersion");
-    if (!Number.isInteger(snapshot.tick) || snapshot.tick < 0)
+    if (!Number.isSafeInteger(snapshot.tick) || snapshot.tick < 0)
       throw new Error("world coordinator snapshot tick must be a non-negative integer");
     if (!isReadonlyArray(snapshot.actors)) throw new Error("world coordinator snapshot actors must be an array");
     const expectedIds = this.actorIds();
-    const actorSnapshots = snapshot.actors;
+    const actorSnapshots: WorldCoordinatorActorSnapshot[] = [];
+    for (let index = 0; index < snapshot.actors.length; index += 1) {
+      const actorSnapshot = snapshot.actors[index];
+      if (!isRecord(actorSnapshot) || !isNonEmptyString(actorSnapshot.id))
+        throw new Error(`world coordinator snapshot actors[${index}].id must be a non-empty string`);
+      actorSnapshots.push(actorSnapshot);
+    }
     const snapshotIds = actorSnapshots.map((actorSnapshot) => actorSnapshot.id).sort(compareActorId);
     if (expectedIds.length !== snapshotIds.length || expectedIds.some((id, index) => id !== snapshotIds[index]))
       throw new Error("world coordinator snapshot actors must match registered actors");
@@ -284,8 +292,26 @@ export class CharacterWorldCoordinator {
         throw new Error("world coordinator snapshot actor randomState must be uint32");
       if (actor.pathFollower === undefined && actorSnapshot.pathFollower !== undefined)
         throw new Error(`world coordinator actor ${actor.id} has no path follower to restore`);
+      if (actor.pathFollower !== undefined && actorSnapshot.pathFollower === undefined)
+        throw new Error(`world coordinator actor ${actor.id} snapshot is missing path follower state`);
       if (actor.rootMotionReconciler === undefined && actorSnapshot.rootMotion !== undefined)
         throw new Error(`world coordinator actor ${actor.id} has no root motion reconciler to restore`);
+      if (actor.rootMotionReconciler !== undefined && actorSnapshot.rootMotion === undefined)
+        throw new Error(`world coordinator actor ${actor.id} snapshot is missing root motion state`);
+    }
+    const previous = this.snapshot();
+    try {
+      this.applyActorSnapshots(actorSnapshots, snapshot.tick);
+    } catch (error) {
+      this.applyActorSnapshots(previous.actors, previous.tick);
+      throw error;
+    }
+  }
+
+  private applyActorSnapshots(actorSnapshots: readonly WorldCoordinatorActorSnapshot[], tick: number): void {
+    for (const actorSnapshot of actorSnapshots) {
+      const actor = this.actors.get(actorSnapshot.id);
+      if (!actor) throw new Error(`world coordinator snapshot actor ${actorSnapshot.id} is not registered`);
       actor.priority = actorSnapshot.priority;
       actor.radius = actorSnapshot.radius;
       actor.randomState = actorSnapshot.randomState >>> 0;
@@ -293,7 +319,7 @@ export class CharacterWorldCoordinator {
       if (actorSnapshot.pathFollower !== undefined) actor.pathFollower?.restore(actorSnapshot.pathFollower);
       if (actorSnapshot.rootMotion !== undefined) actor.rootMotionReconciler?.restore(actorSnapshot.rootMotion);
     }
-    this.tick = snapshot.tick;
+    this.tick = tick;
   }
 
   update(
@@ -309,7 +335,7 @@ export class CharacterWorldCoordinator {
     const orderedActors = this.sortedActors();
     const reservations = collectReservations(orderedActors, requestByActor, issues, tick);
     const resolution = resolveReservations(reservations, this.actors);
-    const neighbors = createNeighborMap(orderedActors);
+    const neighborSnapshots = createNeighborSnapshotMap(orderedActors);
     const actorResults: WorldCoordinatorActorResult[] = [];
 
     for (let order = 0; order < orderedActors.length; order += 1) {
@@ -339,7 +365,7 @@ export class CharacterWorldCoordinator {
           actorRadius: actor.radius,
           priority: actor.priority,
           ...(options.localAvoidance !== undefined ? { localAvoidance: options.localAvoidance } : {}),
-          neighbors: neighbors.get(actor.id) ?? [],
+          neighbors: neighborSnapshots.get(actor.id) ?? [],
           ...(options.obstacles !== undefined ? { obstacles: options.obstacles } : {})
         });
         input = pathOutput.input;
@@ -552,10 +578,53 @@ function collectReservations(
     const candidates: WorldCoordinatorReservationRequest[] = [];
     if (request.path?.destination !== undefined)
       candidates.push(...navigationDestinationReservations(request.path.destination));
-    if (request.reservations !== undefined) candidates.push(...request.reservations);
+    if (request.reservations !== undefined) {
+      if (isReadonlyArray(request.reservations)) {
+        candidates.push(...request.reservations);
+      } else {
+        issues.push(
+          createIssue(
+            "input-rejected",
+            actor.id,
+            "reservations",
+            "type",
+            "world coordinator reservations must be an array",
+            tick
+          )
+        );
+      }
+    }
     if (request.pathBlockers !== undefined) {
-      for (const blocker of request.pathBlockers)
-        candidates.push({ key: blocker, kind: "path-blocker", exclusive: true });
+      if (!isReadonlyArray(request.pathBlockers)) {
+        issues.push(
+          createIssue(
+            "input-rejected",
+            actor.id,
+            "pathBlockers",
+            "type",
+            "world coordinator pathBlockers must be an array",
+            tick
+          )
+        );
+      } else {
+        for (let index = 0; index < request.pathBlockers.length; index += 1) {
+          const blocker = request.pathBlockers[index];
+          if (!isNonEmptyString(blocker)) {
+            issues.push(
+              createIssue(
+                "input-rejected",
+                actor.id,
+                `pathBlockers[${index}]`,
+                "id",
+                "path blocker key must be a string",
+                tick
+              )
+            );
+            continue;
+          }
+          candidates.push({ key: blocker, kind: "path-blocker", exclusive: true });
+        }
+      }
     }
     for (let order = 0; order < candidates.length; order += 1) {
       const candidate = candidates[order];
@@ -571,14 +640,27 @@ function collectReservations(
         );
         continue;
       }
+      const reason = candidate.reason;
+      if (reason !== undefined && typeof reason !== "string") {
+        issues.push(
+          createIssue(
+            "input-rejected",
+            actor.id,
+            "reservations.reason",
+            "type",
+            "reservation reason must be a string",
+            tick
+          )
+        );
+      }
       reservations.push({
         actorId: actor.id,
         key: candidate.key,
         kind: candidate.kind,
-        exclusive: candidate.exclusive ?? true,
+        exclusive: candidate.exclusive === false ? false : true,
         priority: optionalFinite(candidate.priority, 0),
         order,
-        ...(candidate.reason !== undefined ? { reason: candidate.reason } : {})
+        ...(typeof reason === "string" ? { reason } : {})
       });
     }
   }
@@ -606,14 +688,20 @@ function resolveReservations(
     reservationsForKey.sort((a, b) => compareReservation(a, b, actors));
     const winner = reservationsForKey[0]!;
     pushGrant(grantsByActor, winner, winner.actorId);
+    const deniedActors = new Set<NavigationActorId>();
     for (let index = 1; index < reservationsForKey.length; index += 1) {
-      pushDenial(denialsByActor, reservationsForKey[index]!, winner.actorId);
+      const denied = reservationsForKey[index]!;
+      if (denied.actorId === winner.actorId || deniedActors.has(denied.actorId)) continue;
+      deniedActors.add(denied.actorId);
+      pushDenial(denialsByActor, denied, winner.actorId);
     }
   }
   return { grantsByActor, denialsByActor };
 }
 
-function createNeighborMap(actors: readonly ActorRuntime[]): Map<NavigationActorId, NavigationLocalAvoidanceAgent[]> {
+function createNeighborSnapshotMap(
+  actors: readonly ActorRuntime[]
+): Map<NavigationActorId, NavigationLocalAvoidanceAgent[]> {
   const snapshots = actors.map((actor) => ({ actor, snapshot: actor.controller.snapshot() }));
   const result = new Map<NavigationActorId, NavigationLocalAvoidanceAgent[]>();
   for (const entry of snapshots) {

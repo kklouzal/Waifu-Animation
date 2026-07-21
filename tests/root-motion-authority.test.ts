@@ -18,6 +18,7 @@ export function runRootMotionAuthorityTests(): void {
   runCollisionReconciliationTests();
   runAdapterFailureTests();
   runBoundedInvalidInputTests();
+  runLargeYawDeltaClampTests();
   runOwnershipAndSnapshotTests();
   runSnapshotReplayTests();
   runWorldCoordinatorRootMotionIntegrationTests();
@@ -99,6 +100,38 @@ function runCarrierResolutionTests(): void {
   });
   assert.equal(bone.layer?.clipId, "turn");
   assert.ok(vectorNearlyEqual(bone.delta.translation, [0, 0, 3], 1e-9));
+
+  const invalidCarrierIssues: ReturnType<RootMotionReconciler["reconcile"]>["issues"] = [];
+  const invalidCarrierRuntime: RuntimeUpdateResult = {
+    rootMotionDelta: makeDelta([0, 0, 0]),
+    rootMotionLayers: [makeLayer("invalid", "walk", 1, 1, [0, 0, 1], -1, "root")]
+  };
+  const invalidCarrier = resolveRootMotionCarrier(
+    invalidCarrierRuntime,
+    undefined,
+    { carrierBindings: [{ select: "bone", joint: "root" }] },
+    invalidCarrierIssues
+  );
+  assert.equal(invalidCarrier.selected, false);
+  assert.ok(invalidCarrierIssues.some((issue) => issue.field === "rootMotionLayers[0].carrier"));
+
+  const invalidPolicy = new RootMotionReconciler().reconcile({
+    actor: { actorId: "invalid-policy", position: [0, 0, 0], yaw: 0 },
+    animationDelta: makeDelta([1, 0, 0]),
+    policy: {
+      carrierBindings: [{ select: "bogus" as "runtime-blend" }],
+      mode: "hybrid",
+      animationTranslationWeight: Number.NaN,
+      maxRequestedYawRadians: -1
+    },
+    ownership: { token: "invalid-policy" }
+  });
+  assert.deepEqual(invalidPolicy.policy.carrierBindings, []);
+  assert.equal(invalidPolicy.policy.animationTranslationWeight, undefined);
+  assert.equal(invalidPolicy.policy.maxRequestedYawRadians, undefined);
+  assert.ok(invalidPolicy.issues.some((issue) => issue.field === "carrierBindings[0].select"));
+  assert.ok(invalidPolicy.issues.some((issue) => issue.field === "policy.animationTranslationWeight"));
+  assert.ok(invalidPolicy.issues.some((issue) => issue.field === "policy.maxRequestedYawRadians"));
 }
 
 function runCollisionReconciliationTests(): void {
@@ -123,6 +156,18 @@ function runCollisionReconciliationTests(): void {
   assert.ok(nearlyEqual(partial.consumed.yawDelta, Math.PI / 4, 1e-9));
   assert.ok(nearlyEqual(partial.residual.yawDelta, Math.PI / 4, 1e-9));
   assert.ok(vectorNearlyEqual(partial.applied.position, [0, 0, 2], 1e-9));
+
+  const blocked = new RootMotionReconciler().reconcile({
+    actor,
+    animationDelta: makeDelta([0, 0, 5], Math.PI / 2),
+    policy: { mode: "animation-driven", animationDeltaSpace: "world" },
+    ownership: { token: "collision-blocked" },
+    world: {
+      resolveRootMotion: () => ({ blocked: true, position: [0, 0, 5], yawDelta: Math.PI / 2 })
+    }
+  });
+  assert.ok(vectorNearlyEqual(blocked.consumed.displacement, [0, 0, 0], 1e-9));
+  assert.ok(nearlyEqual(blocked.consumed.yawDelta, 0, 1e-9));
 }
 
 function runAdapterFailureTests(): void {
@@ -171,6 +216,43 @@ function runBoundedInvalidInputTests(): void {
   assert.ok(vectorNearlyEqual(invalid.requested.displacement, [0, 0, 0], 1e-9));
 }
 
+function runLargeYawDeltaClampTests(): void {
+  const actor = { actorId: "large-yaw", position: [0, 0, 0] as Vec3, yaw: 0 };
+  const physicsDriven = new RootMotionReconciler({ maxRequestedYawRadians: Math.PI * 4 }).reconcile({
+    actor,
+    physicsYawDelta: Math.PI * 3,
+    policy: { mode: "physics-driven" },
+    ownership: { token: "large-yaw-physics" }
+  });
+  assert.ok(
+    nearlyEqual(physicsDriven.requested.yawDelta, Math.PI * 3, 1e-9),
+    "physics yaw deltas should clamp by magnitude before final angle wrapping"
+  );
+  assert.ok(
+    nearlyEqual(physicsDriven.applied.yaw, -Math.PI, 1e-9),
+    "final applied yaw remains wrapped for actor state handoff"
+  );
+
+  const bounded = new RootMotionReconciler({ maxRequestedYawRadians: Math.PI * 2 }).reconcile({
+    actor,
+    physicsYawDelta: Math.PI * 3,
+    policy: { mode: "physics-driven" },
+    ownership: { token: "large-yaw-bounded" }
+  });
+  assert.ok(nearlyEqual(bounded.requested.yawDelta, Math.PI * 2, 1e-9));
+  assert.ok(bounded.issues.some((issue) => issue.code === "maxRequestedYawRadians"));
+
+  const residual = new RootMotionReconciler({ maxRequestedYawRadians: Math.PI * 4 }).reconcile({
+    actor,
+    physicsYawDelta: Math.PI * 3,
+    policy: { mode: "physics-driven" },
+    ownership: { token: "large-yaw-residual" },
+    world: { resolveRootMotion: () => ({ yawDelta: Math.PI }) }
+  });
+  assert.ok(nearlyEqual(residual.consumed.yawDelta, Math.PI, 1e-9));
+  assert.ok(nearlyEqual(residual.residual.yawDelta, Math.PI * 2, 1e-9));
+}
+
 function runOwnershipAndSnapshotTests(): void {
   const reconciler = new RootMotionReconciler();
   const actor = { actorId: "owner", position: [0, 0, 0] as Vec3, yaw: 0 };
@@ -212,6 +294,20 @@ function runOwnershipAndSnapshotTests(): void {
   });
   assert.ok(doubleApplyRisk.issues.some((issue) => issue.type === "ownership"));
   assert.ok(vectorNearlyEqual(doubleApplyRisk.requested.displacement, [0, 0, 0], 1e-9));
+
+  const translationNotWorldOwned = new RootMotionReconciler().reconcile({
+    actor,
+    animationDelta: makeDelta([1, 0, 0]),
+    ownership: {
+      token: "translation-not-world-owned",
+      translationOwner: "none",
+      yawOwner: "external",
+      skeletonPoseContainsRootMotion: true,
+      doubleApplyPolicy: "reject"
+    }
+  });
+  assert.ok(!translationNotWorldOwned.issues.some((issue) => issue.type === "ownership"));
+  assert.ok(vectorNearlyEqual(translationNotWorldOwned.consumed.displacement, [1, 0, 0], 1e-9));
 }
 
 function runSnapshotReplayTests(): void {
