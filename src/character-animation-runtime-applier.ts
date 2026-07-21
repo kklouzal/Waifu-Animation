@@ -1225,6 +1225,11 @@ function sanitizeActionRecord(
     rejectRecord("actions.command.kind", "enum", "action", sourceIndex, issues, maxIssues);
     return null;
   }
+  const itemId = readOptionalCommandId("itemId", rawRecord.command, sourceIndex, issues, maxIssues);
+  const socketId = readOptionalCommandId("socketId", rawRecord.command, sourceIndex, issues, maxIssues);
+  const interactionId = readOptionalCommandId("interactionId", rawRecord.command, sourceIndex, issues, maxIssues);
+  const targetActorId = readOptionalCommandId("targetActorId", rawRecord.command, sourceIndex, issues, maxIssues);
+  if (itemId === null || socketId === null || interactionId === null || targetActorId === null) return null;
   return {
     ...endpoint,
     type: "action",
@@ -1233,10 +1238,10 @@ function sanitizeActionRecord(
     command: {
       commandId,
       kind: kind as CharacterAnimationResolvedAction["command"]["kind"],
-      ...optionalCommandId("itemId", rawRecord.command),
-      ...optionalCommandId("socketId", rawRecord.command),
-      ...optionalCommandId("interactionId", rawRecord.command),
-      ...optionalCommandId("targetActorId", rawRecord.command)
+      ...(itemId !== undefined ? { itemId } : {}),
+      ...(socketId !== undefined ? { socketId } : {}),
+      ...(interactionId !== undefined ? { interactionId } : {}),
+      ...(targetActorId !== undefined ? { targetActorId } : {})
     },
     sourceIndex
   };
@@ -1772,13 +1777,19 @@ function readFiniteRange(
   return null;
 }
 
-function optionalCommandId(
+function readOptionalCommandId(
   key: "itemId" | "socketId" | "interactionId" | "targetActorId",
-  command: Record<string, unknown>
-): Record<string, string> {
+  command: Record<string, unknown>,
+  sourceIndex: number,
+  issues: CharacterAnimationRuntimeApplierIssue[],
+  maxIssues: number
+): string | undefined | null {
   const value = command[key];
-  const id = value === undefined ? undefined : readBoundedId(value);
-  return id === undefined || id === null ? {} : { [key]: id };
+  if (value === undefined) return undefined;
+  const id = readBoundedId(value);
+  if (id) return id;
+  rejectRecord(`actions.command.${key}`, "id", "action", sourceIndex, issues, maxIssues);
+  return null;
 }
 
 function rejectRecord(

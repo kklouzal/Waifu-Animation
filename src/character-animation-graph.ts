@@ -113,6 +113,7 @@ export type CharacterAnimationGraphSnapshot = {
   landingHoldSeconds: number;
   playbackPhase: number;
   lastActionCommandId?: string;
+  seenActionCommandIds?: string[];
 };
 
 export type CharacterAnimationPlaybackRequest = {
@@ -251,6 +252,9 @@ const MAX_REQUEST_ID_LENGTH = 160;
 const MAX_DELTA_SECONDS = 5;
 const MAX_EVENT_SCAN = 512;
 const MAX_ACTIONS_PER_UPDATE = 128;
+const MAX_SEEN_ACTION_COMMAND_IDS = 256;
+const INITIAL_GRAPH_GAIT_ID: CharacterGaitId = "walk";
+const FALLBACK_GRAPH_GAIT_ID: CharacterGaitId = "g";
 
 const VALID_LOCOMOTION_PHASES = new Set<CharacterLocomotionPhase>(["grounded", "rising", "falling", "landing"]);
 const VALID_POSTURE_PHASES = new Set<CharacterPosturePhase>([
@@ -269,6 +273,7 @@ const VALID_ACTION_KINDS = new Set<CharacterActionKind>([
   "use",
   "custom"
 ]);
+const MIN_ACTION_KIND_ID_LENGTH = Math.min(...Array.from(VALID_ACTION_KINDS, (kind) => kind.length));
 
 export class CharacterAnimationGraph {
   readonly config: CharacterAnimationGraphResolvedConfig;
@@ -281,12 +286,13 @@ export class CharacterAnimationGraph {
       tick: 0,
       locomotionActive: false,
       locomotionRequestId: this.config.locomotion.idleRequestId,
-      gaitId: "walk",
+      gaitId: initialGraphGaitIdFor(this.config),
       postureRequestId: this.config.posture.standingRequestId,
       airborneRequestId: null,
       airbornePhaseSeconds: 0,
       landingHoldSeconds: 0,
-      playbackPhase: 0
+      playbackPhase: 0,
+      seenActionCommandIds: []
     };
   }
 
@@ -360,6 +366,7 @@ export class CharacterAnimationGraph {
     this.state.playbackPhase = restored.playbackPhase;
     if (restored.lastActionCommandId !== undefined) this.state.lastActionCommandId = restored.lastActionCommandId;
     else delete this.state.lastActionCommandId;
+    this.state.seenActionCommandIds = restored.seenActionCommandIds ? [...restored.seenActionCommandIds] : [];
   }
 
   private forwardActionEvents(
@@ -373,8 +380,18 @@ export class CharacterAnimationGraph {
       if (!event || event.type !== "action-command") continue;
       const controllerTick = sanitizeControllerTick(event.tick, "events.action-command.tick", output.issues);
       const command = sanitizeActionCommand(event.command, controllerTick, output.issues);
-      if (!command || command.commandId === this.state.lastActionCommandId) continue;
-      this.state.lastActionCommandId = command.commandId;
+      if (!command || hasSeenActionCommandId(this.state, command.commandId)) continue;
+      const requestId = `${this.config.action.requestIdPrefix}${command.kind}`;
+      if (!isBoundedNonEmptyString(requestId)) {
+        output.issues.push({
+          type: "input-rejected",
+          field: "events.action-command.requestId",
+          code: "id",
+          message: "action requestIdPrefix and action kind must compose a bounded request id",
+          ...controllerTickProperty(controllerTick)
+        });
+        continue;
+      }
       if (emitted >= this.config.action.maxActionRequestsPerUpdate) {
         output.issues.push({
           type: "bounded",
@@ -385,11 +402,12 @@ export class CharacterAnimationGraph {
         });
         continue;
       }
+      rememberActionCommandId(this.state, command.commandId);
       emitted += 1;
       output.actions.push({
         type: "action",
         layer: "action",
-        requestId: `${this.config.action.requestIdPrefix}${command.kind}`,
+        requestId,
         command,
         priority: this.config.action.priority,
         fadeSeconds: this.config.action.fadeSeconds,
@@ -636,7 +654,8 @@ function resolveLocomotionConfig(
     gaitRequestIdPrefix: readRequestIdPrefix(
       config?.gaitRequestIdPrefix,
       DEFAULT_GRAPH_CONFIG.locomotion.gaitRequestIdPrefix,
-      "locomotion.gaitRequestIdPrefix"
+      "locomotion.gaitRequestIdPrefix",
+      MAX_REQUEST_ID_LENGTH - 1
     ),
     startSpeedRatio,
     stopSpeedRatio,
@@ -797,7 +816,8 @@ function resolveActionConfig(
     requestIdPrefix: readRequestIdPrefix(
       config?.requestIdPrefix,
       DEFAULT_GRAPH_CONFIG.action.requestIdPrefix,
-      "action.requestIdPrefix"
+      "action.requestIdPrefix",
+      MAX_REQUEST_ID_LENGTH - MIN_ACTION_KIND_ID_LENGTH
     ),
     fadeSeconds: readConfigFiniteInRange(
       config?.fadeSeconds,
@@ -1045,6 +1065,12 @@ function gaitRequestIdFor(config: CharacterAnimationGraphResolvedConfig, gaitId:
   return `${config.locomotion.gaitRequestIdPrefix}${gaitId}`;
 }
 
+function initialGraphGaitIdFor(config: CharacterAnimationGraphResolvedConfig): CharacterGaitId {
+  return isBoundedNonEmptyString(gaitRequestIdFor(config, INITIAL_GRAPH_GAIT_ID))
+    ? INITIAL_GRAPH_GAIT_ID
+    : FALLBACK_GRAPH_GAIT_ID;
+}
+
 function findTransitionTick(
   transitions: readonly CharacterAnimationTransition[],
   limit: number,
@@ -1233,6 +1259,18 @@ function rejectActionField(
   });
 }
 
+function hasSeenActionCommandId(snapshot: CharacterAnimationGraphSnapshot, commandId: string): boolean {
+  return snapshot.seenActionCommandIds?.includes(commandId) ?? snapshot.lastActionCommandId === commandId;
+}
+
+function rememberActionCommandId(snapshot: CharacterAnimationGraphSnapshot, commandId: string): void {
+  snapshot.lastActionCommandId = commandId;
+  const seen = snapshot.seenActionCommandIds ?? [];
+  if (!seen.includes(commandId)) seen.push(commandId);
+  while (seen.length > MAX_SEEN_ACTION_COMMAND_IDS) seen.shift();
+  snapshot.seenActionCommandIds = seen;
+}
+
 function reportTruncation(field: string, actual: number, limit: number, issues: CharacterAnimationGraphIssue[]): void {
   if (actual <= limit) return;
   issues.push({
@@ -1255,7 +1293,10 @@ function cloneGraphSnapshot(snapshot: CharacterAnimationGraphSnapshot): Characte
     airbornePhaseSeconds: snapshot.airbornePhaseSeconds,
     landingHoldSeconds: snapshot.landingHoldSeconds,
     playbackPhase: snapshot.playbackPhase,
-    ...(snapshot.lastActionCommandId !== undefined ? { lastActionCommandId: snapshot.lastActionCommandId } : {})
+    ...(snapshot.lastActionCommandId !== undefined ? { lastActionCommandId: snapshot.lastActionCommandId } : {}),
+    ...(snapshot.seenActionCommandIds && snapshot.seenActionCommandIds.length > 0
+      ? { seenActionCommandIds: [...snapshot.seenActionCommandIds] }
+      : {})
   };
 }
 
@@ -1271,12 +1312,13 @@ function validateGraphSnapshot(
     throw new Error("character animation graph snapshot tick is invalid");
   if (typeof snapshot.locomotionActive !== "boolean")
     throw new Error("character animation graph snapshot locomotionActive is invalid");
-  if (!isNonEmptyString(snapshot.locomotionRequestId))
+  if (!isBoundedNonEmptyString(snapshot.locomotionRequestId))
     throw new Error("character animation graph snapshot locomotionRequestId is invalid");
-  if (!isNonEmptyString(snapshot.gaitId)) throw new Error("character animation graph snapshot gaitId is invalid");
-  if (!isNonEmptyString(snapshot.postureRequestId))
+  if (!isBoundedNonEmptyString(snapshot.gaitId))
+    throw new Error("character animation graph snapshot gaitId is invalid");
+  if (!isBoundedNonEmptyString(snapshot.postureRequestId))
     throw new Error("character animation graph snapshot postureRequestId is invalid");
-  if (snapshot.airborneRequestId !== null && !isNonEmptyString(snapshot.airborneRequestId)) {
+  if (snapshot.airborneRequestId !== null && !isBoundedNonEmptyString(snapshot.airborneRequestId)) {
     throw new Error("character animation graph snapshot airborneRequestId is invalid");
   }
   if (!isKnownGraphRequest(snapshot, config))
@@ -1289,19 +1331,39 @@ function validateGraphSnapshot(
     "snapshot.landingHoldSeconds"
   );
   requiredFiniteInRange(snapshot.playbackPhase, 0, 1, "snapshot.playbackPhase");
-  if (snapshot.lastActionCommandId !== undefined && !isNonEmptyString(snapshot.lastActionCommandId)) {
+  if (snapshot.lastActionCommandId !== undefined && !isBoundedNonEmptyString(snapshot.lastActionCommandId)) {
     throw new Error("character animation graph snapshot lastActionCommandId is invalid");
   }
-  return cloneGraphSnapshot(snapshot);
+  if (snapshot.seenActionCommandIds !== undefined) {
+    if (
+      !Array.isArray(snapshot.seenActionCommandIds) ||
+      snapshot.seenActionCommandIds.length > MAX_SEEN_ACTION_COMMAND_IDS
+    ) {
+      throw new Error("character animation graph snapshot seenActionCommandIds are invalid");
+    }
+    const unique = new Set<string>();
+    for (const commandId of snapshot.seenActionCommandIds) {
+      if (!isBoundedNonEmptyString(commandId) || unique.has(commandId)) {
+        throw new Error("character animation graph snapshot seenActionCommandIds are invalid");
+      }
+      unique.add(commandId);
+    }
+  }
+  const cloned = cloneGraphSnapshot(snapshot);
+  if (!cloned.seenActionCommandIds && cloned.lastActionCommandId) {
+    cloned.seenActionCommandIds = [cloned.lastActionCommandId];
+  }
+  return cloned;
 }
 
 function isKnownGraphRequest(
   snapshot: CharacterAnimationGraphSnapshot,
   config: CharacterAnimationGraphResolvedConfig
 ): boolean {
+  const gaitRequestId = gaitRequestIdFor(config, snapshot.gaitId);
+  if (!isBoundedNonEmptyString(gaitRequestId)) return false;
   const locomotionKnown =
-    snapshot.locomotionRequestId === config.locomotion.idleRequestId ||
-    snapshot.locomotionRequestId.startsWith(config.locomotion.gaitRequestIdPrefix);
+    snapshot.locomotionRequestId === (snapshot.locomotionActive ? gaitRequestId : config.locomotion.idleRequestId);
   const postureKnown =
     snapshot.postureRequestId === config.posture.standingRequestId ||
     snapshot.postureRequestId === config.posture.crouchingRequestId;
@@ -1349,10 +1411,10 @@ function readRequestId(value: string | undefined, fallback: string, label: strin
   return requestId;
 }
 
-function readRequestIdPrefix(value: string | undefined, fallback: string, label: string): string {
+function readRequestIdPrefix(value: string | undefined, fallback: string, label: string, maxLength: number): string {
   const prefix = value ?? fallback;
-  if (typeof prefix !== "string" || prefix.length > MAX_REQUEST_ID_LENGTH) {
-    throw new Error(`character animation graph ${label} must be a bounded string`);
+  if (typeof prefix !== "string" || prefix.length > maxLength) {
+    throw new Error(`character animation graph ${label} must be a bounded string of length <= ${maxLength}`);
   }
   return prefix;
 }
@@ -1432,5 +1494,5 @@ function isBoundedNonEmptyString(value: unknown): value is string {
 }
 
 function isOptionalBoundedString(value: unknown): value is string | undefined {
-  return value === undefined || (typeof value === "string" && value.length <= MAX_REQUEST_ID_LENGTH);
+  return value === undefined || isBoundedNonEmptyString(value);
 }

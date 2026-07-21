@@ -402,6 +402,31 @@ function runMalformedHostileBoundedInputTests(): void {
     "runtime applier should reject resolved actions with unsupported public action kinds"
   );
   assert.ok(invalidActionKind.issues.some((issue) => issue.field === "actions.command.kind"));
+
+  const invalidActionOptionalId = applier.apply(
+    runtime,
+    {
+      schemaVersion: 1,
+      sequence: 9,
+      playback: [],
+      blends: [],
+      transitions: [],
+      actions: [
+        {
+          ...action("invalid-optional-1"),
+          command: { commandId: "invalid-optional-1", kind: "pickup", itemId: 42 as never }
+        }
+      ],
+      issues: []
+    },
+    { clips, masks }
+  );
+  assert.equal(
+    invalidActionOptionalId.applied.some((layer) => layer.source === "action"),
+    false,
+    "runtime applier should reject malformed optional action ids instead of silently dropping them"
+  );
+  assert.ok(invalidActionOptionalId.issues.some((issue) => issue.field === "actions.command.itemId"));
 }
 
 const testSkeleton = createSkeleton([

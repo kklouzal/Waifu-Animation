@@ -31,6 +31,16 @@ function runConfigAndIdleRequestTests(): void {
     () => resolveCharacterAnimationGraphConfig({ locomotion: { startSpeedRatio: 0.1, stopSpeedRatio: 0.2 } }),
     /stopSpeedRatio/
   );
+  assert.throws(
+    () => resolveCharacterAnimationGraphConfig({ locomotion: { gaitRequestIdPrefix: "g".repeat(160) } }),
+    /gaitRequestIdPrefix/,
+    "gait prefixes must leave room for at least one gait id character"
+  );
+  assert.throws(
+    () => resolveCharacterAnimationGraphConfig({ action: { requestIdPrefix: "a".repeat(158) } }),
+    /action.requestIdPrefix/,
+    "action prefixes must leave room for at least one supported action kind suffix"
+  );
 
   const graph = new CharacterAnimationGraph({ locomotion: { idleRequestId: "semantic:idle" } });
   const output = graph.update(makeAnimationState(), { deltaSeconds: 1 / 60 });
@@ -234,6 +244,42 @@ function runActionForwardingBoundsAndBufferReuseTests(): void {
   const repeated = graph.update(controllerResult.animation, { deltaSeconds: 0.1 });
   assert.equal(repeated.actions.length, 0, "graph should not refire an already forwarded action command id");
 
+  const longActionPrefix = new CharacterAnimationGraph({ action: { requestIdPrefix: "a".repeat(157) } });
+  const overlongAction = longActionPrefix.update(
+    makeAnimationState({
+      events: [{ type: "action-command", tick: 3, command: { commandId: "overlong", kind: "pickup" } }]
+    }),
+    { deltaSeconds: 0.1 }
+  );
+  assert.equal(overlongAction.actions.length, 0, "graph should not emit overlong composed action request ids");
+  assert.ok(overlongAction.issues.some((issue) => issue.field === "events.action-command.requestId"));
+  const shortAction = longActionPrefix.update(
+    makeAnimationState({
+      events: [{ type: "action-command", tick: 4, command: { commandId: "short", kind: "use" } }]
+    }),
+    { deltaSeconds: 0.1 }
+  );
+  assert.equal(shortAction.actions[0]?.requestId.length, 160, "bounded composed action request ids should still emit");
+
+  const multiActionGraph = new CharacterAnimationGraph({ action: { maxActionRequestsPerUpdate: 2 } });
+  const multiActionState = makeAnimationState({
+    events: [
+      { type: "action-command", tick: 5, command: { commandId: "multi-a", kind: "pickup" } },
+      { type: "action-command", tick: 6, command: { commandId: "multi-b", kind: "drop" } }
+    ]
+  });
+  assert.deepEqual(
+    multiActionGraph
+      .update(multiActionState, { deltaSeconds: 0.1 })
+      .actions.map((request) => request.command.commandId),
+    ["multi-a", "multi-b"]
+  );
+  assert.equal(
+    multiActionGraph.update(multiActionState, { deltaSeconds: 0.1 }).actions.length,
+    0,
+    "stale animation states should not refire any already forwarded action command ids"
+  );
+
   const bounded = new CharacterAnimationGraph({ action: { maxActionRequestsPerUpdate: 1 } });
   const outputBuffer = createCharacterAnimationGraphOutputBuffer();
   const first = bounded.update(
@@ -249,6 +295,18 @@ function runActionForwardingBoundsAndBufferReuseTests(): void {
   const playbackArray = first.playback;
   assert.equal(first.actions.length, 1);
   assert.ok(first.issues.some((issue) => issue.code === "max-actions"));
+
+  const retriedDropped = bounded.update(
+    makeAnimationState({
+      events: [{ type: "action-command", tick: 2, command: { commandId: "b", kind: "drop" } }]
+    }),
+    { output: outputBuffer, deltaSeconds: 0.1 }
+  );
+  assert.deepEqual(
+    retriedDropped.actions.map((request) => request.command.commandId),
+    ["b"],
+    "action commands discarded by maxActionRequestsPerUpdate should not be marked as forwarded"
+  );
 
   const second = bounded.update(makeAnimationState(), { output: outputBuffer, deltaSeconds: 0 });
   assert.equal(
@@ -266,6 +324,26 @@ function runSnapshotRestoreAndFiniteHardeningTests(): void {
   const restored = new CharacterAnimationGraph({ maxDeltaSeconds: 0.05, maxControllerEventsPerUpdate: 1 });
   restored.restore(snapshot);
   assert.throws(() => restored.restore({ ...snapshot, playbackPhase: Number.NaN }), /playbackPhase/);
+  assert.throws(
+    () =>
+      restored.restore({
+        ...snapshot,
+        locomotionActive: true,
+        locomotionRequestId: "locomotion:idle"
+      }),
+    /request ids/,
+    "snapshot restore should reject locomotionActive/requestId mismatches"
+  );
+  assert.throws(
+    () =>
+      restored.restore({
+        ...snapshot,
+        locomotionRequestId: `locomotion:gait:${"x".repeat(200)}`,
+        gaitId: "x".repeat(200)
+      }),
+    /gaitId|RequestId|requestId|request ids/,
+    "snapshot restore should reject request ids that cannot be emitted by the graph contract"
+  );
 
   const next = makeAnimationState({
     gaitId: "run",
