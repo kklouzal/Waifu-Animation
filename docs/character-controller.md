@@ -31,12 +31,33 @@ Public API exported from `src/index.ts`:
 - `createCharacterAnimationRuntimeApplier`
 - `resolveCharacterAnimationRuntimeApplierConfig`
 - `createCharacterAnimationRuntimeApplyResultBuffer`
+- `CharacterPathFollower`
+- `resolvePathFollowerConfig`
+- `cloneNavigationPath`
+- `CharacterWorldCoordinator`
+- `resolveWorldCoordinatorConfig`
+- `navigationDestinationReservations`
+- `RootMotionReconciler`
+- `resolveRootMotionCarrier`
+- `createRootMotionActorStateFromControllerSnapshot`
+- `CharacterSocketRegistry`
+- `InteractionResourceRegistry`
+- `CharacterInteractionCoordinator`
+- `resolveInteractionCoordinatorConfig`
+- `createInteractionReservationRequests`
+- `interactionRequestFromControllerAction`
+- `interactionResourceReservationKey`
+- `interactionSocketReservationKey`
 - controller config/input/snapshot/world-adapter/event/animation-state types
 - animation graph config/snapshot/request/output/issue types
 - animation binding registry/config/resolved-output/issue types
 - runtime applier config/snapshot/apply-result/issue types
-- item/socket/interaction/actor identifier aliases for future interaction/equipment contracts
-- `CHARACTER_CONTROLLER_COORDINATE_SYSTEM` and `CHARACTER_CONTROLLER_SCHEMA_VERSION`
+- navigation destination/path/waypoint/corridor/topology/traversal/local-avoidance types
+- path follower config/snapshot/output/issue types
+- world coordinator config/request/reservation/snapshot/result/issue types
+- root-motion authority policy/carrier/ownership/world-adapter/snapshot/result types
+- socket/resource/anchor/capability/ownership/reach/attachment/interaction coordinator types
+- `CHARACTER_CONTROLLER_COORDINATE_SYSTEM`, `CHARACTER_CONTROLLER_SCHEMA_VERSION`, and `INTERACTION_COORDINATOR_SCHEMA_VERSION`
 
 The foundation supports:
 
@@ -219,14 +240,145 @@ Adapter exceptions or non-finite adapter data produce `world-adapter-failed` eve
 
 Returned `surfaceId` values must be non-empty strings. Resolved controller config/gaits and `CHARACTER_CONTROLLER_COORDINATE_SYSTEM` constants are frozen at runtime so callers cannot mutate public constants/config and change deterministic behavior after construction.
 
+## Navigation and multi-actor coordination
+
+`src/navigation.ts` and `src/world-coordinator.ts` add reusable contracts above the controller. They deliberately stay renderer/physics/world agnostic:
+
+- `NavigationDestination`, `NavigationWaypoint`, `NavigationPath`, and `NavigationPathCorridor` describe caller-owned destinations, waypoints, path corridors, and optional area/portal metadata. They are handoff data, not a baked navmesh.
+- `NavigationTopologyAdapter` defines optional `sampleNearest` and `planPath` boundaries for consumers that own topology/navmesh data.
+- `NavigationTraversalLinkDescriptor` describes off-mesh/custom traversal links so consumers can identify jumps/drops/climbs/scripted links without this package executing them.
+- `NavigationLocalAvoidanceAdapter` is an input/result boundary. A consumer can provide a deterministic avoidance implementation that returns a replacement planar direction, speed scale, blocked flag, or repath request.
+- `CharacterPathFollower` consumes a `NavigationPath` plus a `CharacterControllerSnapshot` and returns `CharacterControllerInput`. It validates finite controller/path/avoidance values, walks waypoints in order, slows into the final destination, holds stable arrival with hysteresis, turns in place for final facing, and reports explicit `blocked`, `needs-repath`, and `invalid` statuses. Snapshots include path key, waypoint index, progress timers, and last known position for replay.
+- `CharacterWorldCoordinator` coordinates existing `CharacterController` instances in stable actor-id order. Registered actors may also have `CharacterPathFollower` instances. The coordinator resolves exclusive destination/resource/path-blocker reservations by reservation priority, actor priority, then actor id, feeds granted actors through their path followers/controllers, holds denied actors for that batch, exposes deterministic per-actor seeded state, and snapshots/restores the whole batch.
+
+Minimal path-following example:
+
+```ts
+import { CharacterController, CharacterPathFollower, createFlatGroundCharacterWorld } from "waifu-animation";
+
+const controller = new CharacterController({}, createFlatGroundCharacterWorld());
+const follower = new CharacterPathFollower({ arrivalRadius: 0.15 });
+
+const path = {
+  waypoints: [{ position: [0, 0, 1] }],
+  destination: { position: [0, 0, 2], facingYaw: 0, reservationKey: "bar-stool-1" }
+} as const;
+
+const pathOutput = follower.update(path, controller.snapshot(), { deltaSeconds: 1 / 60 });
+controller.update(1 / 60, pathOutput.input);
+```
+
+Minimal coordination example:
+
+```ts
+import { CharacterWorldCoordinator, CharacterPathFollower } from "waifu-animation";
+
+const coordinator = new CharacterWorldCoordinator([
+  { id: "actor-a", controller: controllerA, pathFollower: new CharacterPathFollower(), priority: 0 },
+  { id: "actor-b", controller: controllerB, pathFollower: new CharacterPathFollower(), priority: 0 }
+]);
+
+const result = coordinator.update(1 / 60, [
+  { id: "actor-a", path: pathToSharedSeat },
+  { id: "actor-b", path: pathToSharedSeat }
+]);
+```
+
+The result is deterministic for the same snapshots, requests, and adapter outputs. It is still only a reusable coordination layer; Waifu remains responsible for assigning goals, resolving concrete path plans, validating rendered behavior, and mapping reservations to real scene resources.
+
+## Root-motion authority handoff
+
+`RootMotionReconciler` is the reusable handoff between `AnimationRuntime.update(delta, { collectRootMotion: true })`, controller/physics displacement, and a caller-owned collision/world adapter. It is intentionally report-only: it does not mutate `CharacterController`, a Three `AnimationMixer`, a VRM root, or the model transform.
+
+Pipeline order for consumers that opt in:
+
+1. Update controller/navigation/coordinator intent and keep the before/after controller snapshots if physics displacement should participate.
+2. Apply graph/binding/applier work to `AnimationRuntime` layers.
+3. Call `AnimationRuntime.update(deltaSeconds, { collectRootMotion: true })` and keep the returned `rootMotionDelta`/`rootMotionLayers` report.
+4. Call `RootMotionReconciler.reconcile()` with an actor state, explicit authority mode (`physics-driven`, `animation-driven`, or `hybrid`), carrier binding (`none`, `runtime-blend`, layer, clip, bone, or metadata), local/world space declaration, optional physics displacement, ownership token, and optional `RootMotionWorldAdapter`.
+5. Apply the accepted `result.consumed`/`result.applied` motion to exactly one owner chosen by Waifu, or keep it diagnostic-only. Do not also let a controller move the same displacement, a Three mixer/root bone preserve the same carrier trajectory, and a model root apply it again.
+
+Coordinate conventions match the controller: Y-up, +Z-forward, yaw 0 faces +Z, positive yaw turns toward +X. Animation deltas default to local actor space and are rotated into world space by actor yaw; set `animationDeltaSpace: "world"` only when the displacement is already in world coordinates. Invalid or throwing world adapters reject the request and surface issues; partial accepted motion leaves the rest in `residual`/`rejected`.
+
+`CharacterWorldCoordinator` can run a registered actor `RootMotionReconciler` when a request includes `rootMotion`. The coordinator supplies stable actor ordering and default controller-delta physics input, but still does not apply the result to controller/model state.
+
+## Interaction/equipment state-machine handoff
+
+`src/interactions.ts` adds the reusable dependency layer for pickup/carry/drop/equip/unequip/use/sit/stand. It is still engine- and content-agnostic: no Three imports, no VRM mutation, no physics body ownership, no inventory UI, and no concrete tavern assets.
+
+Key contracts:
+
+- `CharacterSocketRegistry` stores opaque socket ids (`right-hand`, `back`, `hip`, etc.) with optional tags, metadata, and local offsets. The package treats them as ids/metadata only; consumers map them to skeleton joints, props, or IK effectors.
+- `InteractionResourceRegistry` stores resources (`item`, `seat`, `station`, `container`, `custom`) with capabilities, default/action sockets, and anchor definitions. Anchors are strict finite transforms for `approach`, `align`, `contact`, `use`, `seat`, and `exit` handoffs.
+- `CharacterInteractionCoordinator` owns deterministic active command state, resource reservation/use/owner locks, finite phase timing, semantic animation requests, events, reach windows, attach/detach handoff records, and schema-versioned snapshot/restore.
+- `createInteractionReservationRequests()` returns resource and actor-socket reservation requests suitable for `CharacterWorldCoordinator`. Feed the world coordinator's granted/denied reservations back as `reservationGrants` to fail denied interaction starts deterministically.
+- `interactionRequestFromControllerAction()` bridges a controller `CharacterActionIntent` into an interaction request while preserving the controller `commandId` as the stable no-repeat identity.
+
+State-machine semantics:
+
+- `pickup`/`carry`: `approach -> align -> reach -> contact -> transfer -> carry`; contact attaches to the requested/default socket, transfer marks the resource `carried`.
+- `drop`: `release -> exit`; release detaches the current owner socket and clears ownership.
+- `equip`: `approach -> align -> reach -> contact -> transfer -> equipped`; transfer attaches/marks `equipped` at the requested or action-default socket.
+- `unequip`: `reach -> contact -> transfer -> carry`; contact detaches the equipped socket and transfer reattaches to the carry socket.
+- `use`: `approach -> align -> reach -> contact -> use -> release -> exit`; contact opens a transient use lock, release clears it.
+- `sit`: `approach -> align -> reach -> seated`; seated marks the seat owner as `seated`.
+- `stand`: `release -> exit`; start can be gated by an optional clearance adapter, and release clears the seated owner.
+
+Cancellation/interruption emits terminal events, clears active reservations and transient use locks, and does not invent app-side inventory/prop changes. Attachment and reach outputs are data-only (`socketId`, target transform, phase window, command id, and attach/detach records). Consumers decide how to drive IK solvers, prop parenting, physics, audio, and rendered effects.
+
+Minimal interaction example:
+
+```ts
+import { CharacterInteractionCoordinator, createInteractionReservationRequests } from "waifu-animation";
+
+const interactions = new CharacterInteractionCoordinator({
+  sockets: [{ id: "right-hand" }, { id: "back" }],
+  resources: [
+    {
+      id: "mug-1",
+      kind: "item",
+      capabilities: ["pickup", "drop", "use"],
+      defaultSocketId: "right-hand",
+      anchors: [
+        { id: "mug-approach", kind: "approach", transform: { translation: [0, 0, 0.4] }, radius: 0.35 },
+        { id: "mug-align", kind: "align", transform: { translation: [0, 0, 0.2] } },
+        { id: "mug-contact", kind: "contact", transform: { translation: [0, 0.8, 0] } },
+        { id: "mug-exit", kind: "exit", transform: { translation: [0, 0, -0.3] } }
+      ]
+    }
+  ]
+});
+
+const reservations = createInteractionReservationRequests({
+  actorId: "actor-a",
+  action: "pickup",
+  resourceId: "mug-1",
+  socketId: "right-hand",
+  priority: 0
+});
+// Optionally arbitrate `reservations` through CharacterWorldCoordinator first.
+const result = interactions.update(1 / 60, [
+  {
+    actorId: "actor-a",
+    action: "pickup",
+    commandId: "pickup-42",
+    resourceId: "mug-1",
+    socketId: "right-hand"
+  }
+]);
+
+// Drive animation/IK/prop parenting from result.actors[0].animation/reach/attachments/events.
+```
+
 ## Current non-goals / roadmap
 
 Not implemented in this slice:
 
-- ledge vaulting/mantling, moving-platform transform parenting, root-motion authority policies, and physics-engine-specific collision ownership;
-- action/equipment execution: the runtime applier can start/fade animation layers for action commands, but pickup/carry/drop/use/equip/unequip/sit/stand state machines, hand sockets, reach reservations, and multi-actor coordination remain consumer-owned;
-- IK/reach solving integration: the controller only defines item/socket/interaction identifiers and future coordination boundaries;
-- root-motion authority: the runtime can compute root-motion intervals, but this controller/applier slice does not choose carriers, integrate displacement, or decide physics-vs-animation authority;
+- ledge vaulting/mantling, moving-platform transform parenting, and physics-engine-specific collision ownership;
+- rendered action/equipment execution: the interaction coordinator emits state, reach, and attach/detach handoff data, but consumers still own prop parenting, Object3D/VRM lifecycle, physics bodies, inventory, use effects, audio, and UI;
+- IK/reach solving execution: the interaction coordinator reports reach targets/windows/socket ids, but it does not solve or apply skeletal IK;
+- concrete root-motion application to Waifu scene/model/controller state: this package can reconcile and report accepted motion, but Waifu owns the final application site and rendered proof;
+- concrete navmesh/topology/path planning, local avoidance algorithms, off-mesh traversal execution, schedules/AI/world goals, tavern/guild-hall fixtures, and resource semantics beyond deterministic reservation keys;
 - Waifu app integration: `/Warehouse/Waifu` will later own Three/VRM loading, browser input, scene/world/game behavior, physics-engine adapters, visual gates, and any app-specific clip/mask lookup tables.
 
-Recommended next slice: wire the exported graph→binding→runtime-applier path into a consumer adapter with real clip/mask tables and visual gates, still keeping root-motion authority and interaction/equipment state machines explicit.
+Recommended next slice: begin the consuming `/Warehouse/Waifu` WorldRuntime/CharacterRuntime refactor that maps these package contracts to concrete scene resources, sockets, IK/attachment application, and visual gates.

@@ -24,3 +24,7 @@ export * from "./validation.js";
 export * from "./asset-validation.js";
 export * from "./three.js";
 export * from "./importer-config.js";
+export * from "./interactions.js";
+export * from "./navigation.js";
+export * from "./world-coordinator.js";
+export * from "./root-motion-authority.js";

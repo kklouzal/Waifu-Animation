@@ -33,12 +33,18 @@ Current coverage includes:
 - configurable viseme smoothing, facial expression composition, and blink scheduler trigger/timing sanity;
 - pose delta metrics across rotation, translation, and scale, including sign-equivalent/non-unit quaternion handling and max joint attribution.
 - `poseDiscontinuityMetric()` for deterministic runtime/video validation of timestamped local-pose frames, reporting per-interval angular velocity in radians/sec plus translation and scale velocity in distance units/sec with optional angular, translation, and scale spike thresholds.
+- navigation/path-following contracts for path-to-target movement, final arrival and turn-in-place behavior, finite path/controller/local-avoidance hardening, explicit blocked/repath outcomes, and snapshot/restore;
+- deterministic multi-actor coordination for stable actor ordering, destination/resource/path-blocker reservation conflicts, denied-actor hold behavior, batch snapshot/replay equality, and a fast 20-actor deterministic replay fixture;
+- interaction/equipment coordination for pickup/carry/drop/equip/unequip/use/sit/stand lifecycles, opaque socket/resource/anchor registries, invalid resource/socket/anchor rejection, resource/socket reservation handoff, conflicting actors/items/seats, cancellation/interruption, finite phase/event boundaries, snapshot/replay equality, a 12-actor deterministic fixture, attach/detach exactly-once handoff records, and seated/standing clearance-adapter behavior;
+- root-motion authority/reconciliation for physics-driven, animation-driven, and hybrid modes; carrier none/layer/clip/bone/runtime-report selection priority and ties; local-vs-world conversion; collision partial consumption/residual reports; invalid/throwing adapter hardening; ownership-token no-double-apply state; snapshot/replay equality; and deterministic coordinator root-motion report batching.
 
 ## Runtime Evaluation Diagnostics
 
 `AnimationRuntime.evaluate()` keeps the realtime path lean by default and returns only the evaluated local/model poses plus active layer metadata. Consumers that need Ozz-style validation around a frame can call `evaluate({ diagnostics: true })` to receive sampled-layer and final local-pose diagnostics with layer id, clip id, joint/index, track/sample where applicable, and validation messages while still getting a normalized finite output pose. Sample-stage diagnostics also include translation, scale, rotation, and source-rest quaternion repair events from the tolerant sampler path.
 
 `AnimationRuntime.update(deltaSeconds, { collectRootMotion: true })` returns a finite explicit `rootMotionDelta` plus deterministic per-layer contribution metadata for active override layers. Additive layers are excluded from root-motion collection, and invalid/non-finite timing resolves to identity motion.
+
+`RootMotionReconciler.reconcile()` is the optional next step after collection. It validates finite animation/controller motion, converts local actor deltas to world motion when requested, sends the requested displacement/yaw through a caller-owned `RootMotionWorldAdapter`, and reports accepted plus residual motion. It does not mutate controllers, Three mixers, VRM roots, or skeleton poses; ownership tokens and skeleton-root-motion declarations are the caller's guardrails against applying the same motion twice.
 
 ## Waifu Integration Gates
 
@@ -111,6 +117,9 @@ The generated Mocap Online library currently records explicit root-motion policy
 ## Known Limits
 
 - The package has IK, look-at, facial, Three adapter, and `PresencePlanner` foundations. See `docs/architecture.md` for the current Waifu skeletal runtime policy this validation assumes.
+- The package has navigation contracts, `CharacterPathFollower`, and `CharacterWorldCoordinator` foundations. These validate deterministic library handoffs only; they do not validate a concrete Waifu navmesh, tavern/guild-hall fixture map, local avoidance algorithm, AI schedule, or rendered multi-avatar scene.
+- The package has root-motion authority and collision-reconciliation contracts. These validate deterministic accepted/residual reports only; they do not validate a concrete Waifu physics engine, VRM/model-root application site, or rendered stride/weight-transfer proof.
+- The package has interaction/equipment contracts and state-machine tests. These validate deterministic library handoffs only; they do not validate concrete Waifu prop parenting, Object3D/VRM lifecycle, physics/inventory/use effects, tavern/guild-hall content, or rendered sitting/prop/reach proof.
 - The package exposes an Ozz-inspired foot-plant planning job, reusable two-bone IK correction quaternions, and optional Three.js application hooks. Those remain reusable library capabilities, but current Waifu visual gates should not rely on app-side foot-plant application flags.
 - The current visual gates validate standing, speaking, listening, thinking, shrug/wave/emphasis behavior, debug clip playback, representative in-place walk/jog/stand-to-walk root-motion candidates, non-skeletal look-at/face/viseme cues, and idle transitions. They do not yet validate a full locomotion state machine, sitting, stretching, arbitrary rendered foot planting, preserved root-motion application, prop attachments, or multi-avatar retargeting.
 
