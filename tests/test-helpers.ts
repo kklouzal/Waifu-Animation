@@ -1,7 +1,7 @@
 import type {
   AnimationAction,
   AnimationManifestEntry,
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   AnimationClip,
   Pose,
   ThreeRuntimeClip,
@@ -131,7 +131,7 @@ export const quarantinedManifestEntry = {
   validation: { status: "quarantined", reason: "manual hold" }
 } satisfies AnimationManifestEntry;
 
-export function assertFiniteEvaluation(evaluation: ReturnType<AnimationRuntime["evaluate"]>): void {
+export function assertFiniteEvaluation(evaluation: ReturnType<ReferenceAnimationRuntime["evaluate"]>): void {
   for (const transform of evaluation.localPose) {
     assert.ok(transform.translation.every(Number.isFinite));
     assert.ok(transform.rotation.every(Number.isFinite));

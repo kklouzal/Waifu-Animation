@@ -22,9 +22,10 @@ import {
   rotateVec3ByQuat,
   scaleVec3,
   subVec3
-} from "./math.js";
-import { finiteMat4Value, isFiniteMat4, mat4Translation as matrixTranslation } from "./numeric-helpers.js";
-import { type Skeleton, resolveHumanoidIndex } from "./skeleton.js";
+} from "../../src/math.js";
+import { finiteMat4Value, isFiniteMat4, mat4Translation as matrixTranslation } from "../../src/numeric-helpers.js";
+import { type Skeleton, resolveHumanoidIndex } from "../../src/skeleton.js";
+import { updateLocalToModelPoseRange } from "./skeleton.js";
 
 const MIN_IK_REACH = 1e-5;
 const DEFAULT_IK_SOFTEN = 0.998;
@@ -467,6 +468,146 @@ export function modelCorrectionToLocalPostCorrection(jointModel: Mat4, modelCorr
   return modelCorrectionToLocalPostCorrectionForRotation(rotationFromMat4(jointModel), modelCorrection);
 }
 
+export function applyTwoBoneIkLocalCorrections(
+  input: ApplyTwoBoneIkLocalCorrectionsInput
+): ApplyTwoBoneIkLocalCorrectionsResult {
+  const rootJoint = requireJointIndex(input.skeleton, input.rootJoint, "rootJoint");
+  const midJoint = requireJointIndex(input.skeleton, input.midJoint, "midJoint");
+  if (!isJointDescendantOrSelf(input.skeleton, midJoint, rootJoint)) {
+    throw new Error(`midJoint ${midJoint} must be a descendant of rootJoint ${rootJoint}`);
+  }
+  multiplyPoseRotation(input.localPose, rootJoint, input.corrections.rootLocalCorrection, "rootJoint");
+  multiplyPoseRotation(input.localPose, midJoint, input.corrections.midLocalCorrection, "midJoint");
+  const updatedTo = sanitizeUpdateTo(input.updateTo, input.skeleton.joints.length);
+  updateLocalToModelPoseRange(input.skeleton, input.localPose, input.modelPose, { from: rootJoint, to: updatedTo });
+  return { localPose: input.localPose, modelPose: input.modelPose, updatedFrom: rootJoint, updatedTo };
+}
+
+export function applyAimIkModelCorrection(input: ApplyAimIkModelCorrectionInput): ApplyAimIkModelCorrectionResult {
+  const joint = requireJointIndex(input.skeleton, input.joint, "joint");
+  const jointModel = input.modelPose[joint];
+  if (!jointModel) throw new Error(`modelPose is missing joint ${joint}`);
+  const localCorrection = modelCorrectionToLocalPostCorrection(jointModel, input.jointCorrection);
+  multiplyPoseRotation(input.localPose, joint, localCorrection, "joint");
+  const updatedTo = sanitizeUpdateTo(input.updateTo, input.skeleton.joints.length);
+  updateLocalToModelPoseRange(input.skeleton, input.localPose, input.modelPose, { from: joint, to: updatedTo });
+  return { localPose: input.localPose, modelPose: input.modelPose, localCorrection, updatedFrom: joint, updatedTo };
+}
+
+export function applyAimIkChainToPose(input: ApplyAimIkChainInput): ApplyAimIkChainResult {
+  const corrections: AimIkChainCorrection[] = [];
+  for (const jointInput of input.joints) {
+    const jointConfig = typeof jointInput === "number" ? { joint: jointInput } : jointInput;
+    const joint = requireJointIndex(input.skeleton, jointConfig.joint, "joint");
+    const jointModel = input.modelPose[joint];
+    if (!jointModel) throw new Error(`modelPose is missing joint ${joint}`);
+    const aim = solveAimIk({
+      joint: jointModel,
+      ...(input.target === undefined ? {} : { target: input.target }),
+      ...(input.targetDirection === undefined ? {} : { targetDirection: input.targetDirection }),
+      ...(jointConfig.forward === undefined && input.forward === undefined
+        ? {}
+        : { forward: jointConfig.forward ?? input.forward! }),
+      ...(jointConfig.offset === undefined && input.offset === undefined
+        ? {}
+        : { offset: jointConfig.offset ?? input.offset! }),
+      ...(jointConfig.up === undefined && input.up === undefined ? {} : { up: jointConfig.up ?? input.up! }),
+      ...(jointConfig.pole === undefined && input.pole === undefined ? {} : { pole: jointConfig.pole ?? input.pole! }),
+      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined
+        ? {}
+        : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
+      ...(jointConfig.weight === undefined && input.weight === undefined
+        ? {}
+        : { weight: jointConfig.weight ?? input.weight! })
+    });
+    const applied = applyAimIkModelCorrection({
+      skeleton: input.skeleton,
+      localPose: input.localPose,
+      modelPose: input.modelPose,
+      joint,
+      jointCorrection: aim.jointCorrection,
+      ...(input.updateTo === undefined ? {} : { updateTo: input.updateTo })
+    });
+    corrections.push({ joint, aim, localCorrection: applied.localCorrection });
+  }
+  return { localPose: input.localPose, modelPose: input.modelPose, corrections };
+}
+
+export function applyAimIkChildToParentChainToPose(input: ApplyAimIkChainInput): ApplyAimIkChildToParentChainResult {
+  validateChildToParentAimChain(input.skeleton, input.joints);
+  const corrections: AimIkChainCorrection[] = [];
+  let previousJoint = -1;
+  let previousForward = input.forward ?? ([1, 0, 0] as Vec3);
+  let previousOffset = input.offset ?? ([0, 0, 0] as Vec3);
+  let previousLocalCorrection: Quat | null = null;
+  let updatedFrom = input.skeleton.joints.length;
+
+  for (const jointInput of input.joints) {
+    const jointConfig = typeof jointInput === "number" ? { joint: jointInput } : jointInput;
+    const joint = requireJointIndex(input.skeleton, jointConfig.joint, "joint");
+    const jointModel = input.modelPose[joint];
+    if (!jointModel) throw new Error(`modelPose is missing joint ${joint}`);
+
+    const propagated =
+      previousLocalCorrection && previousJoint >= 0
+        ? propagateAimChainOffset(
+            input.modelPose[previousJoint]!,
+            jointModel,
+            previousForward,
+            previousOffset,
+            previousLocalCorrection
+          )
+        : null;
+    const forward = jointConfig.forward ?? propagated?.forward ?? input.forward;
+    const offset = jointConfig.offset ?? propagated?.offset ?? input.offset;
+    const aim = solveAimIk({
+      joint: jointModel,
+      ...(input.target === undefined ? {} : { target: input.target }),
+      ...(input.targetDirection === undefined ? {} : { targetDirection: input.targetDirection }),
+      ...(forward === undefined ? {} : { forward }),
+      ...(offset === undefined ? {} : { offset }),
+      ...(jointConfig.up === undefined && input.up === undefined ? {} : { up: jointConfig.up ?? input.up! }),
+      ...(jointConfig.pole === undefined && input.pole === undefined ? {} : { pole: jointConfig.pole ?? input.pole! }),
+      ...(jointConfig.twistAngle === undefined && input.twistAngle === undefined
+        ? {}
+        : { twistAngle: jointConfig.twistAngle ?? input.twistAngle! }),
+      ...(jointConfig.weight === undefined && input.weight === undefined
+        ? {}
+        : { weight: jointConfig.weight ?? input.weight! })
+    });
+    const localCorrection = modelCorrectionToLocalPostCorrection(jointModel, aim.jointCorrection);
+    multiplyPoseRotation(input.localPose, joint, localCorrection, "joint");
+    corrections.push({ joint, aim, localCorrection });
+    updatedFrom = Math.min(updatedFrom, joint);
+    previousJoint = joint;
+    previousForward = forward ?? previousForward;
+    previousOffset = offset ?? previousOffset;
+    previousLocalCorrection = localCorrection;
+  }
+
+  const updatedTo = sanitizeUpdateTo(input.updateTo, input.skeleton.joints.length);
+  if (corrections.length > 0) {
+    updateLocalToModelPoseRange(input.skeleton, input.localPose, input.modelPose, { from: updatedFrom, to: updatedTo });
+  } else {
+    updatedFrom = updatedTo;
+  }
+  return { localPose: input.localPose, modelPose: input.modelPose, corrections, updatedFrom, updatedTo };
+}
+
+function validateChildToParentAimChain(skeleton: Skeleton, joints: readonly (number | AimIkChainJointInput)[]): void {
+  let previousJoint = -1;
+  for (const jointInput of joints) {
+    const jointConfig = typeof jointInput === "number" ? { joint: jointInput } : jointInput;
+    const joint = requireJointIndex(skeleton, jointConfig.joint, "joint");
+    if (previousJoint >= 0 && !isJointDescendantOrSelf(skeleton, previousJoint, joint)) {
+      throw new Error(
+        `child-to-parent aim chain joint ${joint} must be an ancestor of previous joint ${previousJoint}`
+      );
+    }
+    previousJoint = joint;
+  }
+}
+
 export function createHumanoidLookAtAimChain(
   skeleton: Skeleton,
   options: HumanoidLookAtAimChainOptions = {}
@@ -514,6 +655,24 @@ const DEFAULT_HUMANOID_LOOK_AT_WEIGHTS: Readonly<Record<HumanoidLookAtAimBone, n
   spine: 0.2
 };
 
+function propagateAimChainOffset(
+  previousModel: Mat4,
+  jointModel: Mat4,
+  forward: Vec3,
+  offset: Vec3,
+  correction: Quat
+): { forward: Vec3; offset: Vec3 } {
+  const correctedForwardModel = transformLinearVector(previousModel, rotateVec3ByQuat(correction, forward));
+  const correctedOffsetModel = addVec3(
+    matrixTranslation(previousModel),
+    transformLinearVector(previousModel, rotateVec3ByQuat(correction, offset))
+  );
+  return {
+    forward: inverseTransformVector(jointModel, correctedForwardModel),
+    offset: inverseTransformPoint(jointModel, correctedOffsetModel)
+  };
+}
+
 function modelMatrixFromTransform(value: ModelJointTransform): Mat4 {
   if ("length" in value) return value;
   return composeMat4(value);
@@ -523,6 +682,39 @@ function modelCorrectionToLocalPostCorrectionForRotation(modelRotation: Quat, mo
   const rotation = normalizeQuat(modelRotation);
   const correction = normalizeQuat(modelCorrection);
   return multiplyQuat(multiplyQuat(invertQuat(rotation), correction), rotation);
+}
+
+function requireJointIndex(skeleton: Skeleton, index: number, label: string): number {
+  if (!Number.isInteger(index) || index < 0 || index >= skeleton.joints.length) {
+    throw new Error(`${label} ${index} is outside skeleton joint range`);
+  }
+  return index;
+}
+
+function sanitizeUpdateTo(updateTo: number | undefined, jointCount: number): number {
+  if (updateTo === undefined) return jointCount - 1;
+  if (!Number.isInteger(updateTo) || updateTo < 0) throw new Error("updateTo must be a non-negative joint index");
+  return Math.min(updateTo, jointCount - 1);
+}
+
+function isJointDescendantOrSelf(skeleton: Skeleton, child: number, ancestor: number): boolean {
+  if (child === ancestor) return true;
+  let parent = skeleton.joints[child]?.parentIndex ?? -1;
+  while (parent >= 0) {
+    if (parent === ancestor) return true;
+    parent = skeleton.joints[parent]?.parentIndex ?? -1;
+  }
+  return false;
+}
+
+function multiplyPoseRotation(localPose: Transform[], joint: number, correction: Quat, label: string): void {
+  const transform = localPose[joint];
+  if (!transform) throw new Error(`localPose is missing ${label} ${joint}`);
+  localPose[joint] = {
+    translation: transform.translation,
+    rotation: multiplyQuat(transform.rotation, correction),
+    scale: transform.scale
+  };
 }
 
 function sanitizeTwoBoneIkInput(input: TwoBoneIkInput): TwoBoneIkInput {
@@ -696,6 +888,10 @@ function rotationFromMat4(matrix: Mat4): Quat {
   return normalizeQuat([(zAxis[0] + xAxis[2]) / s, (yAxis[2] + zAxis[1]) / s, 0.25 * s, (xAxis[1] - yAxis[0]) / s]);
 }
 
+function inverseTransformPoint(matrix: Mat4, point: Vec3): Vec3 {
+  return inverseTransformVector(matrix, subVec3(point, matrixTranslation(matrix)));
+}
+
 function transformLinearVector(matrix: Mat4, vector: Vec3): Vec3 {
   const x = vector[0],
     y = vector[1],
@@ -704,6 +900,35 @@ function transformLinearVector(matrix: Mat4, vector: Vec3): Vec3 {
     finiteMat4Value(matrix, 0, 1) * x + finiteMat4Value(matrix, 4, 0) * y + finiteMat4Value(matrix, 8, 0) * z,
     finiteMat4Value(matrix, 1, 0) * x + finiteMat4Value(matrix, 5, 1) * y + finiteMat4Value(matrix, 9, 0) * z,
     finiteMat4Value(matrix, 2, 0) * x + finiteMat4Value(matrix, 6, 0) * y + finiteMat4Value(matrix, 10, 1) * z
+  ];
+}
+
+function inverseTransformVector(matrix: Mat4, vector: Vec3): Vec3 {
+  const m00 = finiteMat4Value(matrix, 0, 1),
+    m01 = finiteMat4Value(matrix, 4, 0),
+    m02 = finiteMat4Value(matrix, 8, 0);
+  const m10 = finiteMat4Value(matrix, 1, 0),
+    m11 = finiteMat4Value(matrix, 5, 1),
+    m12 = finiteMat4Value(matrix, 9, 0);
+  const m20 = finiteMat4Value(matrix, 2, 0),
+    m21 = finiteMat4Value(matrix, 6, 0),
+    m22 = finiteMat4Value(matrix, 10, 1);
+  const c00 = m11 * m22 - m12 * m21;
+  const c01 = m02 * m21 - m01 * m22;
+  const c02 = m01 * m12 - m02 * m11;
+  const c10 = m12 * m20 - m10 * m22;
+  const c11 = m00 * m22 - m02 * m20;
+  const c12 = m02 * m10 - m00 * m12;
+  const c20 = m10 * m21 - m11 * m20;
+  const c21 = m01 * m20 - m00 * m21;
+  const c22 = m00 * m11 - m01 * m10;
+  const det = m00 * c00 + m01 * c10 + m02 * c20;
+  if (!Number.isFinite(det) || Math.abs(det) <= EPSILON) return [0, 0, 0];
+  const invDet = 1 / det;
+  return [
+    (c00 * vector[0] + c01 * vector[1] + c02 * vector[2]) * invDet,
+    (c10 * vector[0] + c11 * vector[1] + c12 * vector[2]) * invDet,
+    (c20 * vector[0] + c21 * vector[1] + c22 * vector[2]) * invDet
   ];
 }
 

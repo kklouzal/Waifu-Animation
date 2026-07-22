@@ -1,6 +1,6 @@
 import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   Object3D,
   assert,
   createSkeleton,
@@ -593,7 +593,7 @@ export function runRetargetingTests(): void {
     ),
     "core pose sampling should apply caller-provided source-basis correction before local-pose retargeting"
   );
-  const motusBasisCoreRuntime = new AnimationRuntime(motusBasisCoreSkeleton);
+  const motusBasisCoreRuntime = new ReferenceAnimationRuntime(motusBasisCoreSkeleton);
   motusBasisCoreRuntime.setLayer("motus-lower-leg", motusBasisCoreClip, {
     time: 1,
     weight: 1,
@@ -605,7 +605,7 @@ export function runRetargetingTests(): void {
       motusLowerLegCorrectedDirection,
       1e-5
     ),
-    "AnimationRuntime should pass source-basis correction through to sampled mocap layers"
+    "ReferenceAnimationRuntime should pass source-basis correction through to sampled mocap layers"
   );
 
   const mirroredLimbSourceRestLeft = quatFromAxisAngle([1, 0, 0], Math.PI / 2);

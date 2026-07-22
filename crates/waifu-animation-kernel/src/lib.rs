@@ -6,7 +6,7 @@ use core::arch::wasm32;
 use core::panic::PanicInfo;
 
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 5;
+pub const ABI_MINOR: u32 = 6;
 pub const FEATURE_SCALAR_LOCAL_TO_MODEL: u32 = 1 << 0;
 pub const FEATURE_SCALAR_POSE_BLEND: u32 = 1 << 1;
 pub const FEATURE_SCALAR_ADDITIVE: u32 = 1 << 2;
@@ -683,6 +683,50 @@ pub extern "C" fn wa_sample_packed_clip(
         flags,
         false,
     )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_sample_packed_clip_joint(
+    avatar_handle: u32,
+    clip_handle: u32,
+    context_handle: u32,
+    rest_pose_offset: u32,
+    rest_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+    time: f32,
+    flags: u32,
+    joint: u32,
+    out_transform_offset: u32,
+) -> u32 {
+    let status = sample_packed_clip_impl(
+        avatar_handle,
+        clip_handle,
+        context_handle,
+        rest_pose_offset,
+        rest_pose_capacity_bytes,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+        joint_count,
+        time,
+        flags,
+        false,
+    );
+    if status != WA_OK {
+        return status;
+    }
+    if joint >= joint_count
+        || !is_aligned(out_transform_offset, 4)
+        || !memory_range_valid(out_transform_offset, 40)
+    {
+        return WA_ERR_INVALID_ARG;
+    }
+    let transform = read_transform_repaired(output_pose_offset, joint);
+    for (index, value) in transform.iter().enumerate() {
+        unsafe { write_f32(out_transform_offset + index as u32 * 4, *value) };
+    }
+    WA_OK
 }
 
 #[unsafe(no_mangle)]

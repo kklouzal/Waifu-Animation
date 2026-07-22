@@ -9,7 +9,7 @@ import { runMotionPoseSamplingTests } from "./motion-pose-sampling.test.js";
 import { runMotionRootMotionTests, runMotionRuntimeRootMotionTests } from "./motion-root-motion.test.js";
 import { runMotionSkinningGeometryTests } from "./motion-skinning-geometry.test.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   assert,
   identityTransform,
   synchronizeLocomotionPlayback,
@@ -33,7 +33,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
   const oldClip = createHeadTranslationClip("runtime-crossfade-old", 2);
   const newClip = createHeadTranslationClip("runtime-crossfade-new", 10);
 
-  const malformedSetLayerRuntime = new AnimationRuntime(skeleton);
+  const malformedSetLayerRuntime = new ReferenceAnimationRuntime(skeleton);
   const malformedSetLayer = malformedSetLayerRuntime.setLayer("bad-mode", oldClip, {
     weight: 1,
     targetWeight: 1,
@@ -58,7 +58,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
     [0.5, 0.5]
   );
 
-  const malformedCrossfadeRuntime = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const malformedCrossfadeRuntime = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   const malformedSource = malformedCrossfadeRuntime.setLayer("old", oldClip, {
     weight: 1,
     targetWeight: 1,
@@ -75,7 +75,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
   assert.ok(Math.abs((fadedSource?.weight ?? 0) - 0.5) < 1e-6);
   assert.ok(Math.abs(malformedCrossfade.localPose[2]!.translation[0] - 6) < 1e-6);
 
-  const deterministicOrderRuntime = new AnimationRuntime(skeleton);
+  const deterministicOrderRuntime = new ReferenceAnimationRuntime(skeleton);
   deterministicOrderRuntime.setLayer("a", oldClip, { weight: 1, targetWeight: 1, priority: 2 });
   deterministicOrderRuntime.setLayer("B", newClip, { weight: 1, targetWeight: 1, priority: 2 });
   assert.deepEqual(
@@ -84,7 +84,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
     "same-priority runtime layer metadata should use locale-independent id ordering"
   );
 
-  const overflowTimeRuntime = new AnimationRuntime(skeleton);
+  const overflowTimeRuntime = new ReferenceAnimationRuntime(skeleton);
   overflowTimeRuntime.setLayer(
     "unbounded-time",
     { id: "unbounded-time", duration: 0, tracks: [] },
@@ -110,7 +110,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
     loop: true,
     tracks: [{ joint: "root", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([10, 0, 0]) }]
   };
-  const zeroDurationRuntime = new AnimationRuntime(motionSkeleton);
+  const zeroDurationRuntime = new ReferenceAnimationRuntime(motionSkeleton);
   zeroDurationRuntime.setLayer("zero-duration", zeroDurationMotion, { weight: 1, targetWeight: 1, loop: true });
   const zeroDurationUpdate = zeroDurationRuntime.update(1, { collectRootMotion: true });
   assert.deepEqual(
@@ -121,14 +121,14 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
   assert.equal(zeroDurationUpdate.rootMotionLayers.length, 0);
 
   const pausedRootMotion = createRootTranslationClip("paused-root-motion", 10);
-  const pausedRuntime = new AnimationRuntime(motionSkeleton);
+  const pausedRuntime = new ReferenceAnimationRuntime(motionSkeleton);
   pausedRuntime.setLayer("paused", pausedRootMotion, { weight: 1, targetWeight: 1, time: 0.25, speed: 0 });
   const pausedUpdate = pausedRuntime.update(0.5, { collectRootMotion: true });
   assert.deepEqual(pausedUpdate.rootMotionDelta, identityTransform(), "paused layers should not emit interval motion");
   assert.equal(pausedUpdate.rootMotionLayers.length, 0, "paused layers should not emit root-motion diagnostics");
   assert.equal(pausedRuntime.evaluate().activeLayers.find((layer) => layer.id === "paused")?.time, 0.25);
 
-  const pausedFadeRuntime = new AnimationRuntime(motionSkeleton);
+  const pausedFadeRuntime = new ReferenceAnimationRuntime(motionSkeleton);
   pausedFadeRuntime.setLayer("paused-fade", pausedRootMotion, {
     weight: 1,
     targetWeight: 0,
@@ -154,7 +154,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
     "paused fading layers should continue fading even when root motion is skipped"
   );
 
-  const cappedLoopRuntime = new AnimationRuntime(motionSkeleton);
+  const cappedLoopRuntime = new ReferenceAnimationRuntime(motionSkeleton);
   cappedLoopRuntime.setLayer("capped-loop", createRootTranslationClip("capped-loop-motion", 10), {
     weight: 1,
     targetWeight: 1,
@@ -172,7 +172,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
     [["capped-loop", identityTransform()]]
   );
 
-  const hugeRootMotionRuntime = new AnimationRuntime(motionSkeleton);
+  const hugeRootMotionRuntime = new ReferenceAnimationRuntime(motionSkeleton);
   hugeRootMotionRuntime.setLayer("huge-a", createRootTranslationClip("huge-root-motion-a", 10), {
     weight: Number.MAX_VALUE,
     targetWeight: Number.MAX_VALUE,
@@ -196,7 +196,7 @@ function runRuntimeSchedulingCompositionRegressionTests(): void {
     ]
   );
 
-  const sanitizedThresholdRuntime = new AnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
+  const sanitizedThresholdRuntime = new ReferenceAnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
   sanitizedThresholdRuntime.blendThreshold = Number.POSITIVE_INFINITY;
   sanitizedThresholdRuntime.setLayer("base-motion", createRootTranslationClip("threshold-base-motion", 10), {
     weight: 1,

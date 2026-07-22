@@ -1,12 +1,14 @@
 import {
-  Object3D,
-  Vector3,
   applyAimIkChainToPose,
   applyAimIkChildToParentChainToPose,
   applyAimIkModelCorrection,
+  applyTwoBoneIkLocalCorrections
+} from "./reference/ik-core.js";
+import {
+  Object3D,
+  Vector3,
   applyThreeFootPlantResult,
   applyFootPlantStabilizedInfluence,
-  applyTwoBoneIkLocalCorrections,
   classifyStationarySupportContacts,
   computeStationarySupportCompensation,
   computeAnkleTargetFromGround,

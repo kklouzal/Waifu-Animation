@@ -11,9 +11,24 @@ import type { CharacterAnimationGraphLayerId } from "./character-animation-graph
 import type { AnimationClip } from "./clip.js";
 import { clamp01, EPSILON } from "./math.js";
 import { type JointMask, validateJointMask } from "./pose.js";
-import { AnimationRuntime, type LayerBlendMode } from "./runtime.js";
+import {
+  type AnimationLayer,
+  type AnimationLayerOptions,
+  type CrossfadeOptions,
+  type LayerBlendMode
+} from "./runtime.js";
+import type { Skeleton } from "./skeleton.js";
 
 export const CHARACTER_ANIMATION_RUNTIME_APPLIER_SCHEMA_VERSION = 1;
+
+export interface AnimationRuntimeScheduler {
+  readonly skeleton: Skeleton;
+  setLayer(id: string, clip: AnimationClip, options?: AnimationLayerOptions): AnimationLayer;
+  crossfade(id: string, clip: AnimationClip, options?: CrossfadeOptions): AnimationLayer;
+  fadeOut(id: string, fadeSpeed?: number): void;
+  removeLayer(id: string): void;
+  hasLayer(id: string): boolean;
+}
 
 export type CharacterAnimationRuntimeApplySource = "playback" | "blend" | "transition" | "action";
 
@@ -275,7 +290,7 @@ export class CharacterAnimationRuntimeApplier {
   }
 
   apply(
-    runtime: AnimationRuntime,
+    runtime: AnimationRuntimeScheduler,
     bindingOutput: CharacterAnimationBindingOutput,
     resources: CharacterAnimationRuntimeApplyResources,
     options: CharacterAnimationRuntimeApplyOptions = {}
@@ -285,19 +300,6 @@ export class CharacterAnimationRuntimeApplier {
     output.sequence = readSafeSequence(isRecord(bindingOutput) ? bindingOutput.sequence : undefined);
     this.#applyCount += 1;
 
-    if (!(runtime instanceof AnimationRuntime)) {
-      pushIssue(
-        output.issues,
-        {
-          type: "input-rejected",
-          field: "runtime",
-          code: "type",
-          message: "character animation runtime applier requires an AnimationRuntime instance"
-        },
-        this.config.maxIssues
-      );
-      return output;
-    }
     if (!isRecord(bindingOutput)) {
       pushIssue(
         output.issues,
@@ -497,7 +499,7 @@ export class CharacterAnimationRuntimeApplier {
   }
 
   #addEndpointCommand(context: {
-    runtime: AnimationRuntime;
+    runtime: AnimationRuntimeScheduler;
     resources: CharacterAnimationRuntimeApplyResources;
     desired: Map<string, LayerCommand>;
     endpoint: CharacterAnimationResolvedClipBinding & { weight?: number; phase?: number };
@@ -539,7 +541,7 @@ export class CharacterAnimationRuntimeApplier {
   }
 
   #addActionCommand(
-    runtime: AnimationRuntime,
+    runtime: AnimationRuntimeScheduler,
     resources: CharacterAnimationRuntimeApplyResources,
     desired: Map<string, LayerCommand>,
     action: CharacterAnimationResolvedAction,
@@ -610,7 +612,7 @@ export class CharacterAnimationRuntimeApplier {
   }
 
   #resolveLayerCommand(context: {
-    runtime: AnimationRuntime;
+    runtime: AnimationRuntimeScheduler;
     resources: CharacterAnimationRuntimeApplyResources;
     endpoint: CharacterAnimationResolvedClipBinding & { phase?: number };
     source: CharacterAnimationRuntimeApplySource;
@@ -749,7 +751,11 @@ export class CharacterAnimationRuntimeApplier {
     };
   }
 
-  #applyCommand(runtime: AnimationRuntime, command: LayerCommand, output: CharacterAnimationRuntimeApplyResult): void {
+  #applyCommand(
+    runtime: AnimationRuntimeScheduler,
+    command: LayerCommand,
+    output: CharacterAnimationRuntimeApplyResult
+  ): void {
     const previous = this.#ownedLayers.get(command.runtimeLayerId) ?? this.#retiringLayers.get(command.runtimeLayerId);
     const resetTime = previous === undefined || command.source === "action" || previous.clipId !== command.clipId;
     const seedTime = resetTime && command.time !== undefined;
@@ -818,7 +824,7 @@ export class CharacterAnimationRuntimeApplier {
   }
 
   #advanceActionTimers(
-    runtime: AnimationRuntime,
+    runtime: AnimationRuntimeScheduler,
     deltaSeconds: number | undefined,
     output: CharacterAnimationRuntimeApplyResult
   ): void {
@@ -839,7 +845,7 @@ export class CharacterAnimationRuntimeApplier {
   }
 
   #retireOwnedLayer(
-    runtime: AnimationRuntime,
+    runtime: AnimationRuntimeScheduler,
     runtimeLayerId: string,
     fadeSeconds: number,
     reason: RetireReason,
@@ -863,13 +869,13 @@ export class CharacterAnimationRuntimeApplier {
     }
   }
 
-  #pruneRetiringLayers(runtime: AnimationRuntime): void {
+  #pruneRetiringLayers(runtime: AnimationRuntimeScheduler): void {
     for (const runtimeLayerId of Array.from(this.#retiringLayers.keys())) {
       if (!runtime.hasLayer(runtimeLayerId)) this.#retiringLayers.delete(runtimeLayerId);
     }
   }
 
-  #enforceOwnedLayerLimit(runtime: AnimationRuntime, output: CharacterAnimationRuntimeApplyResult): void {
+  #enforceOwnedLayerLimit(runtime: AnimationRuntimeScheduler, output: CharacterAnimationRuntimeApplyResult): void {
     const trackedLayerCount = this.#ownedLayers.size + this.#retiringLayers.size;
     if (trackedLayerCount <= this.config.maxOwnedLayers) return;
     let overflow = trackedLayerCount - this.config.maxOwnedLayers;
@@ -1472,7 +1478,7 @@ function resolveClip(
 }
 
 function resolveOptionalMask(
-  runtime: AnimationRuntime,
+  runtime: AnimationRuntimeScheduler,
   resources: CharacterAnimationRuntimeApplyResources,
   context: CharacterAnimationRuntimeLookupContext,
   issues: CharacterAnimationRuntimeApplierIssue[],

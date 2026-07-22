@@ -18,7 +18,6 @@ import {
   localToModelPose,
   quatFromAxisAngle,
   resolveBakedCameraJointIndex,
-  skinThreeBufferGeometry,
   skinVertices,
   updateRigidInstanceMatrices,
   updateRigidInstanceMatrixBuffer,
@@ -26,6 +25,7 @@ import {
   validateSkinningJob
 } from "./test-api.js";
 import { assertMat4NearlyEqual, sampleNodPose, skeleton, vectorNearlyEqual } from "./test-helpers.js";
+import { skinThreeBufferGeometry } from "./reference/three-geometry.js";
 import { BufferAttribute, Float16BufferAttribute, InterleavedBuffer, InterleavedBufferAttribute } from "three";
 
 export async function runMotionSkinningGeometryTests(): Promise<void> {

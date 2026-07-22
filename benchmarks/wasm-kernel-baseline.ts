@@ -1,3 +1,14 @@
+import { AnimationSamplingContext, sampleClipToPoseWithContext } from "../tests/reference/clip-sampling.js";
+import { additiveDeltaPose, applyAdditivePose, blendPoses, clonePose, normalizePose } from "../tests/reference/pose.js";
+import { localToModelPose } from "../tests/reference/skeleton.js";
+import { samplePackedRuntimeAnimationToPose } from "../tests/reference/packed-runtime.js";
+import { skinVertices } from "../tests/reference/skinning.js";
+import {
+  applyAimIkModelCorrection,
+  applyTwoBoneIkLocalCorrections,
+  solveAimIk,
+  solveTwoBoneIkModel
+} from "../tests/reference/ik-core.js";
 import os from "node:os";
 import process from "node:process";
 import { existsSync, readFileSync } from "node:fs";
@@ -5,27 +16,13 @@ import { performance } from "node:perf_hooks";
 
 import {
   AnimationRuntime,
-  AnimationSamplingContext,
   NO_PARENT,
-  additiveDeltaPose,
-  applyAdditivePose,
-  applyAimIkModelCorrection,
-  applyTwoBoneIkLocalCorrections,
-  blendPoses,
   buildPackedRuntimeAnimation,
-  clonePose,
   createWasmAnimationRuntimeBackend,
   createSkeleton,
-  localToModelPose,
   loadWaifuAnimationWasmKernel,
-  normalizePose,
   quatFromAxisAngle,
-  sampleClipToPoseWithContext,
-  samplePackedRuntimeAnimationToPose,
   sanitizeQuaternionTrackValues,
-  skinVertices,
-  solveAimIk,
-  solveTwoBoneIkModel,
   toFloat32Array,
   type AnimationClip,
   type JointMask,
@@ -172,9 +169,17 @@ const retainedPackedMemoryBytesAfterSetup =
   wasmKernel.kind === "wasm-scalar" ? wasmKernel.kernel.memory.buffer.byteLength : undefined;
 const singleAvatar = createAvatarState(0);
 const multiAvatars = Array.from({ length: config.multiAvatarCount }, (_value, index) => createAvatarState(index));
-const runtime = createRuntime(fixture, 0);
+const runtime = createRuntime(
+  fixture,
+  0,
+  createWasmAnimationRuntimeBackend(wasmKernel.kernel, fixture.skeleton, { maxLayers: 3 })
+);
 const runtimeAvatars = Array.from({ length: config.runtimeAvatarCount }, (_value, index) =>
-  createRuntime(fixture, index)
+  createRuntime(
+    fixture,
+    index,
+    createWasmAnimationRuntimeBackend(wasmKernel.kernel, fixture.skeleton, { maxLayers: 3 })
+  )
 );
 const wasmRuntimeSetupStart = performance.now();
 const wasmRuntime =
@@ -1096,9 +1101,9 @@ function skinningPaletteAndCpuWasm(context: WasmSkinningContext): number {
 function createRuntime(
   fixture: BenchmarkFixture,
   index: number,
-  backend?: NonNullable<ConstructorParameters<typeof AnimationRuntime>[1]>["backend"]
+  backend: ReturnType<typeof createWasmAnimationRuntimeBackend>
 ): AnimationRuntime {
-  const runtime = new AnimationRuntime(fixture.skeleton, backend ? { backend } : {});
+  const runtime = new AnimationRuntime(backend);
   runtime.setLayer("base", fixture.clips[0], {
     weight: 0.82,
     targetWeight: 0.82,

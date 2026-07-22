@@ -1,6 +1,6 @@
 import type { AnimationClip, CharacterAnimationBindingOutput } from "./test-api.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   CHARACTER_ANIMATION_RUNTIME_APPLIER_SCHEMA_VERSION,
   assert,
   createCharacterAnimationRuntimeApplier,
@@ -25,7 +25,7 @@ export function runCharacterAnimationRuntimeApplierTests(): void {
 
 function runIdleToGaitCrossfadeAndGaitChangeTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
 
   const idleResult = applier.apply(runtime, makeBindingOutput({ locomotionWeight: 0 }), { clips, masks });
@@ -76,7 +76,7 @@ function runIdleToGaitCrossfadeAndGaitChangeTests(): void {
 
 function runRepeatedApplyPreservesRuntimeTimeTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
 
   applier.apply(runtime, makeBindingOutput({ locomotionWeight: 1, gait: "walk", phase: 0.25 }), { clips, masks });
@@ -104,7 +104,7 @@ function runRepeatedApplyPreservesRuntimeTimeTests(): void {
 
 function runFadingLayerReactivationTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
 
   applier.apply(runtime, makeBindingOutput({ locomotionWeight: 0, phase: 0.2 }), { clips, masks });
@@ -152,7 +152,7 @@ function runFadingLayerReactivationTests(): void {
 
 function runPostureBlendAndMaskTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
 
   const result = applier.apply(runtime, makeBindingOutput({ postureWeight: 0.35 }), { clips, masks });
@@ -176,7 +176,7 @@ function runRuntimeLayerMaskReplacementTests(): void {
   clips.set("clip:masked-full", makeFullBodyTranslationClip("clip:masked-full", 1, 1));
   clips.set("clip:unmasked-full", makeFullBodyTranslationClip("clip:unmasked-full", 1, 2));
   masks.set("mask:head-only", createJointMask(testSkeleton, 0, { head: 1 }));
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
 
   applier.apply(runtime, makeSinglePlaybackOutput("clip:masked-full", { maskId: "mask:head-only", fadeSeconds: 0 }), {
@@ -209,7 +209,7 @@ function runRuntimeLayerMaskReplacementTests(): void {
 
 function runAirborneRiseFallLandingTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
 
   const rise = applier.apply(runtime, makeBindingOutput({ airborne: "rise", airbornePhase: 0.2 }), { clips, masks });
@@ -245,7 +245,7 @@ function runAirborneRiseFallLandingTests(): void {
 
 function runActionOverlayIdentitySnapshotAndReplayTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
   const actionOutput = makeBindingOutput({ actionCommandId: "pickup-1" });
 
@@ -264,7 +264,7 @@ function runActionOverlayIdentitySnapshotAndReplayTests(): void {
   assert.ok(duplicate.issues.some((issue) => issue.code === "duplicate-command"));
 
   const snapshot = applier.snapshot();
-  const replayRuntime = new AnimationRuntime(testSkeleton);
+  const replayRuntime = new ReferenceAnimationRuntime(testSkeleton);
   const replayApplier = createCharacterAnimationRuntimeApplier({ namespace: "test" });
   replayApplier.restore(snapshot);
   const replayDuplicate = replayApplier.apply(replayRuntime, actionOutput, { clips, masks });
@@ -285,7 +285,7 @@ function runActionOverlayIdentitySnapshotAndReplayTests(): void {
 
 function runMissingClipMaskConflictAndIsolationTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test", staleFadeSeconds: 0.05 });
   runtime.setLayer("foreign:base", clips.get("clip:foreign")!, { weight: 1, targetWeight: 1, priority: 999 });
 
@@ -308,7 +308,7 @@ function runMissingClipMaskConflictAndIsolationTests(): void {
   );
 
   const throwingClip = createCharacterAnimationRuntimeApplier({ namespace: "test" }).apply(
-    new AnimationRuntime(testSkeleton),
+    new ReferenceAnimationRuntime(testSkeleton),
     makeBindingOutput({ locomotionWeight: 1 }),
     {
       clips: () => {
@@ -323,7 +323,7 @@ function runMissingClipMaskConflictAndIsolationTests(): void {
   );
 
   const throwingMask = createCharacterAnimationRuntimeApplier({ namespace: "test" }).apply(
-    new AnimationRuntime(testSkeleton),
+    new ReferenceAnimationRuntime(testSkeleton),
     makeBindingOutput({ postureWeight: 0.5 }),
     {
       clips,
@@ -353,7 +353,7 @@ function runMissingClipMaskConflictAndIsolationTests(): void {
 
 function runMalformedHostileBoundedInputTests(): void {
   const { clips, masks } = makeResources();
-  const runtime = new AnimationRuntime(testSkeleton);
+  const runtime = new ReferenceAnimationRuntime(testSkeleton);
   const applier = createCharacterAnimationRuntimeApplier({ namespace: "test", maxRecordsPerApply: 1, maxIssues: 16 });
   const output = createCharacterAnimationRuntimeApplyResultBuffer();
 

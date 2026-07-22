@@ -1,6 +1,6 @@
 import type { RuntimeUpdateResult, Transform, Vec3, WorldCoordinatorActorRequest } from "./test-api.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   CharacterController,
   CharacterWorldCoordinator,
   ROOT_MOTION_COORDINATE_SYSTEM,
@@ -165,7 +165,7 @@ function runCarrierResolutionTests(): void {
   assert.deepEqual(handoff.resolved, { jointIndex: 1, joint: "pelvis" });
   assert.deepEqual(handoff.reconcilerCarrierBinding, { select: "bone", jointIndex: 1, joint: "pelvis" });
 
-  const handoffRuntime = new AnimationRuntime(handoffSkeleton);
+  const handoffRuntime = new ReferenceAnimationRuntime(handoffSkeleton);
   handoffRuntime.setLayer("handoff", handoffClip, {
     weight: 1,
     targetWeight: 1,

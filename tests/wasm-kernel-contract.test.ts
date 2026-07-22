@@ -1,12 +1,20 @@
+import {
+  applyAimIkChainToPose,
+  applyAimIkModelCorrection,
+  applyTwoBoneIkLocalCorrections
+} from "./reference/ik-core.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { AnimationSamplingContext, sampleClipToPose, sampleClipToPoseWithContext } from "./reference/clip-sampling.js";
+import { additiveDeltaPose, applyAdditivePose, blendPoses, clonePose, normalizePose } from "./reference/pose.js";
+import { buildSkinningMatrixPalette, skinVertices } from "./reference/skinning.js";
 import type { WaifuAnimationWasmKernel } from "./test-api.js";
 import {
-  AnimationSamplingContext,
   AnimationRuntime,
+  ReferenceAnimationRuntime,
   WA_KERNEL_ABI_MAJOR,
   WA_KERNEL_FEATURE_SCALAR_ADDITIVE,
   WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS,
@@ -17,16 +25,8 @@ import {
   WA_KERNEL_FEATURE_RETAINED_SKINNING,
   WA_KERNEL_FEATURE_SIMD_MATRIX_JOBS,
   WaKernelStatus,
-  additiveDeltaPose,
-  applyAdditivePose,
-  applyAimIkChainToPose,
-  applyAimIkModelCorrection,
-  applyTwoBoneIkLocalCorrections,
   assert,
-  blendPoses,
-  buildSkinningMatrixPalette,
   buildPackedRuntimeAnimation,
-  clonePose,
   createRestPose,
   createSkeleton,
   createWasmAnimationRuntime,
@@ -34,12 +34,8 @@ import {
   detectWaKernelSimdSupport,
   localToModelPose,
   loadWaifuAnimationWasmKernel,
-  normalizePose,
   runWasmSkinning,
-  sampleClipToPose,
-  sampleClipToPoseWithContext,
   samplePackedRuntimeAnimationToPose,
-  skinVertices,
   solveAimIk,
   solveFootPlant,
   solveTwoBoneIkModel,
@@ -572,13 +568,13 @@ function assertMandatoryRuntimeStaticAudit(): void {
 function assertWasmAnimationRuntimeParity(kernel: WaifuAnimationWasmKernel): void {
   const fixture = createWasmKernelSyntheticFixture({ jointCount: 9, keyCount: 5, vertexCount: 0, phase: 0.21 });
   const createPair = () => {
-    const scalar = new AnimationRuntime(fixture.skeleton, { blendThreshold: 0.1 });
+    const scalar = new ReferenceAnimationRuntime(fixture.skeleton, { blendThreshold: 0.1 });
     const backend = createWasmAnimationRuntimeBackend(kernel, fixture.skeleton, { maxLayers: 8 });
     assert.ok(backend, "runtime backend should initialize from an ABI v1.2 kernel");
-    const accelerated = new AnimationRuntime(fixture.skeleton, { blendThreshold: 0.1, backend });
+    const accelerated = new AnimationRuntime(backend, { blendThreshold: 0.1 });
     return { scalar, accelerated };
   };
-  const addLayers = (runtime: AnimationRuntime) => {
+  const addLayers = (runtime: Pick<AnimationRuntime, "setLayer">) => {
     runtime.setLayer("base-a", fixture.clip, {
       weight: 0.65,
       targetWeight: 0.65,
@@ -619,7 +615,20 @@ function assertWasmAnimationRuntimeParity(kernel: WaifuAnimationWasmKernel): voi
   for (const delta of [0, 1 / 60, 0.4, 1.7, 0.03]) {
     const scalarMotion = pair.scalar.update(delta, { collectRootMotion: true });
     const wasmMotion = pair.accelerated.update(delta, { collectRootMotion: true });
-    assert.deepEqual(wasmMotion, scalarMotion, "WASM runtime must leave TypeScript root-motion collection exact");
+    assert.deepEqual(
+      wasmMotion.rootMotionLayers.map(({ id, carrier }) => ({ id, carrier })),
+      scalarMotion.rootMotionLayers.map(({ id, carrier }) => ({ id, carrier })),
+      "WASM root-motion ownership and carriers must match the reference"
+    );
+    assertAllFinite(wasmMotion.rootMotionDelta, "WASM root motion");
+    assert.ok(
+      vectorNearlyEqual(wasmMotion.rootMotionDelta.translation, scalarMotion.rootMotionDelta.translation, 0.05),
+      "WASM root-motion translation should remain within f32 interval parity"
+    );
+    assert.ok(
+      vectorNearlyEqual(wasmMotion.rootMotionDelta.scale, scalarMotion.rootMotionDelta.scale, 0.02),
+      "WASM root-motion scale should remain within f32 interval parity"
+    );
     const scalarEvaluation = pair.scalar.evaluate();
     const wasmEvaluation = pair.accelerated.evaluate();
     assert.deepEqual(wasmEvaluation.activeLayers, scalarEvaluation.activeLayers, "runtime scheduling snapshot parity");
@@ -678,7 +687,7 @@ function assertWasmAnimationRuntimeParity(kernel: WaifuAnimationWasmKernel): voi
 
   const capacityBackend = createWasmAnimationRuntimeBackend(kernel, fixture.skeleton, { maxLayers: 1 });
   assert.ok(capacityBackend);
-  const capacityRuntime = new AnimationRuntime(fixture.skeleton, { backend: capacityBackend });
+  const capacityRuntime = new AnimationRuntime(capacityBackend);
   capacityRuntime.setLayer("one", fixture.clip, { weight: 1, targetWeight: 1 });
   assert.throws(
     () => capacityRuntime.setLayer("two", fixture.overlayClip, { weight: 1, targetWeight: 1 }),

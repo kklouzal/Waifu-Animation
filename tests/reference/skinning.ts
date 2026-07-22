@@ -1,5 +1,5 @@
-import { type Mat4 } from "./math.js";
-import { finiteOr } from "./numeric-helpers.js";
+import { type Mat4, multiplyMat4 } from "../../src/math.js";
+import { cloneFiniteMat4, finiteOr, isFiniteMat4 } from "../../src/numeric-helpers.js";
 
 export type SkinningNumericArray = ArrayLike<number>;
 export type SkinningMutableArray = Float32Array | number[];
@@ -83,6 +83,15 @@ export type SkinningMatrixPaletteOptions = {
 type AttributeInputLayout = Required<SkinningAttributeInput>;
 type AttributeOutputLayout = Required<SkinningAttributeOutput>;
 
+type SkinningInputSnapshots = {
+  positions?: number[];
+  normals?: number[];
+  tangents?: number[];
+  jointIndices?: number[];
+  jointWeights?: number[];
+};
+
+const IDENTITY_MAT4 = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) as Mat4;
 const MAX_SKINNING_INFLUENCES = 256;
 const MAX_SKINNING_OUTPUT_COMPONENTS = 16_777_216;
 const MAX_SKINNING_VALIDATION_COMPONENTS = 1_000_000;
@@ -257,6 +266,243 @@ export function validateSkinningJob(job: SkinningJob): SkinningValidationIssue[]
     issues
   );
   return issues;
+}
+
+export function buildSkinningMatrixPalette(
+  modelMatrices: readonly SkinningNumericArray[],
+  inverseBindMatrices: readonly SkinningNumericArray[],
+  options: SkinningMatrixPaletteOptions = {}
+): Mat4[] {
+  const paletteCount = options.jointRemaps
+    ? Math.min(safeArrayLength(options.jointRemaps), inverseBindMatrices.length, MAX_SKINNING_PALETTE_MATRICES)
+    : Math.min(modelMatrices.length, inverseBindMatrices.length, MAX_SKINNING_PALETTE_MATRICES);
+  const modelSnapshot = modelMatrices
+    .slice(0, MAX_SKINNING_PALETTE_MATRICES)
+    .map((matrix) => cloneExactFiniteMat4(matrix));
+  const inverseBindSnapshot = inverseBindMatrices.slice(0, paletteCount).map((matrix) => cloneExactFiniteMat4(matrix));
+  const remapSnapshot = options.jointRemaps ? snapshotNumericArray(options.jointRemaps, paletteCount) : undefined;
+  const out = options.out ?? [];
+  out.length = paletteCount;
+  for (let index = 0; index < paletteCount; index += 1) {
+    const modelIndex = remapSnapshot ? sanitizePaletteIndex(remapSnapshot[index], modelSnapshot.length) : index;
+    const model = modelSnapshot[modelIndex] ?? IDENTITY_MAT4;
+    const inverseBind = inverseBindSnapshot[index] ?? IDENTITY_MAT4;
+    out[index] = cloneExactFiniteMat4(multiplyMat4(model, inverseBind));
+  }
+  return out;
+}
+
+export function skinVertices(job: SkinningJob): SkinningResult {
+  const issues = validateSkinningJob(job);
+  const influences = sanitizeInfluenceCount(job.influences);
+  const vertexCount = sanitizeVertexCount(job.vertexCount, job.positions, [
+    job.outPositions,
+    job.normals ? job.outNormals : undefined,
+    job.tangents && job.normals ? job.outTangents : undefined
+  ]);
+  const weightMode = job.weightMode === "explicit" ? "explicit" : "restored-last";
+  const jointMatrices = resolveJointMatrices(job);
+  const vectorMatrices = job.jointInverseTransposeMatrices
+    ?.slice(0, jointMatrices.length)
+    .map((matrix, index) => cloneExactFiniteMat4(matrix, jointMatrices[index]));
+  const positionsInput = job.positions ?? { data: [] };
+  const positionIn = resolveAttributeInput(positionsInput);
+  const normalIn = job.normals ? resolveAttributeInput(job.normals) : null;
+  const tangentIn = job.tangents && normalIn ? resolveAttributeInput(job.tangents) : null;
+  const positionOut = resolveAttributeOutput(job.outPositions, vertexCount);
+  let normalOut = normalIn ? resolveAttributeOutput(job.outNormals, vertexCount) : null;
+  let tangentOut = tangentIn ? resolveAttributeOutput(job.outTangents, vertexCount) : null;
+  if (normalOut && outputRegionsOverlap(positionOut, normalOut, vertexCount)) {
+    normalOut = allocateAttributeOutput(job.outNormals, vertexCount);
+  }
+  if (
+    tangentOut &&
+    (outputRegionsOverlap(positionOut, tangentOut, vertexCount) ||
+      (normalOut !== null && outputRegionsOverlap(normalOut, tangentOut, vertexCount)))
+  ) {
+    tangentOut = allocateAttributeOutput(job.outTangents, vertexCount);
+  }
+  const jointIndexOffset = sanitizeSafeNonNegativeInteger(job.jointIndexOffset, 0);
+  const jointIndexStride = sanitizeSafePositiveInteger(job.jointIndexStride, influences);
+  const defaultWeightStride = weightMode === "explicit" ? influences : Math.max(0, influences - 1);
+  const jointWeightOffset = sanitizeSafeNonNegativeInteger(job.jointWeightOffset, 0);
+  const jointWeightStride = sanitizeSafeNonNegativeInteger(job.jointWeightStride, defaultWeightStride);
+  const snapshots = snapshotAliasedInputs(job, vertexCount, positionOut, normalOut, tangentOut);
+  const jointIndexData = snapshots.jointIndices ?? job.jointIndices;
+  const jointWeightData = snapshots.jointWeights ?? job.jointWeights;
+
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const inputPositionBase = positionIn.offset + vertex * positionIn.stride;
+    const position = readVec3(snapshots.positions ?? positionIn.data, inputPositionBase);
+    const normal = normalIn
+      ? readVec3(snapshots.normals ?? normalIn.data, normalIn.offset + vertex * normalIn.stride)
+      : null;
+    const tangent = tangentIn
+      ? readVec3(snapshots.tangents ?? tangentIn.data, tangentIn.offset + vertex * tangentIn.stride)
+      : null;
+    let outPx = 0;
+    let outPy = 0;
+    let outPz = 0;
+    let outNx = 0;
+    let outNy = 0;
+    let outNz = 0;
+    let outTx = 0;
+    let outTy = 0;
+    let outTz = 0;
+    const weights = resolveInfluenceWeights(
+      jointWeightData,
+      vertex,
+      influences,
+      weightMode,
+      jointWeightOffset,
+      jointWeightStride
+    );
+
+    for (let influence = 0; influence < influences; influence += 1) {
+      const jointSlot = jointIndexOffset + vertex * jointIndexStride + influence;
+      const jointIndex = sanitizePaletteIndex(jointIndexData?.[jointSlot], jointMatrices.length);
+      const weight = weights[influence]!;
+      if (weight === 0) continue;
+
+      const matrix = jointMatrices[jointIndex] ?? IDENTITY_MAT4;
+      const skinnedPosition = transformPointComponents(matrix, position[0], position[1], position[2]);
+      outPx += skinnedPosition[0] * weight;
+      outPy += skinnedPosition[1] * weight;
+      outPz += skinnedPosition[2] * weight;
+
+      if (normal) {
+        const vectorMatrix = vectorMatrices?.[jointIndex] ?? matrix;
+        const skinnedNormal = transformVectorComponents(vectorMatrix, normal[0], normal[1], normal[2]);
+        outNx += skinnedNormal[0] * weight;
+        outNy += skinnedNormal[1] * weight;
+        outNz += skinnedNormal[2] * weight;
+      }
+      if (tangent) {
+        const vectorMatrix = vectorMatrices?.[jointIndex] ?? matrix;
+        const skinnedTangent = transformVectorComponents(vectorMatrix, tangent[0], tangent[1], tangent[2]);
+        outTx += skinnedTangent[0] * weight;
+        outTy += skinnedTangent[1] * weight;
+        outTz += skinnedTangent[2] * weight;
+      }
+    }
+
+    writeFiniteResultVec3(
+      positionOut.data,
+      positionOut.offset + vertex * positionOut.stride,
+      outPx,
+      outPy,
+      outPz,
+      "positions",
+      vertex,
+      issues
+    );
+    if (normalOut) {
+      writeFiniteResultVec3(
+        normalOut.data,
+        normalOut.offset + vertex * normalOut.stride,
+        outNx,
+        outNy,
+        outNz,
+        "normals",
+        vertex,
+        issues
+      );
+    }
+    if (tangentOut) {
+      writeFiniteResultVec3(
+        tangentOut.data,
+        tangentOut.offset + vertex * tangentOut.stride,
+        outTx,
+        outTy,
+        outTz,
+        "tangents",
+        vertex,
+        issues
+      );
+    }
+  }
+
+  const result: SkinningResult = {
+    vertexCount,
+    influences,
+    issues,
+    positions: positionOut.data
+  };
+  if (normalOut) result.normals = normalOut.data;
+  if (tangentOut) result.tangents = tangentOut.data;
+  return result;
+}
+
+function resolveJointMatrices(job: SkinningJob): Mat4[] {
+  if (job.jointMatrices?.length) {
+    return job.jointMatrices.slice(0, MAX_SKINNING_PALETTE_MATRICES).map((matrix) => cloneExactFiniteMat4(matrix));
+  }
+  if (job.modelMatrices && job.inverseBindMatrices) {
+    const palette = buildSkinningMatrixPalette(
+      job.modelMatrices,
+      job.inverseBindMatrices,
+      job.jointRemaps ? { jointRemaps: job.jointRemaps } : {}
+    );
+    return palette.length > 0 ? palette : [new Float32Array(IDENTITY_MAT4)];
+  }
+  return [new Float32Array(IDENTITY_MAT4)];
+}
+
+function resolveInfluenceWeights(
+  weights: SkinningNumericArray | undefined,
+  vertex: number,
+  influences: number,
+  weightMode: SkinningWeightMode,
+  weightOffset: number,
+  weightStride: number
+): number[] {
+  if (influences === 1 && weightMode === "restored-last") return [1];
+  const resolved = new Array<number>(influences).fill(0);
+  const storedCount = weightMode === "explicit" ? influences : influences - 1;
+  let sum = 0;
+  for (let influence = 0; influence < storedCount; influence += 1) {
+    const weightSlot = weightOffset + vertex * weightStride + influence;
+    const candidate = Math.min(1, Math.max(0, finiteOr(weights?.[weightSlot], 0)));
+    const weight = weightMode === "restored-last" ? Math.min(candidate, Math.max(0, 1 - sum)) : candidate;
+    resolved[influence] = weight;
+    sum += weight;
+  }
+  if (weightMode === "restored-last") {
+    resolved[influences - 1] = Math.max(0, 1 - sum);
+  } else if (sum > 1) {
+    for (let influence = 0; influence < influences; influence += 1) {
+      resolved[influence] = resolved[influence]! / sum;
+    }
+  } else if (sum <= 0) {
+    resolved[0] = 1;
+  }
+  return resolved;
+}
+
+function transformPointComponents(
+  matrix: SkinningNumericArray,
+  x: number,
+  y: number,
+  z: number
+): [number, number, number] {
+  return [
+    finiteOr(matrix[0], 0) * x + finiteOr(matrix[4], 0) * y + finiteOr(matrix[8], 0) * z + finiteOr(matrix[12], 0),
+    finiteOr(matrix[1], 0) * x + finiteOr(matrix[5], 0) * y + finiteOr(matrix[9], 0) * z + finiteOr(matrix[13], 0),
+    finiteOr(matrix[2], 0) * x + finiteOr(matrix[6], 0) * y + finiteOr(matrix[10], 0) * z + finiteOr(matrix[14], 0)
+  ];
+}
+
+function transformVectorComponents(
+  matrix: SkinningNumericArray,
+  x: number,
+  y: number,
+  z: number
+): [number, number, number] {
+  return [
+    finiteOr(matrix[0], 0) * x + finiteOr(matrix[4], 0) * y + finiteOr(matrix[8], 0) * z,
+    finiteOr(matrix[1], 0) * x + finiteOr(matrix[5], 0) * y + finiteOr(matrix[9], 0) * z,
+    finiteOr(matrix[2], 0) * x + finiteOr(matrix[6], 0) * y + finiteOr(matrix[10], 0) * z
+  ];
 }
 
 function validateAttributeInput(
@@ -639,6 +885,22 @@ function resolveAttributeInput(input: SkinningAttributeInput): AttributeInputLay
   };
 }
 
+function resolveAttributeOutput(
+  output: SkinningAttributeOutput | undefined,
+  vertexCount: number
+): AttributeOutputLayout {
+  const resolved = resolveAttributeOutputLayout(output);
+  if (vertexCount <= 0) {
+    if (output?.data) return { ...resolved, data: output.data };
+    return { ...resolved, data: new Float32Array(0) };
+  }
+  const requiredLength = safeRequiredLength(vertexCount, resolved.offset, resolved.stride, 3);
+  const boundedRequiredLength = requiredLength === null ? 0 : Math.min(requiredLength, MAX_SKINNING_OUTPUT_COMPONENTS);
+  const reusable = output?.data;
+  if (reusable && safeArrayLength(reusable) >= boundedRequiredLength) return { ...resolved, data: reusable };
+  return { ...resolved, data: new Float32Array(boundedRequiredLength) };
+}
+
 function resolveAttributeOutputLayout(
   output: SkinningAttributeOutput | undefined
 ): Omit<AttributeOutputLayout, "data"> {
@@ -648,12 +910,208 @@ function resolveAttributeOutputLayout(
   };
 }
 
+function allocateAttributeOutput(
+  output: SkinningAttributeOutput | undefined,
+  vertexCount: number
+): AttributeOutputLayout {
+  const layout = resolveAttributeOutputLayout(output);
+  if (vertexCount <= 0) return { ...layout, data: new Float32Array(0) };
+  const requiredLength = safeRequiredLength(vertexCount, layout.offset, layout.stride, 3);
+  const boundedRequiredLength = requiredLength === null ? 0 : Math.min(requiredLength, MAX_SKINNING_OUTPUT_COMPONENTS);
+  return { ...layout, data: new Float32Array(boundedRequiredLength) };
+}
+
+function readVec3(data: SkinningNumericArray, offset: number): [number, number, number] {
+  return [finiteOr(data[offset], 0), finiteOr(data[offset + 1], 0), finiteOr(data[offset + 2], 0)];
+}
+
+function writeFiniteResultVec3(
+  data: SkinningMutableArray,
+  offset: number,
+  x: number,
+  y: number,
+  z: number,
+  field: string,
+  vertex: number,
+  issues: SkinningValidationIssue[]
+): void {
+  const repairedX = finiteOutputComponent(data, x);
+  const repairedY = finiteOutputComponent(data, y);
+  const repairedZ = finiteOutputComponent(data, z);
+  if (repairedX !== x || repairedY !== y || repairedZ !== z) {
+    issues.push({ field, index: vertex, message: `skinning ${field} vertex ${vertex} produced out-of-range values` });
+  }
+  data[offset] = repairedX;
+  data[offset + 1] = repairedY;
+  data[offset + 2] = repairedZ;
+}
+
+function finiteOutputComponent(data: SkinningMutableArray, value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return data instanceof Float32Array && !Number.isFinite(Math.fround(value)) ? 0 : value;
+}
+
+function sanitizePaletteIndex(value: number | undefined, paletteLength: number): number {
+  if (paletteLength <= 0 || !Number.isSafeInteger(value)) return 0;
+  const index = value as number;
+  if (index < 0 || index >= paletteLength) return 0;
+  return index;
+}
+
+function cloneExactFiniteMat4(matrix: SkinningNumericArray | undefined, fallback?: SkinningNumericArray): Mat4 {
+  if (isExactFiniteMat4(matrix)) {
+    const clone = cloneFiniteMat4(matrix);
+    if (isFiniteMat4(clone)) return clone;
+  }
+  if (isExactFiniteMat4(fallback)) {
+    const clone = cloneFiniteMat4(fallback);
+    if (isFiniteMat4(clone)) return clone;
+  }
+  return new Float32Array(IDENTITY_MAT4);
+}
+
 function isExactFiniteMat4(matrix: SkinningNumericArray | undefined): matrix is SkinningNumericArray {
   if (matrix?.length !== 16) return false;
   for (let index = 0; index < 16; index += 1) {
     if (!Number.isFinite(matrix[index]) || !Number.isFinite(Math.fround(matrix[index]!))) return false;
   }
   return true;
+}
+
+function snapshotAliasedInputs(
+  job: SkinningJob,
+  vertexCount: number,
+  positionOut: AttributeOutputLayout,
+  normalOut: AttributeOutputLayout | null,
+  tangentOut: AttributeOutputLayout | null
+): SkinningInputSnapshots {
+  const snapshots: SkinningInputSnapshots = {};
+  const outputs = [positionOut, normalOut, tangentOut].filter(
+    (output): output is AttributeOutputLayout => output !== null
+  );
+  if (job.positions) {
+    const input = resolveAttributeInput(job.positions);
+    if (outputs.some((output) => inputOverlapsOutput(input, output, vertexCount))) {
+      snapshots.positions = snapshotAttributeInputData(input, vertexCount);
+    }
+  }
+  if (job.normals) {
+    const input = resolveAttributeInput(job.normals);
+    if (outputs.some((output) => inputOverlapsOutput(input, output, vertexCount))) {
+      snapshots.normals = snapshotAttributeInputData(input, vertexCount);
+    }
+  }
+  if (job.tangents) {
+    const input = resolveAttributeInput(job.tangents);
+    if (outputs.some((output) => inputOverlapsOutput(input, output, vertexCount))) {
+      snapshots.tangents = snapshotAttributeInputData(input, vertexCount);
+    }
+  }
+  const jointIndexOffset = sanitizeSafeNonNegativeInteger(job.jointIndexOffset, 0);
+  const influences = sanitizeInfluenceCount(job.influences);
+  const jointIndexStride = sanitizeSafePositiveInteger(job.jointIndexStride, influences);
+  if (
+    job.jointIndices &&
+    outputs.some((output) =>
+      indexedInputOverlapsOutput(job.jointIndices!, jointIndexOffset, jointIndexStride, influences, vertexCount, output)
+    )
+  ) {
+    snapshots.jointIndices = snapshotIndexedInputData(
+      job.jointIndices,
+      jointIndexOffset,
+      jointIndexStride,
+      influences,
+      vertexCount
+    );
+  }
+  const weightMode = job.weightMode === "explicit" ? "explicit" : "restored-last";
+  const storedWeightCount = weightMode === "explicit" ? influences : Math.max(0, influences - 1);
+  const jointWeightOffset = sanitizeSafeNonNegativeInteger(job.jointWeightOffset, 0);
+  const jointWeightStride = sanitizeSafeNonNegativeInteger(job.jointWeightStride, storedWeightCount);
+  if (
+    job.jointWeights &&
+    outputs.some((output) =>
+      indexedInputOverlapsOutput(
+        job.jointWeights!,
+        jointWeightOffset,
+        jointWeightStride,
+        storedWeightCount,
+        vertexCount,
+        output
+      )
+    )
+  ) {
+    snapshots.jointWeights = snapshotIndexedInputData(
+      job.jointWeights,
+      jointWeightOffset,
+      jointWeightStride,
+      storedWeightCount,
+      vertexCount
+    );
+  }
+  return snapshots;
+}
+
+function snapshotAttributeInputData(input: AttributeInputLayout, vertexCount: number): number[] {
+  const requiredLength = safeRequiredLength(vertexCount, input.offset, input.stride, 3);
+  const length = Math.min(safeArrayLength(input.data), requiredLength ?? 0, MAX_SKINNING_OUTPUT_COMPONENTS);
+  return snapshotNumericArray(input.data, length);
+}
+
+function snapshotIndexedInputData(
+  input: SkinningNumericArray,
+  offset: number,
+  stride: number,
+  requiredPerVertex: number,
+  vertexCount: number
+): number[] {
+  const requiredLength = safeRequiredLength(vertexCount, offset, stride, requiredPerVertex);
+  const length = Math.min(safeArrayLength(input), requiredLength ?? 0, MAX_SKINNING_OUTPUT_COMPONENTS);
+  return snapshotNumericArray(input, length);
+}
+
+function snapshotNumericArray(input: SkinningNumericArray, maxLength = safeArrayLength(input)): number[] {
+  const length = Math.min(safeArrayLength(input), maxLength, MAX_SKINNING_OUTPUT_COMPONENTS);
+  const snapshot = new Array<number>(length);
+  for (let index = 0; index < length; index += 1) {
+    snapshot[index] = input[index] ?? Number.NaN;
+  }
+  return snapshot;
+}
+
+function inputOverlapsOutput(input: AttributeInputLayout, output: AttributeOutputLayout, vertexCount: number): boolean {
+  return stridedStorageOverlap(
+    input.data,
+    input.offset,
+    input.stride,
+    3,
+    output.data,
+    output.offset,
+    output.stride,
+    3,
+    vertexCount
+  );
+}
+
+function indexedInputOverlapsOutput(
+  input: SkinningNumericArray,
+  offset: number,
+  stride: number,
+  requiredPerVertex: number,
+  vertexCount: number,
+  output: AttributeOutputLayout
+): boolean {
+  return stridedStorageOverlap(
+    input,
+    offset,
+    stride,
+    requiredPerVertex,
+    output.data,
+    output.offset,
+    output.stride,
+    3,
+    vertexCount
+  );
 }
 
 function outputRegionsOverlap(a: AttributeOutputLayout, b: AttributeOutputLayout, vertexCount: number): boolean {

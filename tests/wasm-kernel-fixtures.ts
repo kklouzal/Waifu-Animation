@@ -1,6 +1,6 @@
-import type { AnimationClip, AnimationRuntime, Mat4, Skeleton, SkinningJob } from "./test-api.js";
+import type { AnimationClip, Mat4, Skeleton, SkinningJob } from "./test-api.js";
 import {
-  AnimationRuntime as Runtime,
+  ReferenceAnimationRuntime as Runtime,
   createSkeleton,
   quatFromAxisAngle,
   sanitizeQuaternionTrackValues,
@@ -66,7 +66,7 @@ export function createWasmKernelSyntheticFixture(options: WasmKernelSyntheticOpt
   };
 }
 
-export function createWasmKernelRuntime(fixture: WasmKernelSyntheticFixture): AnimationRuntime {
+export function createWasmKernelRuntime(fixture: WasmKernelSyntheticFixture): Runtime {
   const runtime = new Runtime(fixture.skeleton, { blendThreshold: 0.01 });
   runtime.setLayer("base", fixture.clip, { weight: 1, targetWeight: 1, loop: true, priority: 0 });
   runtime.setLayer("overlay", fixture.overlayClip, {

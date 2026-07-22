@@ -1,7 +1,9 @@
 import { type Mat4, type Transform, normalizeQuat } from "./math.js";
+import { type AnimationClip } from "./clip-types.js";
 import { NO_PARENT, type LocalToModelPoseRangeOptions, type Skeleton } from "./skeleton.js";
 import {
   validatePackedRuntimeAnimation,
+  buildPackedRuntimeAnimation,
   type PackedRuntimeAnimation,
   type PackedRuntimeAnimationKeyController
 } from "./packed-runtime.js";
@@ -15,6 +17,7 @@ export const WA_KERNEL_PACKED_SAMPLING_ABI_MINOR = 2;
 export const WA_KERNEL_SKINNING_ABI_MINOR = 3;
 export const WA_KERNEL_PROCEDURAL_CORRECTIONS_ABI_MINOR = 4;
 export const WA_KERNEL_EXECUTION_MODE_ABI_MINOR = 5;
+export const WA_KERNEL_ROOT_MOTION_ABI_MINOR = 6;
 
 export const WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL = 1 << 0;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_BLEND = 1 << 1;
@@ -161,6 +164,20 @@ export type WaKernelRawExports = {
     jointCount: number,
     time: number,
     flags: number
+  ) => number;
+  wa_sample_packed_clip_joint?: (
+    avatarHandle: number,
+    clipHandle: number,
+    contextHandle: number,
+    restPoseOffset: number,
+    restPoseCapacityBytes: number,
+    outputPoseOffset: number,
+    outputPoseCapacityBytes: number,
+    jointCount: number,
+    time: number,
+    flags: number,
+    joint: number,
+    outTransformOffset: number
   ) => number;
   wa_sample_packed_clip_ratio?: (
     avatarHandle: number,
@@ -518,7 +535,8 @@ export function validateWaifuAnimationKernelExports(
       "wa_create_sampling_context",
       "wa_reset_sampling_context",
       "wa_sample_packed_clip",
-      "wa_sample_packed_clip_ratio"
+      "wa_sample_packed_clip_ratio",
+      "wa_sample_packed_clip_joint"
     ]) {
       if (typeof exports[name] !== "function") {
         return { ok: false, reason: `missing-export:${name}`, major, minor, featureFlags };
@@ -657,6 +675,14 @@ export class WaifuAnimationWasmKernel {
     const validation = validateWaifuAnimationKernelExports(this.exports, WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING);
     if (!validation.ok) throw new Error(`WASM retained packed sampling unavailable: ${validation.reason}`);
     return new WasmPackedClipAsset(this, skeleton, animation);
+  }
+
+  /**
+   * Create a retained ordinary-clip sampler. Conversion to the numeric packed
+   * asset is import/setup work; every sample is executed by the Rust kernel.
+   */
+  createClipSamplingContext(skeleton: Skeleton, clip: AnimationClip): WasmClipSamplingContext {
+    return new WasmClipSamplingContext(this, skeleton, clip);
   }
 
   createSkinningContext(options: WasmSkinningContextOptions): WasmSkinningContext {
@@ -860,6 +886,40 @@ export class WaifuAnimationWasmKernel {
         input.jointCount,
         input.value,
         input.flags
+      )
+    );
+  }
+
+  invokePackedJointSample(input: {
+    avatarHandle: number;
+    clipHandle: number;
+    contextHandle: number;
+    restPoseOffset: number;
+    restPoseCapacityBytes: number;
+    outputPoseOffset: number;
+    outputPoseCapacityBytes: number;
+    jointCount: number;
+    time: number;
+    flags: number;
+    joint: number;
+    outTransformOffset: number;
+  }): WaKernelStatus {
+    const invoke = this.exports.wa_sample_packed_clip_joint;
+    if (!invoke) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      invoke(
+        input.avatarHandle,
+        input.clipHandle,
+        input.contextHandle,
+        input.restPoseOffset,
+        input.restPoseCapacityBytes,
+        input.outputPoseOffset,
+        input.outputPoseCapacityBytes,
+        input.jointCount,
+        input.time,
+        input.flags,
+        input.joint,
+        input.outTransformOffset
       )
     );
   }
@@ -1508,6 +1568,7 @@ export type WasmPackedSamplingSnapshot = {
 export class WasmPackedClipSamplingContext {
   readonly lowerKeysOffset: number;
   readonly handle: number;
+  readonly transformOutputOffset: number;
   private readonly kernel: WaifuAnimationWasmKernel;
   private readonly arena: WasmPoseArenaContext;
   private readonly asset: WasmPackedClipAsset;
@@ -1528,6 +1589,7 @@ export class WasmPackedClipSamplingContext {
     this.arena = arena;
     this.asset = asset;
     this.lowerKeysOffset = kernel.allocateBytes(asset.trackCount * F32_BYTES, DEFAULT_ALIGNMENT);
+    this.transformOutputOffset = kernel.allocateBytes(10 * F32_BYTES, DEFAULT_ALIGNMENT);
     this.handle = kernel.createSamplingContext(asset.handle, this.lowerKeysOffset, asset.trackCount);
     this.avatarHandle = avatarHandle;
   }
@@ -1575,6 +1637,37 @@ export class WasmPackedClipSamplingContext {
     const status = this.sampleTime(time, outputPose, options);
     if (status !== WaKernelStatus.Ok) throw new WaKernelJobError("packed-sampling", status);
     return { kind: this.kernel.executionMode === "simd" ? "wasm-simd" : "wasm-scalar", status };
+  }
+
+  /** Sample one carrier joint and materialize its TRS directly from Rust. */
+  sampleJointTime(time: number, joint: number, options: WasmPackedSamplingOptions = {}): Transform {
+    if (this.destroyed || !this.asset.available) throw new Error("WASM packed sampling context is disposed");
+    if (!Number.isInteger(joint) || joint < 0 || joint >= this.arena.jointCount)
+      throw new Error("sample joint is outside the skeleton range");
+    const loop = options.loop ?? this.asset.animation.loop;
+    let flags = loop ? SAMPLE_FLAG_LOOP : 0;
+    if (options.resetCache === true) flags |= SAMPLE_FLAG_RESET_CACHE;
+    const status = this.kernel.invokePackedJointSample({
+      avatarHandle: this.avatarHandle,
+      clipHandle: this.asset.handle,
+      contextHandle: this.handle,
+      restPoseOffset: this.arena.poseOffset(0),
+      restPoseCapacityBytes: this.arena.poseStrideBytes,
+      outputPoseOffset: this.arena.poseOffset(1),
+      outputPoseCapacityBytes: this.arena.poseStrideBytes,
+      jointCount: this.arena.jointCount,
+      time,
+      flags,
+      joint,
+      outTransformOffset: this.transformOutputOffset
+    });
+    if (status !== WaKernelStatus.Ok) throw new WaKernelJobError("packed-joint-sampling", status);
+    const values = new Float32Array(this.kernel.memory.buffer, this.transformOutputOffset, 10);
+    return {
+      translation: [values[0]!, values[1]!, values[2]!],
+      rotation: [values[3]!, values[4]!, values[5]!, values[6]!],
+      scale: [values[7]!, values[8]!, values[9]!]
+    };
   }
 
   invokeRawForTests(
@@ -1643,6 +1736,69 @@ export class WasmPackedClipSamplingContext {
     }
     return status;
   }
+}
+
+/** Required-kernel facade for ordinary AnimationClip sampling. */
+export class WasmClipSamplingContext {
+  readonly arena: WasmPoseArenaContext;
+  readonly asset: WasmPackedClipAsset;
+  readonly sampler: WasmPackedClipSamplingContext;
+  private destroyed = false;
+
+  constructor(
+    private readonly kernel: WaifuAnimationWasmKernel,
+    readonly skeleton: Skeleton,
+    readonly clip: AnimationClip
+  ) {
+    this.arena = kernel.createPoseArenaContext(skeleton, { poseCapacity: 2 });
+    this.asset = kernel.createPackedClipAsset(skeleton, buildPackedRuntimeAnimation(clip, skeleton));
+    this.sampler = this.arena.createPackedSamplingContext(this.asset);
+  }
+
+  sampleTime(time: number, options: WasmPackedSamplingOptions = {}, out: Transform[] = []): Transform[] {
+    this.assertAvailable();
+    const status = this.sampler.sampleTime(time, 1, options);
+    if (status !== WaKernelStatus.Ok) throw new WaKernelJobError("clip-sampling", status);
+    return this.arena.copyPoseToTransforms(1, out);
+  }
+
+  sampleRatio(
+    ratio: number,
+    options: Omit<WasmPackedSamplingOptions, "loop"> = {},
+    out: Transform[] = []
+  ): Transform[] {
+    this.assertAvailable();
+    const status = this.sampler.sampleRatio(ratio, 1, options);
+    if (status !== WaKernelStatus.Ok) throw new WaKernelJobError("clip-sampling", status);
+    return this.arena.copyPoseToTransforms(1, out);
+  }
+
+  snapshot(): WasmPackedSamplingSnapshot & { kind: "wasm-scalar" | "wasm-simd" } {
+    return {
+      kind: this.kernel.executionMode === "simd" ? "wasm-simd" : "wasm-scalar",
+      ...this.sampler.snapshot()
+    };
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.sampler.destroy();
+    this.asset.destroy();
+    this.arena.destroy();
+  }
+
+  private assertAvailable(): void {
+    if (this.destroyed) throw new Error("WASM clip sampling context is disposed");
+  }
+}
+
+export function createWasmClipSamplingContext(
+  kernel: WaifuAnimationWasmKernel,
+  skeleton: Skeleton,
+  clip: AnimationClip
+): WasmClipSamplingContext {
+  return kernel.createClipSamplingContext(skeleton, clip);
 }
 
 /**

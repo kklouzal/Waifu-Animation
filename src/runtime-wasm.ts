@@ -1,6 +1,7 @@
 import { type AnimationClip } from "./clip.js";
 import { buildPackedRuntimeAnimation } from "./packed-runtime.js";
 import { type JointMask } from "./pose.js";
+import { carrierTransformDelta, resolveMotionCarrierIndex } from "./motion.js";
 import type {
   AnimationLayer,
   AnimationRuntimeBackend,
@@ -175,6 +176,20 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
     }
   }
 
+  sampleMotionInterval(layer: AnimationLayer, fromTime: number, toTime: number) {
+    const binding = this.bindings.get(layer.id);
+    if (!binding?.sampler) throw new Error(`layer ${layer.id} has no retained WASM sampler`);
+    const jointIndex = resolveMotionCarrierIndex(this.skeleton, layer.motionCarrier);
+    const fromTransform = binding.sampler.sampleJointTime(fromTime, jointIndex, { loop: layer.loop });
+    const toTransform = binding.sampler.sampleJointTime(toTime, jointIndex, { loop: layer.loop });
+    const joint = this.skeleton.joints[jointIndex]?.name ?? "";
+    return {
+      from: { jointIndex, joint, time: fromTime, transform: fromTransform },
+      to: { jointIndex, joint, time: toTime, transform: toTransform },
+      delta: carrierTransformDelta(fromTransform, toTransform)
+    };
+  }
+
   snapshot(): AnimationRuntimeBackendSnapshot {
     return {
       kind: this.kernel.executionMode === "simd" ? "wasm-simd-retained" : "wasm-scalar-retained",
@@ -309,9 +324,8 @@ export async function createWasmAnimationRuntime(
 ): Promise<AnimationRuntime> {
   const loadResult = await loadWaifuAnimationWasmKernel(options.kernel);
   const backend = createWasmAnimationRuntimeBackend(loadResult, skeleton, options.backend);
-  return new AnimationRuntime(skeleton, {
-    ...(options.blendThreshold !== undefined ? { blendThreshold: options.blendThreshold } : {}),
-    backend
+  return new AnimationRuntime(backend, {
+    ...(options.blendThreshold !== undefined ? { blendThreshold: options.blendThreshold } : {})
   });
 }
 

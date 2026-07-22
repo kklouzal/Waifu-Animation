@@ -1,6 +1,6 @@
 import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
   decodeAnimationBinary,
@@ -182,7 +182,7 @@ export async function runCoreRuntimeTargetValidationTests(): Promise<void> {
     quaternionNearlyEqual(ambiguousRuntimeSamplePose[2]!.rotation, skeleton.restPose[2]!.rotation, 1e-6),
     "clip sampling should skip structurally invalid ambiguous target tracks before applying their humanBone target"
   );
-  const ambiguousRuntime = new AnimationRuntime(skeleton);
+  const ambiguousRuntime = new ReferenceAnimationRuntime(skeleton);
   ambiguousRuntime.setLayer("ambiguous", ambiguousRuntimeSampleClip, { weight: 1, targetWeight: 1 });
   const ambiguousEvaluation = ambiguousRuntime.evaluate({ diagnostics: true });
   assert.ok(

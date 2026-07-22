@@ -1,31 +1,51 @@
-import { EPSILON, clamp } from "./math.js";
+import {
+  type Quat,
+  type Vec3,
+  EPSILON,
+  clamp,
+  cloneTransform,
+  euclideanModulo,
+  lerpVec3,
+  normalizeQuat,
+  slerpQuat
+} from "../../src/math.js";
+import { type Pose, readPoseTransformOrRest } from "./pose.js";
 import {
   type HumanoidBoneName,
   type Skeleton,
+  createRestPose,
   isHumanoidBoneName,
   resolveHumanoidIndex,
   resolveJointIndex
-} from "./skeleton.js";
+} from "../../src/skeleton.js";
 import type {
   AnimationClip,
   ClipValidationIssue,
   NormalizedTrackProperty,
   RotationSpace,
+  SampleOptions,
+  SampleRatioOptions,
+  SampleRepairDiagnostic,
   TrackProperty
-} from "./clip-types.js";
-import type { AnimationClipStats, AnimationTrackStats } from "./clip-sampling.js";
+} from "../../src/clip-types.js";
+import type { AnimationClipStats, AnimationTrackStats } from "../../src/clip-sampling.js";
 import {
   ROTATION_QUATERNION_LENGTH_SQUARED_TOLERANCE,
   SOURCE_REST_QUATERNION_LENGTH_SQUARED_TOLERANCE,
+  defaultTrackSample,
   formatClipIssue,
   normalizedTrackProperty,
+  pushRotationSampleRepairDiagnostic,
   quaternionNormalizationIssue,
   readClipTimeRatio,
   readTrackTargetKey,
+  repairVec3Sample,
   resolveTrackJointIndex,
+  retargetSampledRotation,
+  rotationSampleFallback,
   trackStride,
   validateClip
-} from "./clip-internal.js";
+} from "../../src/clip-internal.js";
 
 const PACKED_RUNTIME_PROPERTY_RANK: Readonly<Record<NormalizedTrackProperty, number>> = {
   translation: 0,
@@ -105,6 +125,11 @@ export type PackedRuntimeAnimationStats = AnimationClipStats & {
   seekTableEntryCount: number;
   archive: PackedRuntimeAnimationArchiveMetadata;
   keyControllers: readonly PackedRuntimeAnimationKeyController[];
+};
+
+type TrackSampleOptions = {
+  diagnostics?: SampleRepairDiagnostic[];
+  diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">;
 };
 
 export function tryBuildPackedRuntimeAnimation(
@@ -266,6 +291,36 @@ export function getPackedRuntimeAnimationStats(animation: PackedRuntimeAnimation
     archive: animation.archive,
     keyControllers: animation.keyControllers
   };
+}
+
+export function samplePackedRuntimeAnimationToPose(
+  skeleton: Skeleton,
+  animation: PackedRuntimeAnimation,
+  timeSeconds: number,
+  options: SampleOptions = {}
+): Pose {
+  assertValidPackedRuntimeAnimation(animation, skeleton);
+  return samplePackedRuntimeAnimationAtResolvedTime(
+    animation,
+    skeleton,
+    samplePackedAnimationTime(animation, timeSeconds, options.loop ?? animation.loop),
+    options
+  );
+}
+
+export function samplePackedRuntimeAnimationToPoseAtRatio(
+  skeleton: Skeleton,
+  animation: PackedRuntimeAnimation,
+  ratio: number,
+  options: SampleRatioOptions = {}
+): Pose {
+  assertValidPackedRuntimeAnimation(animation, skeleton);
+  return samplePackedRuntimeAnimationAtResolvedTime(
+    animation,
+    skeleton,
+    samplePackedAnimationRatioToTime(animation, ratio),
+    options
+  );
 }
 
 type PackedRuntimeAnimationBuildTrack = {
@@ -462,18 +517,161 @@ function packedTrackTimeBracket(times: readonly number[], time: number): [number
   if (time <= times[0]!) return [0, 0];
   const last = times.length - 1;
   if (time >= times[last]!) return [last, last];
-  let low = 0;
-  let high = last;
-  while (low + 1 < high) {
-    const middle = (low + high) >>> 1;
-    if (times[middle]! <= time) low = middle;
-    else high = middle;
-  }
-  const lower = low;
+  const lower = findLowerKeyInReadonlyArray(times, 0, times.length, time);
   const upper = lower + 1;
   if (Object.is(time, times[lower]) || time === times[lower]) return [lower, lower];
   if (Object.is(time, times[upper]) || time === times[upper]) return [upper, upper];
   return [lower, upper];
+}
+
+function samplePackedAnimationTime(animation: PackedRuntimeAnimation, timeSeconds: number, loop: boolean): number {
+  if (!Number.isFinite(timeSeconds)) return 0;
+  const duration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : 0;
+  if (loop && duration > 0) return euclideanModulo(timeSeconds, duration);
+  return clamp(timeSeconds, 0, duration);
+}
+
+function samplePackedAnimationRatioToTime(animation: PackedRuntimeAnimation, ratio: number): number {
+  const duration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : 0;
+  return clamp(Number.isFinite(ratio) ? ratio : 0, 0, 1) * duration;
+}
+
+function samplePackedRuntimeAnimationAtResolvedTime(
+  animation: PackedRuntimeAnimation,
+  skeleton: Skeleton,
+  time: number,
+  options: SampleOptions | SampleRatioOptions
+): Pose {
+  const restPose = options.restPose ?? createRestPose(skeleton);
+  const output = Array.from({ length: skeleton.joints.length }, (_, joint) =>
+    cloneTransform(readPoseTransformOrRest(skeleton, restPose, joint))
+  );
+  for (const controller of animation.keyControllers) {
+    const jointIndex = resolvePackedTrackJointIndex(skeleton, controller);
+    if (jointIndex < 0) continue;
+    const diagnosticContext = {
+      track: controller.track,
+      joint: skeleton.joints[jointIndex]?.name ?? controllerTargetName(controller),
+      index: jointIndex
+    };
+    const sampleOptions: TrackSampleOptions = { diagnosticContext };
+    if (options.diagnostics !== undefined) sampleOptions.diagnostics = options.diagnostics;
+    const sampled = samplePackedTrack(animation, controller, time, sampleOptions);
+    const restTransform = readPoseTransformOrRest(skeleton, restPose, jointIndex);
+    const transform = cloneTransform(output[jointIndex]);
+    if (controller.normalizedProperty === "translation") transform.translation = sampled as Vec3;
+    if (controller.normalizedProperty === "scale") transform.scale = sampled as Vec3;
+    if (controller.normalizedProperty === "rotation") {
+      transform.rotation = retargetSampledRotation(
+        controller,
+        restTransform.rotation,
+        sampled as Quat,
+        jointIndex,
+        options,
+        diagnosticContext
+      );
+    }
+    output[jointIndex] = transform;
+  }
+  return output;
+}
+
+function samplePackedTrack(
+  animation: PackedRuntimeAnimation,
+  controller: PackedRuntimeAnimationKeyController,
+  timeSeconds: number,
+  options: TrackSampleOptions = {}
+): number[] {
+  if (controller.keyCount === 0) return defaultTrackSample(controller.normalizedProperty);
+  const firstTime = animation.times[controller.timeOffset] ?? controller.firstTime;
+  if (timeSeconds <= firstTime)
+    return readPackedTrackValue(animation, controller, 0, options.diagnostics, options.diagnosticContext);
+
+  const lastKey = controller.keyCount - 1;
+  const lastTime = animation.times[controller.timeOffset + lastKey] ?? controller.lastTime;
+  if (timeSeconds >= lastTime)
+    return readPackedTrackValue(animation, controller, lastKey, options.diagnostics, options.diagnosticContext);
+
+  const iframeIndex = findExactPackedIframe(animation.iframeTable.times, timeSeconds);
+  if (iframeIndex >= 0) {
+    const lower = controller.seekTable.iframeLowerKeys[iframeIndex] ?? 0;
+    const upper = controller.seekTable.iframeUpperKeys[iframeIndex] ?? lower;
+    return samplePackedTrackBracket(animation, controller, lower, upper, timeSeconds, options);
+  }
+
+  const lower = findLowerKeyInReadonlyArray(animation.times, controller.timeOffset, controller.keyCount, timeSeconds);
+  return samplePackedTrackBracket(animation, controller, lower, lower + 1, timeSeconds, options);
+}
+
+function samplePackedTrackBracket(
+  animation: PackedRuntimeAnimation,
+  controller: PackedRuntimeAnimationKeyController,
+  lower: number,
+  upper: number,
+  timeSeconds: number,
+  options: TrackSampleOptions
+): number[] {
+  if (lower === upper)
+    return readPackedTrackValue(animation, controller, lower, options.diagnostics, options.diagnosticContext);
+  const start = animation.times[controller.timeOffset + lower] ?? controller.firstTime;
+  const end = animation.times[controller.timeOffset + upper] ?? controller.lastTime;
+  const t = end > start ? (timeSeconds - start) / (end - start) : 0;
+  const a = readPackedTrackValue(animation, controller, lower, options.diagnostics, options.diagnosticContext);
+  const b = readPackedTrackValue(animation, controller, upper, options.diagnostics, options.diagnosticContext);
+  if (controller.stride === 4) return slerpQuat(a as Quat, b as Quat, t);
+  return lerpVec3(a as Vec3, b as Vec3, t);
+}
+
+function readPackedTrackValue(
+  animation: PackedRuntimeAnimation,
+  controller: PackedRuntimeAnimationKeyController,
+  keyIndex: number,
+  diagnostics?: SampleRepairDiagnostic[],
+  diagnosticContext?: Pick<SampleRepairDiagnostic, "track" | "joint" | "index">
+): number[] {
+  const offset = controller.valueOffset + keyIndex * controller.stride;
+  const fallback = defaultTrackSample(controller.normalizedProperty);
+  const values = fallback.map((value, index) => animation.values[offset + index] ?? value);
+  if (controller.stride === 4)
+    pushRotationSampleRepairDiagnostic(diagnostics, diagnosticContext, controller, values as Quat, keyIndex);
+  if (controller.stride === 4) return normalizeQuat(values as Quat, rotationSampleFallback(controller));
+  return repairVec3Sample(controller, values as Vec3, fallback as Vec3, keyIndex, diagnostics, diagnosticContext);
+}
+
+function findExactPackedIframe(times: readonly number[], time: number): number {
+  let low = 0;
+  let high = times.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >>> 1;
+    const value = times[mid]!;
+    if (Object.is(value, time) || value === time) return mid;
+    if (value < time) low = mid + 1;
+    else high = mid - 1;
+  }
+  return -1;
+}
+
+function findLowerKeyInReadonlyArray(
+  times: readonly number[],
+  offset: number,
+  keyCount: number,
+  timeSeconds: number
+): number {
+  let low = 1;
+  let high = keyCount - 1;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (times[offset + mid]! < timeSeconds) low = mid + 1;
+    else high = mid;
+  }
+  return low - 1;
+}
+
+function assertValidPackedRuntimeAnimation(animation: PackedRuntimeAnimation, skeleton?: Skeleton): void {
+  const issues = validatePackedRuntimeAnimation(animation, skeleton);
+  if (issues.length > 0) {
+    throw new Error(`packed runtime animation is invalid: ${issues.map(formatClipIssue).join("; ")}`);
+  }
 }
 
 function validatePackedArchiveMetadata(

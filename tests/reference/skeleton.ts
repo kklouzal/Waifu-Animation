@@ -3,9 +3,11 @@ import {
   type Transform,
   cloneTransformList,
   cloneTransform,
+  composeMat4,
   isFiniteTransform,
+  multiplyMat4,
   numericArraysEqual
-} from "./math.js";
+} from "../../src/math.js";
 
 export const NO_PARENT = -1;
 const OZZ_MAX_JOINTS = 1024;
@@ -209,6 +211,8 @@ export type LocalToModelPoseRangeOptions = {
   to?: number;
   /** When true, keeps the `from` joint model matrix as-is and updates only its descendants. */
   fromExcluded?: boolean;
+  /** Optional retained local-to-model context. If supplied, failure is explicit; this never falls back to TypeScript. */
+  kernel?: LocalToModelPoseKernel;
 };
 
 export type JointReference = number | string;
@@ -831,6 +835,89 @@ export function resolveJointIndex(skeleton: Skeleton, nameOrHumanoid: string): n
 
 export function resolveHumanoidIndex(skeleton: Skeleton, bone: HumanoidBoneName): number {
   return skeleton.humanoid.get(bone) ?? -1;
+}
+
+export function localToModelPose(skeleton: Skeleton, localPose: readonly Transform[], out: Mat4[] = []): Mat4[] {
+  return updateLocalToModelPoseRange(skeleton, localPose, out);
+}
+
+export function updateLocalToModelPoseRange(
+  skeleton: Skeleton,
+  localPose: readonly Transform[],
+  out: Mat4[],
+  options: LocalToModelPoseRangeOptions = {}
+): Mat4[] {
+  if (localPose.length !== skeleton.joints.length) {
+    throw new Error(`local pose length ${localPose.length} does not match skeleton ${skeleton.joints.length}`);
+  }
+  const jointCount = skeleton.joints.length;
+  const from = sanitizeLocalToModelBoundary(options.from, NO_PARENT, jointCount, "from", false);
+  const to = sanitizeLocalToModelBoundary(options.to, jointCount - 1, jointCount, "to", true);
+  out.length = skeleton.joints.length;
+  if (to < 0) return out;
+
+  const kernelOptions = createKernelRangeOptions(options, from, to);
+  if (options.kernel) {
+    const retained = options.kernel.tryUpdateLocalToModelPoseRange(skeleton, localPose, out, kernelOptions);
+    if (!retained) throw new Error("retained local-to-model job rejected the supplied skeleton or pose");
+    return retained;
+  }
+
+  const selected = new Uint8Array(jointCount);
+  for (let index = 0; index < jointCount; index += 1) {
+    const parentIndex = skeleton.joints[index]!.parentIndex;
+    if (from === NO_PARENT || index === from) {
+      selected[index] = 1;
+    } else if (parentIndex >= 0 && selected[parentIndex] === 1) {
+      selected[index] = 1;
+    }
+
+    if (selected[index] !== 1 || index > to || (options.fromExcluded === true && index === from)) {
+      continue;
+    }
+
+    const local = composeMat4(localPose[index]!);
+    if (parentIndex === NO_PARENT) {
+      out[index] = options.root ? multiplyMat4(options.root, local) : local;
+      continue;
+    }
+
+    const parentModel = out[parentIndex];
+    if (!parentModel) {
+      throw new Error(`model pose for parent ${parentIndex} must be available before updating joint ${index}`);
+    }
+    out[index] = multiplyMat4(parentModel, local);
+  }
+  return out;
+}
+
+function createKernelRangeOptions(
+  options: LocalToModelPoseRangeOptions,
+  from: number,
+  to: number
+): Omit<LocalToModelPoseRangeOptions, "kernel"> {
+  const kernelOptions: Omit<LocalToModelPoseRangeOptions, "kernel"> = { from, to };
+  if (options.root !== undefined) kernelOptions.root = options.root;
+  if (options.fromExcluded !== undefined) kernelOptions.fromExcluded = options.fromExcluded;
+  return kernelOptions;
+}
+
+function sanitizeLocalToModelBoundary(
+  value: number | undefined,
+  fallback: number,
+  jointCount: number,
+  label: string,
+  clampHigh: boolean
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved)) throw new Error(`local-to-model ${label} must be an integer`);
+  if (resolved === NO_PARENT) return resolved;
+  if (resolved < 0) throw new Error(`local-to-model ${label} is out of range`);
+  if (resolved >= jointCount) {
+    if (clampHigh && jointCount > 0) return jointCount - 1;
+    throw new Error(`local-to-model ${label} is out of range`);
+  }
+  return resolved;
 }
 
 function resolveRequiredJointIndex(skeleton: Skeleton, joint: JointReference, label: string): number {

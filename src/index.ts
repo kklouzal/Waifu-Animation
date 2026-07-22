@@ -4,12 +4,20 @@ export * from "./attachments.js";
 export * from "./pose.js";
 export * from "./clip.js";
 export * from "./tracks.js";
-export * from "./motion.js";
 export * from "./character-controller.js";
 export * from "./character-animation-graph.js";
 export * from "./character-animation-binding.js";
 export * from "./character-animation-runtime-applier.js";
-export * from "./skinning.js";
+export type {
+  SkinningAttributeInput,
+  SkinningAttributeOutput,
+  SkinningJob,
+  SkinningNumericArray,
+  SkinningMutableArray,
+  SkinningValidationIssue,
+  SkinningWeightMode
+} from "./skinning.js";
+export { validateSkinningJob } from "./skinning.js";
 export * from "./baked.js";
 export * from "./binary.js";
 export * from "./runtime.js";
@@ -18,7 +26,7 @@ export * from "./masks.js";
 export * from "./manifest.js";
 export * from "./retargeting.js";
 export * from "./procedural.js";
-export * from "./ik.js";
+export * from "./foot-plant.js";
 export * from "./face.js";
 export * from "./debug.js";
 export * from "./validation.js";

@@ -1,10 +1,10 @@
+import { sampleTrack } from "./clip-sampling.js";
 import { WAIFU_ANIMATION_BINARY_FORMAT, decodeAnimationBinary } from "./binary.js";
 import {
   type AnimationClip,
   type ClipValidationIssue,
   normalizedTrackProperty,
   resolveTrackJointIndex,
-  sampleTrack,
   trackStride,
   validateClip
 } from "./clip.js";

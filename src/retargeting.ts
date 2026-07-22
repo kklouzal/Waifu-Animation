@@ -6,6 +6,8 @@ import {
   ensureShortestQuat,
   invertQuat,
   lengthVec3,
+  composeMat4,
+  multiplyMat4,
   multiplyQuat,
   normalizeQuat,
   normalizeVec3,
@@ -13,7 +15,7 @@ import {
   subVec3
 } from "./math.js";
 import type { AnimationClip } from "./clip-types.js";
-import { type HumanoidBoneName, type Skeleton, localToModelPose, resolveHumanoidIndex } from "./skeleton.js";
+import { type HumanoidBoneName, type Skeleton, resolveHumanoidIndex } from "./skeleton.js";
 
 export { isHumanoidBoneName } from "./skeleton.js";
 
@@ -144,7 +146,7 @@ export function diagnoseRetargetingRestAxes(
     bones?: readonly HumanoidBoneName[];
   } = {}
 ): RetargetingRestAxisDiagnostic[] {
-  const restModel = localToModelPose(skeleton, skeleton.restPose);
+  const restModel = localToModelPoseForAuthoring(skeleton, skeleton.restPose);
   const bones = options.bones ?? DIAGNOSTIC_BONES;
   return bones.flatMap((humanBone) => {
     const jointIndex = resolveHumanoidIndex(skeleton, humanBone);
@@ -235,7 +237,7 @@ function isMalformedQuaternionSample(value: Quat): boolean {
 }
 
 function modelDirection(
-  modelPose: ReturnType<typeof localToModelPose>,
+  modelPose: ReturnType<typeof localToModelPoseForAuthoring>,
   parent: number,
   child: number
 ): Vec3 | undefined {
@@ -279,7 +281,19 @@ function retargetedModelDirection(
   const pose = skeleton.restPose.map((transform, index) =>
     index === jointIndex ? { ...transform, rotation } : transform
   );
-  return modelDirection(localToModelPose(skeleton, pose), jointIndex, childIndex);
+  return modelDirection(localToModelPoseForAuthoring(skeleton, pose), jointIndex, childIndex);
+}
+
+/** Offline retarget diagnostics only. Runtime hierarchy propagation is WASM-owned. */
+function localToModelPoseForAuthoring(skeleton: Skeleton, pose: Skeleton["restPose"]) {
+  const out: ReturnType<typeof composeMat4>[] = [];
+  for (let index = 0; index < pose.length; index += 1) {
+    const local = pose[index]!;
+    const matrix = composeMat4(local);
+    const parent = skeleton.joints[index]!.parentIndex;
+    out[index] = parent < 0 ? matrix : multiplyMat4(out[parent]!, matrix);
+  }
+  return out;
 }
 
 function classifyHingePlane(

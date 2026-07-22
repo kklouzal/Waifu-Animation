@@ -1,6 +1,6 @@
 import type { AnimationClip, Pose, SampleRepairDiagnostic, Skeleton } from "./test-api.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   assert,
   buildPackedRuntimeAnimation,
   clonePose,
@@ -74,12 +74,12 @@ export async function runMotionPoseSamplingTests(): Promise<void> {
     quaternionNearlyEqual(coreRetargetPose[1]!.rotation, coreRetargetExpected, 1e-5),
     "sampleClipToPose should retarget source-rest rotation tracks into the skeleton rest basis"
   );
-  const coreRetargetRuntime = new AnimationRuntime(coreRetargetSkeleton);
+  const coreRetargetRuntime = new ReferenceAnimationRuntime(coreRetargetSkeleton);
   coreRetargetRuntime.setLayer("retargeted", coreRetargetClip, { weight: 1, targetWeight: 1, time: 1 });
   const coreRetargetEvaluation = coreRetargetRuntime.evaluate();
   assert.ok(
     quaternionNearlyEqual(coreRetargetEvaluation.localPose[1]!.rotation, coreRetargetExpected, 1e-5),
-    "AnimationRuntime.evaluate should use the retargeted core sampling path"
+    "ReferenceAnimationRuntime.evaluate should use the retargeted core sampling path"
   );
 
   const normalizedDeltaSourceRest = quatFromAxisAngle([1, 0, 0], Math.PI / 2);
@@ -868,7 +868,7 @@ export async function runMotionPoseSamplingTests(): Promise<void> {
     /unsupported animation track property visibility/,
     "unsupported mapped track properties should not be silently ignored during pose sampling"
   );
-  const unsupportedPropertyRuntime = new AnimationRuntime(skeleton);
+  const unsupportedPropertyRuntime = new ReferenceAnimationRuntime(skeleton);
   unsupportedPropertyRuntime.setLayer("external-invalid", unsupportedPropertyClip, { weight: 1, targetWeight: 1 });
   const unsupportedPropertyRuntimeEvaluation = unsupportedPropertyRuntime.evaluate();
   assertFiniteEvaluation(unsupportedPropertyRuntimeEvaluation);

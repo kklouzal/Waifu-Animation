@@ -40,17 +40,17 @@ npm test
 
 `kernel.createSkinningContext(options)` copies immutable inverse binds, remaps, indices, weights, and layouts once. Callers update retained views and call `run()` or the raw `runRetained()` status seam without per-vertex JS objects or steady-state memory growth. Non-success statuses throw or remain explicit; they never invoke `skinVertices`. Three.js geometry/upload/material ownership remains outside WASM. Destroy contexts at mesh/avatar lifecycle boundaries; the allocator is bump-only and does not reclaim bytes.
 
-Use `await createWasmAnimationRuntime(skeleton, kernelOptions)` or inject `createWasmAnimationRuntimeBackend(initializedKernel, skeleton)` after required async initialization. The resulting synchronous evaluation facade is valid only while its context is alive. Scheduling, fades, root-motion reports, and final object materialization remain TypeScript-owned; unsupported callbacks, malformed jobs, and capacity failures are explicit errors. Retained handles must be released with `runtime.dispose()`. The legacy direct TypeScript numeric APIs remain temporarily package-reachable for compatibility and test oracles, but are not reachable from this retained runtime; see the exact debt inventory in `docs/wasm-kernel-architecture.md`.
+Use `await createWasmAnimationRuntime(skeleton, kernelOptions)` or inject `createWasmAnimationRuntimeBackend(initializedKernel, skeleton)` after required async initialization. The resulting synchronous evaluation facade is valid only while its context is alive. Scheduling, fades, root-motion reports, and final object materialization remain TypeScript-owned; unsupported callbacks, malformed jobs, and capacity failures are explicit errors. Retained handles must be released with `runtime.dispose()`. The package root no longer exports direct TypeScript clip-sampling, pose-composition, hierarchy-propagation, skinning, or IK execution. Differential scalar references live under `tests/reference/**` and are excluded from the package.
 
 ## Public Modules
 
 - `math`: deterministic random helpers, transform math, quaternion interpolation, matrix composition.
-- `skeleton`: Ozz-style skeleton representation, humanoid mapping, local-to-model conversion.
+- `skeleton`: Ozz-style skeleton representation, humanoid mapping, validation, and offline construction; runtime local-to-model execution is WASM-owned.
 - `wasm-kernel`: required scalar/SIMD asset loader, typed initialization/job failures, immutable packed assets, per-avatar sampling caches, reusable SoA pose arenas, composition, local-to-model, skinning, and procedural jobs.
 - `attachments`: renderer-agnostic Ozz-style joint attachment transform helpers.
-- `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
+- `clip`: binary-backed clip types, import-time packing, validation, quaternion continuity, and offline inspection; runtime sampling uses retained WASM contexts.
 - `tracks`: generic user-channel tracks, sampling, optimization, and bounded edge triggering.
-- `motion`: explicit motion-carrier sampling and interval deltas for root-motion consumers.
+- `motion`: offline root-motion extraction and generic motion-track planning; `AnimationRuntime` samples active clip carriers through its retained WASM backend.
 - `root-motion-authority`: explicit physics-driven, animation-driven, and hybrid root-motion authority contracts, runtime carrier selection from `AnimationRuntime` reports, no-double-apply ownership tokens, and engine-agnostic collision reconciliation.
 - `character-controller`: deterministic, engine-agnostic avatar controller foundation for fixed-step movement intent, facing, gait speed, posture/locomotion phases, jump buffering/coyote timing, world-adapter boundaries, animation-facing parameters/events, and snapshot/restore.
 - `navigation`: renderer/physics-agnostic destination/path/waypoint/corridor, topology sampling/path-planning, traversal-link, and local-avoidance contracts plus deterministic `CharacterPathFollower` output to controller movement/facing intent.
@@ -59,15 +59,15 @@ Use `await createWasmAnimationRuntime(skeleton, kernelOptions)` or inject `creat
 - `character-animation-graph`: deterministic, clip-agnostic request graph that turns controller animation state/events into semantic locomotion, posture, airborne, and action playback/blend/transition requests with hysteresis, debouncing, bounds, and snapshot/restore.
 - `character-animation-binding`: reusable semantic binding registry/resolver that maps graph request ids to opaque clip asset ids plus runtime lane, layer, mask, loop, fade, priority, blend-mode, and playback policy metadata without importing Three/VRM APIs or choosing app-specific assets.
 - `character-animation-runtime-applier`: stateful renderer-agnostic bridge from resolved graph bindings to `AnimationRuntime` layers with owned layer namespacing, caller-supplied clip/mask lookup, stale layer retirement, one-shot action identity tracking, and no root-motion authority decisions.
-- `pose`: rest pose creation, blending, additive layers, masks, pose validation.
-- `skinning`: reusable matrix-palette skinning for positions, normals, and tangents.
+- `pose`: pose/mask types, mask construction, and validation; runtime blend/additive/normalize jobs are WASM-owned.
+- `skinning`: typed skinning descriptors and validation; retained palette/vertex execution is exposed by `wasm-kernel`.
 - `baked`: Ozz baked-sample style camera-joint, rigid-instance matrix, and bounds helpers.
 - `runtime`: deterministic layer stack, crossfades, priorities, explicit root-motion delta collection, and final local/model pose evaluation.
 - `masks`: declarative track-name policies for renderer adapters.
 - `manifest`: manifest includes, duplicate/id validation, clip asset inspection, usable/rejected clip helpers.
 - `importer-config`: typed planning helpers for Ozz-style offline config slices without owning extraction tooling.
 - `procedural`: look-at distribution, seeded attention/idle scheduling helpers.
-- `ik`: two-bone IK and target clamping foundations.
+- procedural correction execution: retained WASM two-bone, aim, and foot descriptors; TypeScript keeps contact queries and policy planning.
 - `face`: viseme mixer, expression mixer, blink scheduler.
 - `retargeting`: VRM humanoid helpers and rest-pose quaternion retargeting.
 - `binary`: versioned `.waifuanim.bin` encode/decode for animation keyframe payloads.
@@ -78,7 +78,7 @@ Use `await createWasmAnimationRuntime(skeleton, kernelOptions)` or inject `creat
 
 The canonical frame pipeline is:
 
-1. Sample base clips into local-space transforms.
+1. Sample base clips into retained local-space pose buffers through WASM.
 2. Blend base layers by normalized weights.
 3. Apply posture, locomotion, and idle layers.
 4. Apply partial-body and additive layers through masks.

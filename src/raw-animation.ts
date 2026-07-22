@@ -15,6 +15,8 @@ import {
   isFiniteTransform,
   lerpVec3,
   multiplyQuat,
+  composeMat4,
+  multiplyMat4,
   normalizeQuat,
   slerpQuat,
   transformDelta
@@ -41,7 +43,6 @@ import {
   type Skeleton,
   createRestPose,
   isHumanoidBoneName,
-  localToModelPose,
   resolveHumanoidIndex,
   resolveJointIndex
 } from "./skeleton.js";
@@ -1470,7 +1471,7 @@ function createModelSpaceComparablePose(
   skeleton: Skeleton,
   localPose: readonly Transform[]
 ): ModelSpaceComparableTransform[] {
-  const modelPose = localToModelPose(skeleton, localPose);
+  const modelPose = localToModelPoseForAuthoring(skeleton, localPose);
   const output: ModelSpaceComparableTransform[] = [];
   for (let jointIndex = 0; jointIndex < skeleton.joints.length; jointIndex += 1) {
     const local = readPoseTransformOrRest(skeleton, localPose, jointIndex);
@@ -1487,6 +1488,18 @@ function createModelSpaceComparablePose(
     };
   }
   return output;
+}
+
+/** Offline analysis helper. Runtime hierarchy propagation is owned by the retained WASM kernel. */
+function localToModelPoseForAuthoring(skeleton: Skeleton, localPose: readonly Transform[]) {
+  const out: ReturnType<typeof composeMat4>[] = [];
+  for (let index = 0; index < localPose.length; index += 1) {
+    const local = localPose[index]!;
+    const matrix = composeMat4(local);
+    const parent = skeleton.joints[index]!.parentIndex;
+    out[index] = parent < 0 ? matrix : multiplyMat4(out[parent]!, matrix);
+  }
+  return out;
 }
 
 function multiplyVec3Components(a: Vec3, b: Vec3): Vec3 {

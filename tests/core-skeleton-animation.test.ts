@@ -3,7 +3,7 @@ import {
   AdditiveAnimationBuilder,
   AnimationBuilder,
   AnimationOptimizer,
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   NO_PARENT,
   SkeletonBuilder,
   WAIFU_ANIMATION_BINARY_FORMAT,
@@ -1215,7 +1215,7 @@ export async function runCoreSkeletonAnimationTests(): Promise<{
     quaternionNearlyEqual(firstFrameEndDelta[2]!.rotation, quatFromAxisAngle([0, 1, 0], Math.PI / 4), 1e-5),
     "first-frame additive builder should encode rotation deltas from the first keyed rotation"
   );
-  const runtimeFirstFrameAdditive = new AnimationRuntime(skeleton);
+  const runtimeFirstFrameAdditive = new ReferenceAnimationRuntime(skeleton);
   runtimeFirstFrameAdditive.setLayer("additive", firstFrameAdditiveClip, {
     time: 1,
     loop: false,

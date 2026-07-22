@@ -16,9 +16,9 @@ import {
   type AnimationTrack,
   type NormalizedTrackProperty,
   normalizedTrackProperty,
-  sampleTrack,
   trackStride
 } from "./clip.js";
+import { sampleTrack } from "./clip-sampling.js";
 import { type FootPlantResult, type StationarySupportCompensation, solveTwoBoneIkCorrections } from "./ik.js";
 import {
   type Quat,

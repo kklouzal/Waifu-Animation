@@ -5,11 +5,10 @@ import {
   InterleavedBufferAttribute,
   type InstancedMesh
 } from "three";
-import { type MatrixLike, type RigidInstanceMatrixOptions, updateRigidInstanceMatrixBuffer } from "./baked.js";
-import { crossVec3, normalizeVec3, scaleVec3, type Vec3 } from "./math.js";
-import { finiteOr, finitePositive } from "./numeric-helpers.js";
-import { type SkinningJob, type SkinningNumericArray } from "./skinning.js";
-import type { WasmSkinningContext, WasmSkinningRunResult } from "./wasm-kernel.js";
+import { type MatrixLike, type RigidInstanceMatrixOptions, updateRigidInstanceMatrixBuffer } from "../../src/baked.js";
+import { crossVec3, normalizeVec3, scaleVec3, type Vec3 } from "../../src/math.js";
+import { finiteOr, finitePositive } from "../../src/numeric-helpers.js";
+import { type SkinningJob, type SkinningNumericArray, type SkinningResult, skinVertices } from "./skinning.js";
 
 type ThreeSkinningJobFields = Omit<
   SkinningJob,
@@ -23,8 +22,6 @@ export type ThreeSkinningAttributeNames = {
 };
 
 export type ThreeSkinningBufferGeometryOptions = ThreeSkinningJobFields & {
-  /** Required retained kernel context configured for this geometry. */
-  context: WasmSkinningContext;
   /** Optional bind/rest geometry to read from while writing skinned output into the target geometry. */
   sourceGeometry?: BufferGeometry;
   /** Geometry that receives skinned attributes. Defaults to the geometry passed to the helper. */
@@ -36,7 +33,7 @@ export type ThreeSkinningBufferGeometryOptions = ThreeSkinningJobFields & {
   updateBounds?: boolean;
 };
 
-export type ThreeSkinningBufferGeometryResult = WasmSkinningRunResult & {
+export type ThreeSkinningBufferGeometryResult = SkinningResult & {
   geometry: BufferGeometry;
   attributes: {
     position: BufferAttribute;
@@ -149,7 +146,7 @@ export function updateThreeRigidInstanceMatrices(
 
 export function skinThreeBufferGeometry(
   geometry: BufferGeometry,
-  options: ThreeSkinningBufferGeometryOptions
+  options: ThreeSkinningBufferGeometryOptions = {}
 ): ThreeSkinningBufferGeometryResult {
   const sourceGeometry = options.sourceGeometry ?? geometry;
   const targetGeometry = options.targetGeometry ?? geometry;
@@ -174,21 +171,38 @@ export function skinThreeBufferGeometry(
     includeTangents && sourceTangent
       ? ensureThreeFloatVecAttribute(targetGeometry, names.tangent, resolvedVertexCount, tangentItemSize)
       : undefined;
-  const context = options.context;
-  if (context.vertexCount !== resolvedVertexCount)
-    throw new Error("three geometry vertex count does not match retained WASM skinning context");
-  context.positions.set(threeAttributeSkinningInput(sourcePosition).data);
-  if (sourceNormal && context.normals) context.normals.set(threeAttributeSkinningInput(sourceNormal).data);
-  if (sourceTangent && context.tangents) context.tangents.set(threeAttributeSkinningInput(sourceTangent).data);
-  const result = context.run();
-  targetPosition.array.set(result.positions);
-  if (targetNormal && result.normals) targetNormal.array.set(result.normals);
-  if (targetTangent && result.tangents) targetTangent.array.set(result.tangents);
+  const {
+    sourceGeometry: _sourceGeometry,
+    targetGeometry: _targetGeometry,
+    attributeNames: _attributeNames,
+    includeNormals: _includeNormals,
+    includeTangents: _includeTangents,
+    markNeedsUpdate,
+    updateBounds,
+    ...skinningFields
+  } = options;
+  const skinningJob: SkinningJob = {
+    ...skinningFields,
+    vertexCount: skinningFields.vertexCount ?? resolvedVertexCount,
+    positions: threeAttributeSkinningInput(sourcePosition),
+    outPositions: threeAttributeSkinningOutput(targetPosition)
+  };
+
+  if (sourceNormal && targetNormal) {
+    skinningJob.normals = threeAttributeSkinningInput(sourceNormal);
+    skinningJob.outNormals = threeAttributeSkinningOutput(targetNormal);
+  }
+  if (sourceTangent && targetTangent && skinningJob.normals) {
+    skinningJob.tangents = threeAttributeSkinningInput(sourceTangent);
+    skinningJob.outTangents = threeAttributeSkinningOutput(targetTangent);
+  }
+
+  const result = skinVertices(skinningJob);
   if (sourceTangent && targetTangent) copyThreeAttributeRemainder(sourceTangent, targetTangent, resolvedVertexCount, 3);
-  markThreeAttributeUpdated(targetPosition, options.markNeedsUpdate);
-  if (targetNormal) markThreeAttributeUpdated(targetNormal, options.markNeedsUpdate);
-  if (targetTangent) markThreeAttributeUpdated(targetTangent, options.markNeedsUpdate);
-  if (options.updateBounds ?? true) {
+  markThreeAttributeUpdated(targetPosition, markNeedsUpdate);
+  if (targetNormal) markThreeAttributeUpdated(targetNormal, markNeedsUpdate);
+  if (targetTangent) markThreeAttributeUpdated(targetTangent, markNeedsUpdate);
+  if (updateBounds ?? true) {
     targetGeometry.computeBoundingBox();
     targetGeometry.computeBoundingSphere();
   }
@@ -372,6 +386,16 @@ function threeAttributeSkinningInput(attribute: ThreeReadableAttribute): {
   }
   const data = flattenThreeAttribute(attribute);
   return { data, offset: 0, stride: attribute.itemSize };
+}
+
+function threeAttributeSkinningOutput(attribute: BufferAttribute): {
+  data: Float32Array;
+  offset: number;
+  stride: number;
+} {
+  if (!(attribute.array instanceof Float32Array))
+    throw new Error("three skinning output attributes must use Float32Array buffers");
+  return { data: attribute.array, offset: 0, stride: attribute.itemSize };
 }
 
 function copyThreeAttributeRemainder(

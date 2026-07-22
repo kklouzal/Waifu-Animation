@@ -8,10 +8,9 @@ import {
   cloneRawAnimation,
   normalizedTrackProperty,
   resolveTrackJointIndex,
-  sampleClipToPose,
-  sampleTime,
   validateRawAnimation
 } from "./clip.js";
+import { sampleClipToPose, sampleTime } from "./clip-sampling.js";
 import {
   type Quat,
   type Transform,

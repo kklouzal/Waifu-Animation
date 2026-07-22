@@ -1,6 +1,6 @@
 # Mandatory Rust/WASM animation kernel
 
-Status: ABI v1.5. The retained Rust/WASM kernel is mandatory for the migrated numeric runtime. The package builds and ships a portable scalar-WASM artifact and a SIMD128-WASM artifact. Runtime initialization is fail-closed; there is no TypeScript execution fallback in `src/wasm-kernel.ts` or `src/runtime-wasm.ts`.
+Status: ABI v1.6. The retained Rust/WASM kernel is mandatory for the migrated numeric runtime. The package builds and ships a portable scalar-WASM artifact and a SIMD128-WASM artifact. Runtime initialization is fail-closed; there is no TypeScript execution fallback in `src/wasm-kernel.ts` or `src/runtime-wasm.ts`.
 
 ## Required initialization
 
@@ -12,7 +12,8 @@ const initialized = await loadWaifuAnimationWasmKernel({
   requiredFeatures
 });
 
-const runtime = new AnimationRuntime(skeleton, { backend: createWasmAnimationRuntimeBackend(initialized, skeleton) });
+const backend = createWasmAnimationRuntimeBackend(initialized, skeleton);
+const runtime = new AnimationRuntime(backend);
 ```
 
 `loadWaifuAnimationWasmKernel` detects SIMD128 with `WebAssembly.validate`. A SIMD-capable engine selects `waifu_animation_kernel.simd.wasm`; a non-SIMD engine selects `waifu_animation_kernel.scalar.wasm`. A selected-asset fetch/compile/instantiate/ABI/feature/mode failure rejects with `WaKernelInitializationError`. It never retries through TypeScript and does not silently downgrade a SIMD-capable engine to another implementation. `createWasmAnimationRuntime` is the async convenience factory and has the same rejection behavior.

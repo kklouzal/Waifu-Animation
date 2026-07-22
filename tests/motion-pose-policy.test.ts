@@ -2,7 +2,7 @@ import type { AnimationClip } from "./test-api.js";
 import {
   AUTHORED_BASE_SOURCE_TRACK_POLICY,
   AUTHORED_BASE_TRACK_POLICY,
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   BASE_PROCEDURAL_SOURCE_TRACK_POLICY,
   BASE_PROCEDURAL_TRACK_POLICY,
   DEFAULT_BLEND_THRESHOLD,
@@ -175,7 +175,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     duration: 1,
     tracks: [makeTransformTrack("hips", "translation", [1, 0, 0])]
   };
-  const maskedRuntime = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const maskedRuntime = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   maskedRuntime.setLayer("override-mask", maskedRuntimeClip, {
     weight: 1,
     targetWeight: 1,
@@ -653,7 +653,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
       { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([2, 0, 0]) }
     ]
   };
-  const runtimeSamePriority = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeSamePriority = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   runtimeSamePriority.setLayer("weighted-a", lowerPriorityTranslateClip, { weight: 3, targetWeight: 3, priority: 2 });
   runtimeSamePriority.setLayer("weighted-b", samePriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 2 });
   const samePriorityRuntimePose = runtimeSamePriority.evaluate().localPose;
@@ -671,7 +671,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "same-priority override layers should keep weighted blending"
   );
 
-  const runtimeMaskedPriority = new AnimationRuntime(skeleton);
+  const runtimeMaskedPriority = new ReferenceAnimationRuntime(skeleton);
   runtimeMaskedPriority.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0 });
   runtimeMaskedPriority.setLayer("head", highPriorityHeadClip, { weight: 1, targetWeight: 1, priority: 10, mask });
   const maskedPriorityPose = runtimeMaskedPriority.evaluate().localPose;
@@ -684,7 +684,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "higher-priority masked layers should own masked joints"
   );
 
-  const runtimeWeakPriority = new AnimationRuntime(skeleton, { blendThreshold: 0.1 });
+  const runtimeWeakPriority = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.1 });
   runtimeWeakPriority.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0, mask });
   runtimeWeakPriority.setLayer("weak-head", highPriorityHeadClip, {
     weight: 0.05,
@@ -698,7 +698,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "weak higher-priority layers should blend over the lower-priority fallback until threshold is reached"
   );
 
-  const runtimeNaNThreshold = new AnimationRuntime(skeleton, { blendThreshold: Number.NaN });
+  const runtimeNaNThreshold = new ReferenceAnimationRuntime(skeleton, { blendThreshold: Number.NaN });
   runtimeNaNThreshold.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0, mask });
   runtimeNaNThreshold.setLayer("weak-head", highPriorityHeadClip, {
     weight: 0.05,
@@ -712,7 +712,9 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "runtime NaN blend thresholds should preserve weak-layer fallback behavior"
   );
 
-  const runtimeInfiniteThreshold = new AnimationRuntime(skeleton, { blendThreshold: Number.POSITIVE_INFINITY });
+  const runtimeInfiniteThreshold = new ReferenceAnimationRuntime(skeleton, {
+    blendThreshold: Number.POSITIVE_INFINITY
+  });
   runtimeInfiniteThreshold.setLayer("lower", lowerPriorityTranslateClip, {
     weight: 1,
     targetWeight: 1,
@@ -741,7 +743,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     duration: 1,
     tracks: [makeTransformTrack("head", "translation", [10, 0, 0])]
   };
-  const runtimeCrossfade = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeCrossfade = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   runtimeCrossfade.setLayer("old", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 4 });
   runtimeCrossfade.crossfade("new", crossfadeNewClip, { priority: 4, fadeSpeed: 1 });
   runtimeCrossfade.update(Math.log(2));
@@ -764,7 +766,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "crossfade target should dominate after fade completion"
   );
 
-  const runtimeMalformedSourceCrossfade = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeMalformedSourceCrossfade = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   const malformedSourceLayer = runtimeMalformedSourceCrossfade.setLayer("old", crossfadeOldClip, {
     weight: 1,
     targetWeight: 1,
@@ -791,7 +793,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     duration: 1,
     tracks: [makeTransformTrack("head", "translation", [1, 0, 0])]
   };
-  const runtimeCrossfadeAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeCrossfadeAdditive = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   runtimeCrossfadeAdditive.setLayer("old", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 2 });
   runtimeCrossfadeAdditive.setLayer("additive", additiveNudgeClip, {
     weight: 1,
@@ -807,7 +809,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
   assert.ok(Math.abs(additiveLayer.targetWeight - 1) < 1e-6);
   assert.ok(Math.abs(additiveCrossfadePose.localPose[2]!.translation[0] - 11) < 1e-4);
 
-  const runtimeCrossfadeToAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeCrossfadeToAdditive = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   runtimeCrossfadeToAdditive.setLayer("base", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 2 });
   runtimeCrossfadeToAdditive.crossfade("additive", additiveNudgeClip, {
     priority: 2,
@@ -854,7 +856,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "additive crossfade target should compose fully on top of the base pose"
   );
 
-  const runtimeReplaceExistingAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeReplaceExistingAdditive = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   runtimeReplaceExistingAdditive.setLayer("base", crossfadeOldClip, { weight: 1, targetWeight: 1, priority: 2 });
   runtimeReplaceExistingAdditive.setLayer("additive", additiveNudgeClip, {
     weight: 1,
@@ -890,7 +892,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
     "replaced additive layers should compose over the base pose instead of replacing it"
   );
 
-  const runtimeSubtractiveAdditive = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeSubtractiveAdditive = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   runtimeSubtractiveAdditive.setLayer("base", crossfadeNewClip, { weight: 1, targetWeight: 1 });
   runtimeSubtractiveAdditive.setLayer("subtract", additiveNudgeClip, {
     weight: -2,
@@ -904,7 +906,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
   );
   assert.equal(subtractiveAdditiveEvaluation.activeLayers.find((layer) => layer.id === "subtract")?.weight, -2);
 
-  const runtimeAdditiveNegativeFade = new AnimationRuntime(skeleton);
+  const runtimeAdditiveNegativeFade = new ReferenceAnimationRuntime(skeleton);
   runtimeAdditiveNegativeFade.setLayer("fade-subtract", additiveNudgeClip, {
     weight: 0,
     targetWeight: -1,
@@ -924,7 +926,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
   assert.equal(additiveNegativeFadeLayer.targetWeight, -1);
   assert.ok(Math.abs(additiveNegativeFadeEvaluation.localPose[2]!.translation[0] + 0.5) < 1e-6);
 
-  const runtimeNegativeOverride = new AnimationRuntime(skeleton);
+  const runtimeNegativeOverride = new ReferenceAnimationRuntime(skeleton);
   runtimeNegativeOverride.setLayer("negative-override", crossfadeNewClip, { weight: -1, targetWeight: -1 });
   const negativeOverrideEvaluation = runtimeNegativeOverride.evaluate();
   assert.equal(
@@ -934,7 +936,7 @@ export async function runMotionPosePolicyTests(): Promise<void> {
   );
   assert.equal(negativeOverrideEvaluation.localPose[2]!.translation[0], skeleton.restPose[2]!.translation[0]);
 
-  const runtimeCrossfadeMasked = new AnimationRuntime(skeleton, { blendThreshold: 0.01 });
+  const runtimeCrossfadeMasked = new ReferenceAnimationRuntime(skeleton, { blendThreshold: 0.01 });
   runtimeCrossfadeMasked.setLayer("lower", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 0 });
   runtimeCrossfadeMasked.setLayer("old", lowerPriorityTranslateClip, { weight: 1, targetWeight: 1, priority: 5 });
   runtimeCrossfadeMasked.crossfade("head", highPriorityHeadClip, { priority: 5, mask, fadeSpeed: 8 });

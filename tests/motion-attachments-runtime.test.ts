@@ -1,6 +1,6 @@
 import type { AnimationClip } from "./test-api.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   LOCOMOTION_BASE_SOURCE_TRACK_POLICY,
   Object3D,
   Quaternion,
@@ -551,7 +551,7 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
     );
   }
 
-  const runtime = new AnimationRuntime(skeleton);
+  const runtime = new ReferenceAnimationRuntime(skeleton);
   runtime.setLayer("base", nodClip, { weight: 1, targetWeight: 1, loop: true });
   runtime.update(0.5);
   const evaluated = runtime.evaluate();
@@ -559,7 +559,7 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
   assert.ok(evaluated.localPose[2]!.rotation[0] > 0.1);
   assert.equal(evaluated.diagnostics, undefined);
 
-  const runtimeBackwardCompatibleUpdate = new AnimationRuntime(skeleton);
+  const runtimeBackwardCompatibleUpdate = new ReferenceAnimationRuntime(skeleton);
   runtimeBackwardCompatibleUpdate.setLayer("fading", nodClip, { weight: 0.0004, targetWeight: 0, fadeSpeed: 8 });
   runtimeBackwardCompatibleUpdate.update(1);
   assert.equal(
@@ -570,7 +570,7 @@ export async function runMotionThreeRuntimeUtilityTests(): Promise<void> {
 }
 
 export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
-  const sanitizedRuntime = new AnimationRuntime(skeleton);
+  const sanitizedRuntime = new ReferenceAnimationRuntime(skeleton);
   const sanitizedLayer = sanitizedRuntime.setLayer("bad-inputs", nodClip, {
     time: Number.NaN,
     weight: Number.NEGATIVE_INFINITY,
@@ -603,7 +603,7 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
   sanitizedRuntime.fadeOut("bad-crossfade", Number.NaN);
   assert.equal(sanitizedCrossfade.fadeSpeed, 8);
 
-  const corruptedRuntime = new AnimationRuntime(skeleton);
+  const corruptedRuntime = new ReferenceAnimationRuntime(skeleton);
   const corruptedLayer = corruptedRuntime.setLayer("corrupted", nodClip, { weight: 1, targetWeight: 1, loop: true });
   corruptedLayer.time = Number.POSITIVE_INFINITY;
   corruptedLayer.targetWeight = Number.NaN;
@@ -626,7 +626,7 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
   );
   assertFiniteEvaluation(corruptedEvaluation);
 
-  const invalidRuntime = new AnimationRuntime(skeleton);
+  const invalidRuntime = new ReferenceAnimationRuntime(skeleton);
   const invalidTranslationScaleClip: AnimationClip = {
     id: "invalid-translation-scale",
     duration: 1,
@@ -696,7 +696,7 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
     assert.ok(Math.abs(Math.hypot(...transform.rotation) - 1) < 1e-5);
   }
 
-  const invalidRotationRuntime = new AnimationRuntime(skeleton);
+  const invalidRotationRuntime = new ReferenceAnimationRuntime(skeleton);
   const invalidRotationClip: AnimationClip = {
     id: "invalid-rotation",
     duration: 1,
@@ -719,7 +719,7 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
     "runtime diagnostics should report invalid active rotation source tracks"
   );
 
-  const repairedRotationRuntime = new AnimationRuntime(skeleton);
+  const repairedRotationRuntime = new ReferenceAnimationRuntime(skeleton);
   const repairedRotationClip: AnimationClip = {
     id: "repaired-runtime-rotation",
     duration: 1,
@@ -749,7 +749,7 @@ export async function runMotionRuntimeDiagnosticTests(): Promise<void> {
   assert.ok(repairedRotationEvaluation.localPose[2]!.rotation.every(Number.isFinite));
   assert.ok(Math.abs(Math.hypot(...repairedRotationEvaluation.localPose[2]!.rotation) - 1) < 1e-5);
 
-  const repairedSourceRestRuntime = new AnimationRuntime(skeleton);
+  const repairedSourceRestRuntime = new ReferenceAnimationRuntime(skeleton);
   const repairedSourceRestClip: AnimationClip = {
     id: "repaired-runtime-source-rest",
     duration: 1,

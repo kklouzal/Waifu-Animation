@@ -1,6 +1,6 @@
 import type { AnimationClip, SampleRepairDiagnostic } from "./test-api.js";
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   MotionAccumulator,
   MotionExtractor,
   MotionSampler,
@@ -994,7 +994,7 @@ export async function runMotionRootMotionTests(): Promise<void> {
 
 export async function runMotionRuntimeRootMotionTests(): Promise<void> {
   const { motionSkeleton, motionClip } = createRootMotionTestFixture();
-  const runtimeRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeRootMotion.setLayer("move", motionClip, { weight: 1, targetWeight: 1, loop: true });
   const runtimeRootMotionUpdate = runtimeRootMotion.update(0.5, { collectRootMotion: true });
   assert.deepEqual(
@@ -1017,7 +1017,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "root-motion collection should not strip or separately apply pose motion"
   );
 
-  const runtimeLoopingTime = new AnimationRuntime(motionSkeleton);
+  const runtimeLoopingTime = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeLoopingTime.setLayer("move", motionClip, { weight: 1, targetWeight: 1, loop: true, time: 0.75 });
   const runtimeLoopingTimeUpdate = runtimeLoopingTime.update(2.5, { collectRootMotion: true });
   assert.equal(
@@ -1041,7 +1041,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "multi-loop runtime root motion should accumulate the full update span"
   );
 
-  const runtimeLoopBoundary = new AnimationRuntime(motionSkeleton);
+  const runtimeLoopBoundary = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeLoopBoundary.setLayer("move", motionClip, { weight: 1, targetWeight: 1, loop: true, time: 0.5 });
   runtimeLoopBoundary.update(0.5);
   assert.equal(
@@ -1050,7 +1050,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "looping runtime layers should wrap exact duration endpoints to zero"
   );
 
-  const runtimeNonLoopingTime = new AnimationRuntime(motionSkeleton);
+  const runtimeNonLoopingTime = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeNonLoopingTime.setLayer("move-once", motionClip, { weight: 1, targetWeight: 1, loop: false, time: 0.75 });
   runtimeNonLoopingTime.update(2.5);
   assert.equal(
@@ -1066,7 +1066,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     loop: true,
     tracks: []
   };
-  const runtimeInvalidDurationTime = new AnimationRuntime(motionSkeleton);
+  const runtimeInvalidDurationTime = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeInvalidDurationTime.setLayer("zero", runtimeZeroDurationClip, {
     weight: 1,
     targetWeight: 1,
@@ -1088,7 +1088,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     ],
     "invalid-duration runtime layers should keep finite advanced times instead of wrapping through invalid durations"
   );
-  const runtimeInvalidDurationRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeInvalidDurationRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeInvalidDurationRootMotion.setLayer("zero", runtimeZeroDurationClip, {
     weight: 1,
     targetWeight: 1,
@@ -1106,7 +1106,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "invalid-duration runtime layers should not emit root-motion diagnostics"
   );
 
-  const runtimeMalformedLayerState = new AnimationRuntime(motionSkeleton);
+  const runtimeMalformedLayerState = new ReferenceAnimationRuntime(motionSkeleton);
   const malformedLayer = runtimeMalformedLayerState.setLayer("malformed", motionClip, {
     weight: 1,
     targetWeight: 1,
@@ -1126,7 +1126,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "runtime evaluation should expose sanitized scheduling state after malformed layer recovery"
   );
 
-  const runtimeOverflowStep = new AnimationRuntime(motionSkeleton);
+  const runtimeOverflowStep = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeOverflowStep.setLayer("overflow", motionClip, {
     weight: 1,
     targetWeight: 1,
@@ -1146,7 +1146,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "overflowing runtime time steps should not emit unsafe root-motion intervals"
   );
 
-  const runtimeHumanoidRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeHumanoidRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeHumanoidRootMotion.setLayer("hips-move", motionClip, {
     weight: 1,
     targetWeight: 1,
@@ -1160,7 +1160,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
   );
   assert.equal(runtimeHumanoidMotionUpdate.rootMotionLayers[0]?.carrier.joint, "hips");
 
-  const runtimeCarrierReplacement = new AnimationRuntime(motionSkeleton);
+  const runtimeCarrierReplacement = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeCarrierReplacement.setLayer("move", motionClip, {
     weight: 1,
     targetWeight: 1,
@@ -1204,7 +1204,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     ]
   };
   const sourceBasisClipB: AnimationClip = { ...sourceBasisClipA, id: "source-basis-b" };
-  const runtimeSourceBasisReplacement = new AnimationRuntime(motionSkeleton);
+  const runtimeSourceBasisReplacement = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeSourceBasisReplacement.setLayer("pose", sourceBasisClipA, {
     weight: 1,
     targetWeight: 1,
@@ -1220,7 +1220,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "crossfading a layer to a different clip should not inherit stale source-basis retarget metadata"
   );
 
-  const runtimeInvalidRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeInvalidRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   const runtimeInvalidLayer = runtimeInvalidRootMotion.setLayer("invalid", motionClip, {
     weight: 1,
     targetWeight: 1,
@@ -1240,7 +1240,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "non-finite root-motion update input should not emit unsafe layer deltas"
   );
 
-  const runtimeZeroWeightRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeZeroWeightRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeZeroWeightRootMotion.setLayer("zero", motionClip, { weight: 0, targetWeight: 0, loop: true });
   const zeroWeightRootMotionUpdate = runtimeZeroWeightRootMotion.update(0.5, { collectRootMotion: true });
   assert.deepEqual(
@@ -1272,7 +1272,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
       }
     ]
   };
-  const runtimeMaskedRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeMaskedRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeMaskedRootMotion.setLayer("upper-body", maskedMotionPoseClip, {
     weight: 1,
     targetWeight: 1,
@@ -1319,7 +1319,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
       }
     ]
   };
-  const runtimeWeightedRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeWeightedRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeWeightedRootMotion.setLayer("motion-a", weightedMotionA, { weight: 3, targetWeight: 3, priority: 2 });
   runtimeWeightedRootMotion.setLayer("motion-b", weightedMotionB, { weight: 1, targetWeight: 1, priority: 2 });
   const weightedRootMotionUpdate = runtimeWeightedRootMotion.update(0.5, { collectRootMotion: true });
@@ -1353,7 +1353,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
       { joint: "root", property: "scale", times: toFloat32Array([0, 1]), values: toFloat32Array([1, 1, 1, 4, 7, 8]) }
     ]
   };
-  const runtimeScaledRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeScaledRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeScaledRootMotion.setLayer("scaled-a", scaledMotionA, { weight: 1, targetWeight: 1, priority: 2 });
   runtimeScaledRootMotion.setLayer("scaled-b", scaledMotionB, { weight: 3, targetWeight: 3, priority: 2 });
   const scaledRootMotionUpdate = runtimeScaledRootMotion.update(1, { collectRootMotion: true });
@@ -1362,7 +1362,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "runtime root-motion blending should preserve weighted carrier scale deltas"
   );
 
-  const runtimeSteadyIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+  const runtimeSteadyIntervalRootMotion = new ReferenceAnimationRuntime(motionSkeleton, { blendThreshold: 1 });
   runtimeSteadyIntervalRootMotion.setLayer("steady", weightedMotionA, { weight: 0.5, targetWeight: 0.5, fadeSpeed: 8 });
   const steadyIntervalRootMotionUpdate = runtimeSteadyIntervalRootMotion.update(1, { collectRootMotion: true });
   assert.ok(
@@ -1375,7 +1375,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "steady root-motion diagnostics should report the unchanged effective weight"
   );
 
-  const runtimeFadeInIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+  const runtimeFadeInIntervalRootMotion = new ReferenceAnimationRuntime(motionSkeleton, { blendThreshold: 1 });
   runtimeFadeInIntervalRootMotion.setLayer("fade-in", weightedMotionA, {
     weight: 0,
     targetWeight: 1,
@@ -1392,7 +1392,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "fade-in root-motion diagnostics should expose the interval effective weight"
   );
 
-  const runtimeFadeOutIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+  const runtimeFadeOutIntervalRootMotion = new ReferenceAnimationRuntime(motionSkeleton, { blendThreshold: 1 });
   runtimeFadeOutIntervalRootMotion.setLayer("fade-out", weightedMotionA, {
     weight: 1,
     targetWeight: 0,
@@ -1409,7 +1409,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "fade-out root-motion diagnostics should expose the interval effective weight"
   );
 
-  const runtimeFractionalMaskedRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeFractionalMaskedRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeFractionalMaskedRootMotion.setLayer("masked-motion-a", weightedMotionA, {
     weight: 1,
     targetWeight: 1,
@@ -1431,7 +1431,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "fractional carrier masks should be reflected in root-motion diagnostics"
   );
 
-  const runtimeHugeRootMotionWeights = new AnimationRuntime(motionSkeleton);
+  const runtimeHugeRootMotionWeights = new ReferenceAnimationRuntime(motionSkeleton);
   const hugeMask = createJointMask(motionSkeleton, 0, { root: 3e38 });
   runtimeHugeRootMotionWeights.setLayer("huge-a", weightedMotionA, {
     weight: Number.MAX_VALUE,
@@ -1454,7 +1454,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "huge finite root-motion weights should keep diagnostics normalized and finite"
   );
 
-  const runtimeMaskedFadeIntervalRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 1 });
+  const runtimeMaskedFadeIntervalRootMotion = new ReferenceAnimationRuntime(motionSkeleton, { blendThreshold: 1 });
   runtimeMaskedFadeIntervalRootMotion.setLayer("masked-fade-in", weightedMotionA, {
     weight: 0,
     targetWeight: 1,
@@ -1476,7 +1476,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "masked fade-in root-motion diagnostics should report the interval masked effective weight"
   );
 
-  const weakPriorityRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
+  const weakPriorityRootMotion = new ReferenceAnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
   weakPriorityRootMotion.setLayer("base-motion", weightedMotionA, { weight: 1, targetWeight: 1, priority: 0 });
   weakPriorityRootMotion.setLayer("weak-override-motion", weightedMotionB, {
     weight: 0.05,
@@ -1497,7 +1497,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "priority fallback root-motion diagnostics should preserve per-group normalized weights"
   );
 
-  const thresholdPriorityRootMotion = new AnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
+  const thresholdPriorityRootMotion = new ReferenceAnimationRuntime(motionSkeleton, { blendThreshold: 0.1 });
   thresholdPriorityRootMotion.setLayer("base-motion", weightedMotionA, { weight: 1, targetWeight: 1, priority: 0 });
   thresholdPriorityRootMotion.setLayer("threshold-override-motion", weightedMotionB, {
     weight: 0.1,
@@ -1534,7 +1534,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
       }
     ]
   };
-  const runtimeOppositeRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeOppositeRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeOppositeRootMotion.setLayer("opposite-a", oppositeMotionA, { weight: 1, targetWeight: 1, priority: 3 });
   runtimeOppositeRootMotion.setLayer("opposite-b", oppositeMotionB, { weight: 1, targetWeight: 1, priority: 3 });
   const oppositeRootMotionUpdate = runtimeOppositeRootMotion.update(0.5, { collectRootMotion: true });
@@ -1573,7 +1573,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
       }
     ]
   };
-  const runtimeOrthogonalRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeOrthogonalRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeOrthogonalRootMotion.setLayer("orthogonal-a", orthogonalMotionA, { weight: 1, targetWeight: 1, priority: 4 });
   runtimeOrthogonalRootMotion.setLayer("orthogonal-b", orthogonalMotionB, { weight: 1, targetWeight: 1, priority: 4 });
   const orthogonalRootMotionUpdate = runtimeOrthogonalRootMotion.update(1, { collectRootMotion: true });
@@ -1618,11 +1618,11 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
       }
     ]
   };
-  const runtimeRootMotionOrderA = new AnimationRuntime(motionSkeleton);
+  const runtimeRootMotionOrderA = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeRootMotionOrderA.setLayer("first", rotationOrderMotionA, { weight: 1, targetWeight: 1, priority: 4 });
   runtimeRootMotionOrderA.setLayer("second", rotationOrderMotionB, { weight: 1, targetWeight: 1, priority: 4 });
   const rootMotionOrderUpdateA = runtimeRootMotionOrderA.update(0.5, { collectRootMotion: true });
-  const runtimeRootMotionOrderB = new AnimationRuntime(motionSkeleton);
+  const runtimeRootMotionOrderB = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeRootMotionOrderB.setLayer("z-second", rotationOrderMotionB, { weight: 1, targetWeight: 1, priority: 4 });
   runtimeRootMotionOrderB.setLayer("a-first", rotationOrderMotionA, { weight: 1, targetWeight: 1, priority: 4 });
   const rootMotionOrderUpdateB = runtimeRootMotionOrderB.update(0.5, { collectRootMotion: true });
@@ -1640,7 +1640,7 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
     "same-priority root-motion rotation should be independent of layer id/order"
   );
 
-  const runtimeAdditiveRootMotion = new AnimationRuntime(motionSkeleton);
+  const runtimeAdditiveRootMotion = new ReferenceAnimationRuntime(motionSkeleton);
   runtimeAdditiveRootMotion.setLayer("base", weightedMotionB, { weight: 1, targetWeight: 1 });
   runtimeAdditiveRootMotion.setLayer("additive-motion", weightedMotionA, {
     weight: 1,

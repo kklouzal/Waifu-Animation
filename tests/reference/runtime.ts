@@ -12,11 +12,31 @@ import {
   identityTransform,
   lerpTransform,
   normalizeQuat
-} from "./math.js";
-import { type AnimationClip } from "./clip.js";
-import { type MotionCarrier, type MotionIntervalDelta } from "./motion.js";
-import { type JointMask, type Pose, type PoseValidationIssue, sanitizeBlendThreshold } from "./pose.js";
-import { type Skeleton, createRestPose } from "./skeleton.js";
+} from "../../src/math.js";
+import {
+  type AnimationClip,
+  type ClipValidationIssue,
+  type SampleRepairDiagnostic,
+  resolveTrackJointIndex,
+  validateClip
+} from "../../src/clip.js";
+import { sampleClipToPose } from "./clip-sampling.js";
+import { type MotionCarrier, sampleMotionIntervalDelta } from "../../src/motion.js";
+import {
+  type JointMask,
+  type JointMaskValidationIssue,
+  type Pose,
+  type PoseValidationIssue,
+  additiveDeltaPose,
+  applyAdditivePose,
+  blendPoses,
+  clonePose,
+  normalizePose,
+  sanitizeBlendThreshold,
+  validateJointMask,
+  validatePose
+} from "./pose.js";
+import { type Skeleton, createRestPose, localToModelPose } from "./skeleton.js";
 
 const MAX_RUNTIME_ROOT_MOTION_LOOPS = 10_000;
 
@@ -62,20 +82,15 @@ export type CrossfadeOptions = AnimationLayerOptions & {
 export type AnimationRuntimeOptions = {
   /** Ozz-style rest-pose fallback threshold for override blending. */
   blendThreshold?: number;
+  /** Retained evaluation backend. Mandatory-runtime factories always supply one; omission preserves the legacy direct API. */
+  backend?: AnimationRuntimeBackend;
 };
 
 export type AnimationRuntimeBackendEvaluation = Pick<RuntimeEvaluation, "localPose" | "modelPose">;
 
-export type AnimationRuntimeBackendMotionSample = {
-  jointIndex: number;
-  joint: string;
-  time: number;
-  transform: Transform;
-};
-
 export type AnimationRuntimeBackendSnapshot = {
-  kind: "wasm-scalar-retained" | "wasm-simd-retained";
-  state: "ready" | "disposed";
+  kind: string;
+  state: "ready" | "fallback" | "disposed";
   reason?: string;
   retainedLayerCount?: number;
   wasmSampledLayerCount?: number;
@@ -91,11 +106,6 @@ export interface AnimationRuntimeBackend {
   removeLayer(id: string): void;
   clear(): void;
   evaluate(activeLayers: readonly AnimationLayer[], blendThreshold: number): AnimationRuntimeBackendEvaluation;
-  sampleMotionInterval(
-    layer: AnimationLayer,
-    fromTime: number,
-    toTime: number
-  ): { from: AnimationRuntimeBackendMotionSample; to: AnimationRuntimeBackendMotionSample; delta: Transform };
   snapshot(): AnimationRuntimeBackendSnapshot;
   reset?(): void;
   dispose(): void;
@@ -238,18 +248,17 @@ export class AnimationRuntime {
   readonly restPose: Pose;
   blendThreshold: number;
   private readonly layers = new Map<string, AnimationLayer>();
-  private readonly backend: AnimationRuntimeBackend;
+  private readonly backend: AnimationRuntimeBackend | undefined;
   private disposed = false;
 
-  /**
-   * Construct a scheduler around an already initialized retained kernel backend.
-   * Use createWasmAnimationRuntime() for normal async initialization.
-   */
-  constructor(backend: AnimationRuntimeBackend, options: AnimationRuntimeOptions = {}) {
-    this.backend = backend;
-    this.skeleton = backend.skeleton;
-    this.restPose = createRestPose(this.skeleton);
+  constructor(skeleton: Skeleton, options: AnimationRuntimeOptions = {}) {
+    this.skeleton = skeleton;
+    this.restPose = createRestPose(skeleton);
     this.blendThreshold = sanitizeBlendThreshold(options.blendThreshold);
+    if (options.backend && options.backend.skeleton !== skeleton) {
+      throw new Error("AnimationRuntime backend skeleton does not match the runtime skeleton");
+    }
+    this.backend = options.backend;
   }
 
   setLayer(id: string, clip: AnimationClip, options: AnimationLayerOptions = {}): AnimationLayer {
@@ -272,9 +281,9 @@ export class AnimationRuntime {
       ...(options.sourceBasisQuaternion ? { sourceBasisQuaternion: options.sourceBasisQuaternion } : {})
     };
     try {
-      this.backend.setLayer(layer, previous);
+      this.backend?.setLayer(layer, previous);
     } catch (error) {
-      if (previous) this.backend.setLayer(previous);
+      if (previous) this.backend?.setLayer(previous);
       throw error;
     }
     this.layers.set(id, layer);
@@ -326,9 +335,9 @@ export class AnimationRuntime {
             : {})
     };
     try {
-      this.backend.setLayer(layer, existing);
+      this.backend?.setLayer(layer, existing);
     } catch (error) {
-      if (existing) this.backend.setLayer(existing);
+      if (existing) this.backend?.setLayer(existing);
       throw error;
     }
     this.layers.set(id, layer);
@@ -358,7 +367,7 @@ export class AnimationRuntime {
   }
 
   removeLayer(id: string): void {
-    if (this.layers.delete(id)) this.backend.removeLayer(id);
+    if (this.layers.delete(id)) this.backend?.removeLayer(id);
   }
 
   hasLayer(id: string): boolean {
@@ -367,17 +376,17 @@ export class AnimationRuntime {
 
   clear(): void {
     this.layers.clear();
-    this.backend.clear();
+    this.backend?.clear();
   }
 
-  /** Snapshot the mandatory retained backend. */
+  /** Snapshot the optional backend without changing scalar runtime state. */
   backendSnapshot(): AnimationRuntimeBackendSnapshot {
-    return this.backend.snapshot();
+    return this.backend?.snapshot() ?? { kind: "typescript", state: "ready" };
   }
 
   /** Reset retained backend caches after an availability/epoch transition. Scalar scheduling state is unchanged. */
   resetBackend(): void {
-    this.backend.reset?.();
+    this.backend?.reset?.();
   }
 
   /** Release retained backend handles and layer ownership. The runtime cannot be reused after disposal. */
@@ -385,7 +394,7 @@ export class AnimationRuntime {
     if (this.disposed) return;
     this.disposed = true;
     this.layers.clear();
-    this.backend.dispose();
+    this.backend?.dispose();
   }
 
   update(deltaSeconds: number, options: RuntimeUpdateOptions = {}): RuntimeUpdateResult {
@@ -408,9 +417,16 @@ export class AnimationRuntime {
         delta > 0 &&
         shouldCollectRootMotionInterval(layer, fromTime, advancedTime)
       ) {
+        const sampleOptions = {
+          ...(layer.motionCarrier ? { carrier: layer.motionCarrier } : {}),
+          loop: layer.loop,
+          restPose: this.restPose,
+          ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
+          skipUnsupportedTracks: true
+        };
         const interval = shouldSampleRootMotionInterval(layer, fromTime, advancedTime)
-          ? this.backend.sampleMotionInterval(layer, fromTime, advancedTime)
-          : this.backend.sampleMotionInterval(layer, fromTime, fromTime);
+          ? sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, advancedTime, sampleOptions)
+          : sampleMotionIntervalDelta(this.skeleton, layer.clip, fromTime, fromTime, sampleOptions);
         intervals.push({
           layer,
           fromTime,
@@ -423,7 +439,7 @@ export class AnimationRuntime {
       layer.time = finalizeLayerTime(layer, advancedTime);
       if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) {
         this.layers.delete(layer.id);
-        this.backend.removeLayer(layer.id);
+        this.backend?.removeLayer(layer.id);
       }
     }
     return options.collectRootMotion
@@ -439,10 +455,82 @@ export class AnimationRuntime {
       .filter((layer) => isLayerActive(layer))
       .sort(compareLayerOrder);
 
-    if (diagnostics) throw new Error("runtime diagnostics require an explicit offline/reference evaluation path");
-    const result = this.backend.evaluate(active, sanitizeBlendThreshold(this.blendThreshold));
-    return {
-      ...result,
+    if (this.backend) {
+      if (diagnostics) throw new Error("runtime diagnostics require an explicit offline/reference evaluation path");
+      const accelerated = this.backend.evaluate(active, sanitizeBlendThreshold(this.blendThreshold));
+      return {
+        ...accelerated,
+        activeLayers: active.map((layer) => ({
+          id: layer.id,
+          time: layer.time,
+          weight: layer.weight,
+          targetWeight: layer.targetWeight,
+          priority: layer.priority,
+          blendMode: layer.blendMode
+        }))
+      };
+    }
+
+    const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];
+    const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
+    for (const layer of active) {
+      const sampleDiagnostics = diagnostics ? ([] as SampleRepairDiagnostic[]) : undefined;
+      if (diagnostics) pushClipDiagnostics(diagnostics, validateClip(layer.clip, this.skeleton), layer, this.skeleton);
+      const sampleOptions = sampleDiagnostics
+        ? {
+            loop: layer.loop,
+            restPose: this.restPose,
+            diagnostics: sampleDiagnostics,
+            ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
+            skipUnsupportedTracks: true
+          }
+        : {
+            loop: layer.loop,
+            restPose: this.restPose,
+            ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
+            skipUnsupportedTracks: true
+          };
+      const sampled = sampleClipToPose(this.skeleton, layer.clip, layer.time, sampleOptions);
+      if (diagnostics) {
+        pushSampleRepairDiagnostics(diagnostics, sampleDiagnostics ?? [], layer);
+        pushPoseDiagnostics(diagnostics, validatePose(this.skeleton, sampled), {
+          stage: "sample",
+          layerId: layer.id,
+          clipId: layer.clip.id
+        });
+        if (layer.mask) pushMaskDiagnostics(diagnostics, validateJointMask(this.skeleton, layer.mask), layer);
+      }
+      if (layer.blendMode === "additive")
+        additiveLayers.push({ pose: sampled, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
+      else
+        overrideLayers.push({
+          priority: layer.priority,
+          pose: sampled,
+          weight: layer.weight,
+          ...(layer.mask ? { mask: layer.mask } : {})
+        });
+    }
+
+    let localPose = clonePose(this.restPose);
+    for (let index = 0; index < overrideLayers.length; ) {
+      const priority = overrideLayers[index]!.priority;
+      const group: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
+      while (index < overrideLayers.length && overrideLayers[index]!.priority === priority) {
+        const layer = overrideLayers[index]!;
+        group.push({ pose: layer.pose, weight: layer.weight, ...(layer.mask ? { mask: layer.mask } : {}) });
+        index += 1;
+      }
+      localPose = blendPoses(this.skeleton, group, { threshold: this.blendThreshold, fallbackPose: localPose });
+    }
+    for (const additive of additiveLayers) {
+      const deltaPose = additiveDeltaPose(this.restPose, additive.pose);
+      localPose = applyAdditivePose(localPose, deltaPose, additive.weight, additive.mask);
+    }
+    if (diagnostics) pushPoseDiagnostics(diagnostics, validatePose(this.skeleton, localPose), { stage: "final" });
+    localPose = normalizePose(localPose);
+    const evaluation: RuntimeEvaluation = {
+      localPose,
+      modelPose: localToModelPose(this.skeleton, localPose),
       activeLayers: active.map((layer) => ({
         id: layer.id,
         time: layer.time,
@@ -452,6 +540,8 @@ export class AnimationRuntime {
         blendMode: layer.blendMode
       }))
     };
+    if (diagnostics) evaluation.diagnostics = diagnostics;
+    return evaluation;
   }
 
   private assertNotDisposed(): void {
@@ -613,7 +703,7 @@ type RuntimeMotionInterval = {
   toTime: number;
   fromWeight: number;
   toWeight: number;
-  interval: MotionIntervalDelta;
+  interval: ReturnType<typeof sampleMotionIntervalDelta>;
 };
 
 function readRootMotionEffectiveWeight(layer: AnimationLayer, carrierJoint: number, weight = layer.weight): number {
@@ -755,4 +845,73 @@ function blendRootMotionGroup(group: WeightedRuntimeMotionInterval[]): Transform
 
   if (acceptedWeight <= EPSILON) return identityTransform();
   return { translation, rotation: normalizeQuat(rotationSum), scale };
+}
+
+function pushPoseDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: PoseValidationIssue[],
+  context: Pick<RuntimeEvaluationDiagnostic, "stage" | "layerId" | "clipId">
+): void {
+  for (const issue of issues) {
+    diagnostics.push({ ...issue, ...context });
+  }
+}
+
+function pushMaskDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: JointMaskValidationIssue[],
+  layer: AnimationLayer
+): void {
+  for (const issue of issues) {
+    diagnostics.push({ ...issue, stage: "mask", layerId: layer.id, clipId: layer.clip.id });
+  }
+}
+
+function pushClipDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: ClipValidationIssue[],
+  layer: AnimationLayer,
+  skeleton: Skeleton
+): void {
+  for (const issue of issues) {
+    const track = issue.track !== undefined ? layer.clip.tracks[issue.track] : undefined;
+    const index = track ? resolveTrackJointIndex(skeleton, track) : -1;
+    diagnostics.push(
+      createSampleDiagnostic(layer, issue, issue.joint ?? track?.joint ?? track?.humanBone ?? "<clip>", index, {
+        includeProperty: true
+      })
+    );
+  }
+}
+
+function pushSampleRepairDiagnostics(
+  diagnostics: RuntimeEvaluationDiagnostic[],
+  issues: SampleRepairDiagnostic[],
+  layer: AnimationLayer
+): void {
+  for (const issue of issues) {
+    diagnostics.push(
+      createSampleDiagnostic(layer, issue, issue.joint ?? "<clip>", issue.index ?? -1, { includeSample: true })
+    );
+  }
+}
+
+function createSampleDiagnostic(
+  layer: AnimationLayer,
+  issue: ClipValidationIssue | SampleRepairDiagnostic,
+  joint: string,
+  index: number,
+  options: { includeProperty?: boolean; includeSample?: boolean } = {}
+): RuntimeEvaluationDiagnostic {
+  return {
+    stage: "sample",
+    layerId: layer.id,
+    clipId: layer.clip.id,
+    ...(issue.track !== undefined ? { track: issue.track } : {}),
+    ...(options.includeProperty && issue.property !== undefined ? { property: issue.property } : {}),
+    ...(options.includeSample && "sample" in issue && issue.sample !== undefined ? { sample: issue.sample } : {}),
+    joint,
+    index,
+    message: issue.message
+  };
 }

@@ -1,5 +1,5 @@
 import {
-  AnimationRuntime,
+  ReferenceAnimationRuntime,
   assert,
   clonePose,
   poseDeltaMetric,
@@ -8,13 +8,13 @@ import {
 } from "./test-api.js";
 import { nodClip, skeleton } from "./test-helpers.js";
 
-export function createAnimationMetricsEvaluation(): ReturnType<AnimationRuntime["evaluate"]> {
-  const metricRuntime = new AnimationRuntime(skeleton);
+export function createAnimationMetricsEvaluation(): ReturnType<ReferenceAnimationRuntime["evaluate"]> {
+  const metricRuntime = new ReferenceAnimationRuntime(skeleton);
   metricRuntime.setLayer("base", nodClip, { weight: 1, targetWeight: 1, loop: true });
   metricRuntime.update(0.5);
   return metricRuntime.evaluate();
 }
-export function runAnimationMetricsTests(evaluated: ReturnType<AnimationRuntime["evaluate"]>): void {
+export function runAnimationMetricsTests(evaluated: ReturnType<ReferenceAnimationRuntime["evaluate"]>): void {
   const metric = poseRotationMetric(skeleton.restPose, evaluated.localPose);
   assert.ok(metric.maxRotationDelta > 0);
   const signEquivalentPose = clonePose(skeleton.restPose);

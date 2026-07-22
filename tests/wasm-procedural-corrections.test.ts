@@ -1,20 +1,18 @@
+import { solveAimIk, solveTwoBoneIkModel } from "./reference/ik-core.js";
+import { applyAimIkModelCorrection, applyTwoBoneIkLocalCorrections } from "./reference/ik-core.js";
 import assert from "node:assert/strict";
 
 import {
   WA_KERNEL_FEATURE_RETAINED_PROCEDURAL_CORRECTIONS,
   WaKernelStatus,
-  applyAimIkModelCorrection,
-  applyTwoBoneIkLocalCorrections,
-  clonePose,
   copyModelPoseViewToMat4Array,
   createRestPose,
   createSkeleton,
-  localToModelPose,
-  solveAimIk,
-  solveTwoBoneIkModel,
   type WaifuAnimationWasmKernel,
   type WasmProceduralCorrection
 } from "../src/index.js";
+import { clonePose } from "./reference/pose.js";
+import { localToModelPose } from "./reference/skeleton.js";
 import { quaternionNearlyEqual } from "./test-helpers.js";
 
 export function runWasmProceduralCorrectionTests(kernel: WaifuAnimationWasmKernel): void {

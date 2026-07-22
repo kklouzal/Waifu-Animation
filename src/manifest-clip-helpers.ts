@@ -1,4 +1,5 @@
-import { type AnimationClip, type AnimationTrack, normalizedTrackProperty, sampleTrack } from "./clip.js";
+import { sampleTrack } from "./clip-sampling.js";
+import { type AnimationClip, type AnimationTrack, normalizedTrackProperty } from "./clip.js";
 
 type ManifestPlaybackSource = {
   playback?: {
