@@ -38,6 +38,8 @@ npm test
 
 `npm run build` also runs `npm run build:wasm`, compiling the internal scalar Rust/WASM retained pose kernel into `dist/wasm-kernel/waifu_animation_kernel.wasm` for explicit opt-in loading. The kernel supports packed-clip sampling, blend/additive/masks, and local-to-model over reusable SoA arenas. If WASM is unavailable, disabled, or fails ABI/feature/export validation, the existing synchronous object APIs remain scalar TypeScript.
 
+`AnimationRuntime` remains scalar and synchronous by default. Callers that want retained WASM composition can use `await createWasmAnimationRuntime(skeleton)`, or inject `createWasmAnimationRuntimeBackend(kernel, skeleton)` through the existing constructor's additive `backend` option. Scheduling, fades, root-motion reports, and diagnostics remain TypeScript-owned; unsupported sampling paths fall back explicitly, and final public poses/matrices are still materialized as JavaScript objects. Retained handles must be released with `runtime.dispose()` at the avatar lifecycle boundary. See `docs/wasm-kernel-architecture.md` for capacity, fallback, and bump-allocation limitations.
+
 ## Public Modules
 
 - `math`: deterministic random helpers, transform math, quaternion interpolation, matrix composition.

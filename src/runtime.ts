@@ -82,7 +82,37 @@ export type CrossfadeOptions = AnimationLayerOptions & {
 export type AnimationRuntimeOptions = {
   /** Ozz-style rest-pose fallback threshold for override blending. */
   blendThreshold?: number;
+  /** Optional evaluation backend. Omitted by default, preserving the scalar TypeScript path. */
+  backend?: AnimationRuntimeBackend;
 };
+
+export type AnimationRuntimeBackendEvaluation = Pick<RuntimeEvaluation, "localPose" | "modelPose">;
+
+export type AnimationRuntimeBackendSnapshot = {
+  kind: string;
+  state: "ready" | "fallback" | "disposed";
+  reason?: string;
+  retainedLayerCount?: number;
+  wasmSampledLayerCount?: number;
+  scalarSampledLayerCount?: number;
+  memoryEpoch?: number;
+  memoryBytes?: number;
+};
+
+/** Advanced opt-in seam for retained numeric evaluation backends. Scheduling remains owned by AnimationRuntime. */
+export interface AnimationRuntimeBackend {
+  readonly skeleton: Skeleton;
+  setLayer(layer: AnimationLayer, previous?: AnimationLayer): void;
+  removeLayer(id: string): void;
+  clear(): void;
+  evaluate(
+    activeLayers: readonly AnimationLayer[],
+    blendThreshold: number
+  ): AnimationRuntimeBackendEvaluation | undefined;
+  snapshot(): AnimationRuntimeBackendSnapshot;
+  reset?(): void;
+  dispose(): void;
+}
 
 export type RuntimeUpdateOptions = {
   /** Collect an explicit blended motion-carrier interval delta for this update. */
@@ -221,14 +251,22 @@ export class AnimationRuntime {
   readonly restPose: Pose;
   blendThreshold: number;
   private readonly layers = new Map<string, AnimationLayer>();
+  private readonly backend: AnimationRuntimeBackend | undefined;
+  private disposed = false;
 
   constructor(skeleton: Skeleton, options: AnimationRuntimeOptions = {}) {
     this.skeleton = skeleton;
     this.restPose = createRestPose(skeleton);
     this.blendThreshold = sanitizeBlendThreshold(options.blendThreshold);
+    if (options.backend && options.backend.skeleton !== skeleton) {
+      throw new Error("AnimationRuntime backend skeleton does not match the runtime skeleton");
+    }
+    this.backend = options.backend;
   }
 
   setLayer(id: string, clip: AnimationClip, options: AnimationLayerOptions = {}): AnimationLayer {
+    this.assertNotDisposed();
+    const previous = this.layers.get(id);
     const blendMode = sanitizeLayerBlendMode(options.blendMode);
     const layer: AnimationLayer = {
       id,
@@ -246,10 +284,12 @@ export class AnimationRuntime {
       ...(options.sourceBasisQuaternion ? { sourceBasisQuaternion: options.sourceBasisQuaternion } : {})
     };
     this.layers.set(id, layer);
+    this.backend?.setLayer(layer, previous);
     return layer;
   }
 
   crossfade(id: string, clip: AnimationClip, options: CrossfadeOptions = {}): AnimationLayer {
+    this.assertNotDisposed();
     const existing = this.layers.get(id);
     const resetTime = options.resetTime ?? !existing;
     const mayInheritClipMetadata = canInheritLayerClipMetadata(existing, clip);
@@ -293,6 +333,7 @@ export class AnimationRuntime {
             : {})
     };
     this.layers.set(id, layer);
+    this.backend?.setLayer(layer, existing);
 
     if (blendMode === "override" && options.fadeOutExisting !== false) {
       const fromIds = options.fromIds ? new Set(options.fromIds) : undefined;
@@ -319,7 +360,7 @@ export class AnimationRuntime {
   }
 
   removeLayer(id: string): void {
-    this.layers.delete(id);
+    if (this.layers.delete(id)) this.backend?.removeLayer(id);
   }
 
   hasLayer(id: string): boolean {
@@ -328,9 +369,29 @@ export class AnimationRuntime {
 
   clear(): void {
     this.layers.clear();
+    this.backend?.clear();
+  }
+
+  /** Snapshot the optional backend without changing scalar runtime state. */
+  backendSnapshot(): AnimationRuntimeBackendSnapshot {
+    return this.backend?.snapshot() ?? { kind: "typescript", state: "ready" };
+  }
+
+  /** Reset retained backend caches after an availability/epoch transition. Scalar scheduling state is unchanged. */
+  resetBackend(): void {
+    this.backend?.reset?.();
+  }
+
+  /** Release retained backend handles and layer ownership. The runtime cannot be reused after disposal. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.layers.clear();
+    this.backend?.dispose();
   }
 
   update(deltaSeconds: number, options: RuntimeUpdateOptions = {}): RuntimeUpdateResult {
+    this.assertNotDisposed();
     const delta = finiteNonNegative(deltaSeconds, 0);
     const intervals: RuntimeMotionInterval[] = [];
     for (const layer of this.layers.values()) {
@@ -369,7 +430,10 @@ export class AnimationRuntime {
         });
       }
       layer.time = finalizeLayerTime(layer, advancedTime);
-      if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) this.layers.delete(layer.id);
+      if (layer.targetWeight === 0 && Math.abs(layer.weight) < 0.0005) {
+        this.layers.delete(layer.id);
+        this.backend?.removeLayer(layer.id);
+      }
     }
     return options.collectRootMotion
       ? blendRootMotionIntervals(intervals, this.blendThreshold)
@@ -377,11 +441,29 @@ export class AnimationRuntime {
   }
 
   evaluate(options: RuntimeEvaluateOptions = {}): RuntimeEvaluation {
+    this.assertNotDisposed();
     const diagnostics = options.diagnostics ? ([] as RuntimeEvaluationDiagnostic[]) : undefined;
     const active = Array.from(this.layers.values())
       .map((layer) => sanitizeLayerState(layer))
       .filter((layer) => isLayerActive(layer))
       .sort(compareLayerOrder);
+
+    if (!diagnostics) {
+      const accelerated = this.backend?.evaluate(active, sanitizeBlendThreshold(this.blendThreshold));
+      if (accelerated) {
+        return {
+          ...accelerated,
+          activeLayers: active.map((layer) => ({
+            id: layer.id,
+            time: layer.time,
+            weight: layer.weight,
+            targetWeight: layer.targetWeight,
+            priority: layer.priority,
+            blendMode: layer.blendMode
+          }))
+        };
+      }
+    }
 
     const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];
     const additiveLayers: Array<{ pose: Pose; weight: number; mask?: JointMask }> = [];
@@ -454,6 +536,10 @@ export class AnimationRuntime {
     };
     if (diagnostics) evaluation.diagnostics = diagnostics;
     return evaluation;
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error("AnimationRuntime is disposed");
   }
 }
 

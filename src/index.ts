@@ -13,6 +13,7 @@ export * from "./skinning.js";
 export * from "./baked.js";
 export * from "./binary.js";
 export * from "./runtime.js";
+export * from "./runtime-wasm.js";
 export * from "./masks.js";
 export * from "./manifest.js";
 export * from "./retargeting.js";

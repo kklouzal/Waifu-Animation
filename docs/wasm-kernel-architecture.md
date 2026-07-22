@@ -1,6 +1,6 @@
 # Rust/WASM Kernel Architecture Contract
 
-Status: implemented through Phase 3 scalar Rust/WASM retained packed-clip sampling plus padded-SoA blend, additive, masks, normalization, and local-to-model. Runtime scheduling, skinning, IK, Three.js/VRM, and app integration remain outside the kernel.
+Status: implemented through the opt-in Phase 4 `AnimationRuntime` composition facade over scalar Rust/WASM retained packed-clip sampling plus padded-SoA blend, additive, masks, normalization, and local-to-model. Skinning, IK, Three.js/VRM, and app integration remain outside the kernel.
 
 ## Bounded kernel boundary
 
@@ -214,6 +214,16 @@ Phase 2 adds `wa_blend_poses`, `wa_additive_delta`, `wa_apply_additive`, and `wa
 `WasmPoseArenaContext` owns contiguous retained pose slots, mask slots, and layer descriptors per avatar. Slot 0 starts as the skeleton rest pose. `poseView()` and `maskView()` permit already-packed steady-state jobs with caller-selected reusable output slots. `writePose()` and `copyPoseToTransforms()` are explicit object packing/materialization adapters; they do not claim allocation-free object conversion. The contexts keep no process-global TypeScript mutable state, and refresh typed views after memory growth. Existing object-shaped pose APIs remain scalar TypeScript by default.
 
 Phase 3 adds immutable packed-clip handles, retained sampling-context handles/lower-key caches, explicit reset, time/ratio sampling, and direct writes into caller-owned padded-SoA pose slots through `wa_create_packed_clip`, `wa_create_sampling_context`, `wa_reset_sampling_context`, `wa_sample_packed_clip`, and `wa_sample_packed_clip_ratio`. Packed controllers are fixed 64-byte numeric descriptors; clip data and lower-key storage are reserved during setup. Later phases add runtime composition, skinning, and IK/foot-plant behind feature bits.
+
+### Opt-in AnimationRuntime composition facade
+
+`AnimationRuntime` remains scalar TypeScript by default and keeps its existing constructor and methods. Advanced callers can inject an `AnimationRuntimeBackend`, construct a per-avatar `WasmAnimationRuntimeBackend` with `createWasmAnimationRuntimeBackend`, or use the asynchronous `createWasmAnimationRuntime` convenience factory. The runtime still owns layer identity/order, stable priorities, crossfades, target/current weights, clocks, looping/clamping, removal, diagnostics, and TypeScript root-motion collection. Diagnostics deliberately evaluate through the scalar path so validation/repair reporting is unchanged.
+
+The WASM backend owns one avatar arena, per-layer pose/mask slots and sampling contexts, composition scratch, and model matrices. Numeric clips are packed and copied once at layer setup; the same clip object is deduplicated within an avatar context. Eligible frames run sampling through blend/additive/mask/normalize/local-to-model without an intermediate JS pose. `RuntimeEvaluation` still materializes final `Transform[]` and `Mat4[]` because that is the public API contract.
+
+Fallback is explicit and local: source-basis callbacks use scalar TypeScript sampling into the retained slot; invalid/unpackable clips, capacity exhaustion, unavailable exports/features/ABI, kernel quarantine, and failed jobs cause the whole evaluation to use the established scalar runtime result for that frame. `backendSnapshot()` reports ready/fallback/disposed status and sampled-layer counts. `resetBackend()` deterministically resets retained sampling caches after availability changes. Layer replace/remove/clear and `dispose()` destroy handles; each avatar backend has independent mutable state and there is no process-global mutable scheduler/cache.
+
+The Rust allocator is intentionally bump-only. Destroying handles invalidates kernel resources but does not reclaim their linear-memory bytes. Consequently repeated layer replacement can increase the heap high-water mark; stable configured layers do not grow memory during update/evaluate. Applications with high clip churn should retain/reuse layer clip objects or rebuild a backend at a lifecycle boundary. This facade does not claim production speedup: setup is excluded from benchmark hot loops, final JS materialization remains, and callbacks/unsupported tracks retain scalar costs.
 
 ## Memory model and layouts
 

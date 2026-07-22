@@ -11,6 +11,7 @@ import {
   applyAdditivePose,
   blendPoses,
   buildPackedRuntimeAnimation,
+  createWasmAnimationRuntimeBackend,
   createSkeleton,
   localToModelPose,
   loadWaifuAnimationWasmKernel,
@@ -151,12 +152,36 @@ const wasmPackedAvatars =
       )
     : [];
 const retainedPackedSetupMs = performance.now() - packedSetupStart;
+const retainedPackedMemoryBytesAfterSetup =
+  wasmKernel.kind === "wasm-scalar" ? wasmKernel.kernel.memory.buffer.byteLength : undefined;
 const singleAvatar = createAvatarState(0);
 const multiAvatars = Array.from({ length: config.multiAvatarCount }, (_value, index) => createAvatarState(index));
 const runtime = createRuntime(fixture, 0);
 const runtimeAvatars = Array.from({ length: config.runtimeAvatarCount }, (_value, index) =>
   createRuntime(fixture, index)
 );
+const wasmRuntimeSetupStart = performance.now();
+const wasmRuntime =
+  wasmKernel.kind === "wasm-scalar"
+    ? createRuntime(
+        fixture,
+        0,
+        createWasmAnimationRuntimeBackend(wasmKernel.kernel, fixture.skeleton, { maxLayers: 3 })
+      )
+    : undefined;
+const wasmRuntimeAvatars =
+  wasmKernel.kind === "wasm-scalar"
+    ? Array.from({ length: config.runtimeAvatarCount }, (_value, index) =>
+        createRuntime(
+          fixture,
+          index,
+          createWasmAnimationRuntimeBackend(wasmKernel.kernel, fixture.skeleton, { maxLayers: 3 })
+        )
+      )
+    : [];
+const wasmRuntimeSetupMs = performance.now() - wasmRuntimeSetupStart;
+const wasmRuntimeMemoryBytesAfterSetup =
+  wasmKernel.kind === "wasm-scalar" ? wasmKernel.kernel.memory.buffer.byteLength : undefined;
 
 const results: BenchmarkResult[] = [];
 
@@ -169,6 +194,32 @@ results.push(
     op: (frame) => sampleThreeClips(fixture, singleAvatar, frame)
   })
 );
+if (wasmRuntime) {
+  results.push(
+    runBenchmark({
+      name: "animation_runtime_wasm_evaluate_1_avatar",
+      description:
+        "opt-in AnimationRuntime.update + retained WASM sampling/composition/local-to-model, including TS scheduling and final JS pose materialization",
+      config,
+      operationCountPerIteration: 1,
+      op: () => evaluateRuntime(wasmRuntime)
+    })
+  );
+  results.push(
+    runBenchmark({
+      name: "animation_runtime_wasm_evaluate_multi_avatar",
+      description:
+        "same opt-in retained runtime facade across independently owned avatar contexts, including scheduler/orchestration",
+      config,
+      operationCountPerIteration: config.runtimeAvatarCount,
+      op: () => {
+        let checksum = 0;
+        for (const avatarRuntime of wasmRuntimeAvatars) checksum += evaluateRuntime(avatarRuntime);
+        return checksum;
+      }
+    })
+  );
+}
 results.push(
   runBenchmark({
     name: "sampling_packed_typescript_3_clips_1_avatar",
@@ -389,7 +440,11 @@ const output = {
           simdSupported: wasmKernel.simdSupported,
           featureFlags: wasmKernel.kernel.featureFlags,
           retainedPackedSetupMs,
-          retainedMemoryBytesAfterSetup: wasmKernel.kernel.memory.buffer.byteLength
+          retainedMemoryBytesAfterSetup: retainedPackedMemoryBytesAfterSetup,
+          runtimeFacadeSetupMs: wasmRuntimeSetupMs,
+          runtimeFacadeMemoryBytesAfterSetup: wasmRuntimeMemoryBytesAfterSetup,
+          runtimeFacadeAllocationContract:
+            "WASM bump allocations occur during backend/layer setup and are not reclaimed; steady-state update/evaluate performs no WASM memory growth, but final Transform[]/Mat4[] materialization remains JS-owned"
         }
       : {
           status: "fallback",
@@ -409,6 +464,8 @@ const output = {
     "The TypeScript pose row measures the current object-shaped public API, so the comparison includes its current object allocation behavior but does not isolate allocation cost.",
     "No precise heap-allocation claim is made from Node heap deltas; retained-buffer behavior is enforced structurally by contract tests.",
     "The retained full-chain rows exclude runtime layer scheduling, Three/VRM adaptation, skinning, IK, diagnostics, and final JS Transform[] materialization; no production speedup claim is made.",
+    "The animation_runtime_wasm rows include TypeScript scheduling/orchestration and final public JS pose/matrix materialization, but exclude async loader and layer/backend setup. Unsupported callbacks/tracks can retain scalar sampling or trigger scalar frame fallback.",
+    "Smoke timings are directional only and must not be presented as a production speedup claim.",
     "Use --smoke for a fast gate and default arguments for a steadier local baseline. Override with --iterations, --warmup, --joints, --avatars, or --runtime-avatars."
   ]
 };
@@ -895,8 +952,12 @@ function skinningPaletteAndCpu(fixture: BenchmarkFixture): number {
   return checksumNumericArray(result.positions) + checksumNumericArray(result.normals ?? []) * 0.25;
 }
 
-function createRuntime(fixture: BenchmarkFixture, index: number): AnimationRuntime {
-  const runtime = new AnimationRuntime(fixture.skeleton);
+function createRuntime(
+  fixture: BenchmarkFixture,
+  index: number,
+  backend?: NonNullable<ConstructorParameters<typeof AnimationRuntime>[1]>["backend"]
+): AnimationRuntime {
+  const runtime = new AnimationRuntime(fixture.skeleton, backend ? { backend } : {});
   runtime.setLayer("base", fixture.clips[0], {
     weight: 0.82,
     targetWeight: 0.82,

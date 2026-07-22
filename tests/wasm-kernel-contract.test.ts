@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { WaifuAnimationWasmKernel } from "./test-api.js";
 import {
   AnimationSamplingContext,
+  AnimationRuntime,
   WA_KERNEL_ABI_MAJOR,
   WA_KERNEL_FEATURE_SCALAR_ADDITIVE,
   WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS,
@@ -25,6 +26,8 @@ import {
   clonePose,
   createRestPose,
   createSkeleton,
+  createWasmAnimationRuntime,
+  createWasmAnimationRuntimeBackend,
   detectWaKernelSimdSupport,
   localToModelPose,
   loadWaifuAnimationWasmKernel,
@@ -214,13 +217,28 @@ async function assertWasmLocalToModelParity(): Promise<void> {
   );
   assertWasmPoseJobsParity(kernel);
   assertWasmPackedSamplingParity(kernel);
+  assertWasmAnimationRuntimeParity(kernel);
+  const fixture = createWasmKernelSyntheticFixture({ jointCount: 9, keyCount: 4, vertexCount: 0, phase: 0.33 });
+  const disabledRuntime = await createWasmAnimationRuntime(fixture.skeleton, { kernel: { disabled: true } });
+  disabledRuntime.setLayer("scalar", fixture.clip, { weight: 1, targetWeight: 1 });
+  assert.equal(
+    disabledRuntime.backendSnapshot().kind,
+    "typescript-fallback",
+    "loader failure should preserve an explicit scalar fallback"
+  );
+  assert.equal(disabledRuntime.backendSnapshot().state, "fallback");
+  assertPoseNearlyEqual(
+    disabledRuntime.evaluate().localPose,
+    sampleClipToPose(fixture.skeleton, fixture.clip, 0, { restPose: fixture.skeleton.restPose }),
+    1e-6,
+    "disabled factory scalar fallback"
+  );
   assert.equal(
     typeof detectWaKernelSimdSupport(typeof WebAssembly === "undefined" ? undefined : WebAssembly),
     "boolean",
     "SIMD capability probe should be optional and not require SharedArrayBuffer"
   );
 
-  const fixture = createWasmKernelSyntheticFixture({ jointCount: 9, keyCount: 4, vertexCount: 0, phase: 0.33 });
   const restPose = createRestPose(fixture.skeleton);
   const animatedPose = normalizePose(sampleClipToPose(fixture.skeleton, fixture.clip, 0.613, { restPose }));
 
@@ -489,6 +507,192 @@ async function assertWasmLocalToModelParity(): Promise<void> {
   const fallbackOut = updateLocalToModelPoseRange(fixture.skeleton, animatedPose, [], { kernel: disabledContext });
   assertModelPosesNearlyEqual(fallbackOut, localToModelPose(fixture.skeleton, animatedPose), "forced disable fallback");
   kernel.clearForcedDisableForTests();
+}
+
+function assertWasmAnimationRuntimeParity(kernel: WaifuAnimationWasmKernel): void {
+  const fixture = createWasmKernelSyntheticFixture({ jointCount: 9, keyCount: 5, vertexCount: 0, phase: 0.21 });
+  const createPair = () => {
+    const scalar = new AnimationRuntime(fixture.skeleton, { blendThreshold: 0.1 });
+    const backend = createWasmAnimationRuntimeBackend(kernel, fixture.skeleton, { maxLayers: 8 });
+    assert.ok(backend, "runtime backend should initialize from an ABI v1.2 kernel");
+    const accelerated = new AnimationRuntime(fixture.skeleton, { blendThreshold: 0.1, backend });
+    return { scalar, accelerated };
+  };
+  const addLayers = (runtime: AnimationRuntime) => {
+    runtime.setLayer("base-a", fixture.clip, {
+      weight: 0.65,
+      targetWeight: 0.65,
+      loop: true,
+      priority: 0,
+      motionCarrier: { jointIndex: 0 }
+    });
+    runtime.setLayer("base-b", fixture.overlayClip, {
+      weight: 0.25,
+      targetWeight: 0.25,
+      loop: true,
+      priority: 0,
+      mask: fixture.upperBodyMask,
+      motionCarrier: { joint: "joint_1" }
+    });
+    runtime.setLayer("weak-high", fixture.overlayClip, {
+      weight: 0.03,
+      targetWeight: 0.03,
+      loop: false,
+      priority: 2,
+      speed: -1,
+      mask: new Float32Array([0.5])
+    });
+    runtime.setLayer("additive", fixture.additiveClip, {
+      weight: -0.2,
+      targetWeight: -0.2,
+      loop: true,
+      priority: 1,
+      blendMode: "additive",
+      mask: fixture.additiveMask
+    });
+  };
+
+  const pair = createPair();
+  addLayers(pair.scalar);
+  addLayers(pair.accelerated);
+  const setupMemory = kernel.memory.buffer.byteLength;
+  for (const delta of [0, 1 / 60, 0.4, 1.7, 0.03]) {
+    const scalarMotion = pair.scalar.update(delta, { collectRootMotion: true });
+    const wasmMotion = pair.accelerated.update(delta, { collectRootMotion: true });
+    assert.deepEqual(wasmMotion, scalarMotion, "WASM runtime must leave TypeScript root-motion collection exact");
+    const scalarEvaluation = pair.scalar.evaluate();
+    const wasmEvaluation = pair.accelerated.evaluate();
+    assert.deepEqual(wasmEvaluation.activeLayers, scalarEvaluation.activeLayers, "runtime scheduling snapshot parity");
+    assertPoseNearlyEqual(wasmEvaluation.localPose, scalarEvaluation.localPose, 9e-5, "WASM runtime local pose parity");
+    assertModelPosesNearlyEqual(wasmEvaluation.modelPose, scalarEvaluation.modelPose, "WASM runtime model pose parity");
+  }
+  assert.equal(kernel.memory.buffer.byteLength, setupMemory, "runtime evaluation must not grow memory after setup");
+  assert.equal(
+    pair.accelerated.backendSnapshot().wasmSampledLayerCount,
+    4,
+    "all numeric layers should remain retained"
+  );
+  const repeatA = pair.accelerated.evaluate();
+  const repeatB = pair.accelerated.evaluate();
+  assert.deepEqual(repeatB, repeatA, "runtime retained evaluation should replay deterministically without update");
+
+  pair.scalar.crossfade("base-a", fixture.overlayClip, { resetTime: false, fadeSpeed: 4, priority: 0 });
+  pair.accelerated.crossfade("base-a", fixture.overlayClip, { resetTime: false, fadeSpeed: 4, priority: 0 });
+  pair.scalar.update(0.25);
+  pair.accelerated.update(0.25);
+  assertPoseNearlyEqual(
+    pair.accelerated.evaluate().localPose,
+    pair.scalar.evaluate().localPose,
+    9e-5,
+    "runtime clip replacement/crossfade parity"
+  );
+  pair.scalar.removeLayer("weak-high");
+  pair.accelerated.removeLayer("weak-high");
+  pair.scalar.fadeOut("base-b", Number.POSITIVE_INFINITY);
+  pair.accelerated.fadeOut("base-b", Number.POSITIVE_INFINITY);
+  pair.scalar.update(1);
+  pair.accelerated.update(1);
+  assertPoseNearlyEqual(pair.accelerated.evaluate().localPose, pair.scalar.evaluate().localPose, 9e-5, "remove parity");
+
+  const callbackPair = createPair();
+  const callback = () => [0, 0, 0, 1];
+  callbackPair.scalar.setLayer("callback", fixture.clip, {
+    weight: 1,
+    targetWeight: 1,
+    sourceBasisQuaternion: callback
+  });
+  callbackPair.accelerated.setLayer("callback", fixture.clip, {
+    weight: 1,
+    targetWeight: 1,
+    sourceBasisQuaternion: callback
+  });
+  assertPoseNearlyEqual(
+    callbackPair.accelerated.evaluate().localPose,
+    callbackPair.scalar.evaluate().localPose,
+    1e-6,
+    "callback layer scalar-sampling fallback"
+  );
+  assert.equal(callbackPair.accelerated.backendSnapshot().scalarSampledLayerCount, 1);
+
+  const fallbackPair = createPair();
+  const emptyClip = { id: "empty-runtime-clip", duration: 1, tracks: [] };
+  fallbackPair.scalar.setLayer("empty", emptyClip, { weight: 1, targetWeight: 1 });
+  fallbackPair.accelerated.setLayer("empty", emptyClip, { weight: 1, targetWeight: 1 });
+  assertPoseNearlyEqual(
+    fallbackPair.accelerated.evaluate().localPose,
+    fallbackPair.scalar.evaluate().localPose,
+    1e-6,
+    "unpackable clip should scalar-sample into retained composition"
+  );
+  assert.equal(fallbackPair.accelerated.backendSnapshot().scalarSampledLayerCount, 1);
+
+  const capacityBackend = createWasmAnimationRuntimeBackend(kernel, fixture.skeleton, { maxLayers: 1 });
+  assert.ok(capacityBackend);
+  const capacityRuntime = new AnimationRuntime(fixture.skeleton, { backend: capacityBackend });
+  const scalarCapacityRuntime = new AnimationRuntime(fixture.skeleton);
+  capacityRuntime.setLayer("one", fixture.clip, { weight: 1, targetWeight: 1 });
+  capacityRuntime.setLayer("two", fixture.overlayClip, { weight: 1, targetWeight: 1 });
+  scalarCapacityRuntime.setLayer("one", fixture.clip, { weight: 1, targetWeight: 1 });
+  scalarCapacityRuntime.setLayer("two", fixture.overlayClip, { weight: 1, targetWeight: 1 });
+  assertPoseNearlyEqual(
+    capacityRuntime.evaluate().localPose,
+    scalarCapacityRuntime.evaluate().localPose,
+    1e-6,
+    "capacity fallback evaluation should remain callable"
+  );
+  assert.equal(capacityRuntime.backendSnapshot().state, "fallback");
+
+  const independent = createPair();
+  addLayers(independent.scalar);
+  addLayers(independent.accelerated);
+  independent.scalar.update(0.1);
+  independent.accelerated.update(0.1);
+  pair.accelerated.evaluate();
+  assertPoseNearlyEqual(
+    independent.accelerated.evaluate().localPose,
+    independent.scalar.evaluate().localPose,
+    9e-5,
+    "multi-avatar retained context independence"
+  );
+
+  const epochBeforeGrowth = pair.accelerated.backendSnapshot().memoryEpoch;
+  assert.equal(kernel.forceMemoryGrowthForTests(1), WaKernelStatus.Ok, "runtime memory-growth test setup");
+  assertPoseNearlyEqual(
+    pair.accelerated.evaluate().localPose,
+    pair.scalar.evaluate().localPose,
+    9e-5,
+    "runtime typed views should refresh after memory growth"
+  );
+  assert.notEqual(pair.accelerated.backendSnapshot().memoryEpoch, epochBeforeGrowth, "runtime observes memory epoch");
+
+  kernel.forceDisableForTests("runtime fallback test");
+  assertPoseNearlyEqual(
+    pair.accelerated.evaluate().localPose,
+    pair.scalar.evaluate().localPose,
+    1e-6,
+    "quarantine fallback"
+  );
+  assert.equal(pair.accelerated.backendSnapshot().state, "fallback");
+  kernel.clearForcedDisableForTests();
+  pair.accelerated.resetBackend();
+  assertPoseNearlyEqual(
+    pair.accelerated.evaluate().localPose,
+    pair.scalar.evaluate().localPose,
+    9e-5,
+    "fallback rebuild"
+  );
+
+  assert.ok(pair.accelerated.evaluate({ diagnostics: true }).diagnostics, "diagnostics must use scalar path");
+  pair.accelerated.clear();
+  assert.equal(pair.accelerated.backendSnapshot().retainedLayerCount, 0, "clear releases retained handles");
+  pair.accelerated.dispose();
+  pair.accelerated.dispose();
+  assert.equal(pair.accelerated.backendSnapshot().state, "disposed");
+  assert.throws(() => pair.accelerated.evaluate(), /disposed/);
+  callbackPair.accelerated.dispose();
+  fallbackPair.accelerated.dispose();
+  capacityRuntime.dispose();
+  independent.accelerated.dispose();
 }
 
 function assertWasmPackedSamplingParity(kernel: WaifuAnimationWasmKernel): void {
