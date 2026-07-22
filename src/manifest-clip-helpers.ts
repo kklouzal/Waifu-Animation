@@ -18,6 +18,7 @@ export type ManifestPlaybackWindow = {
 
 const STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE = 1e-4;
 const STRIPPED_ROOT_CARRIER_YAW_TOLERANCE = 1e-4;
+const MAX_MANIFEST_ID_LENGTH = 4_096;
 
 export function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
   if (!isRecord(track)) return false;
@@ -98,11 +99,15 @@ export function resolveManifestPlaybackWindow(
   entry: ManifestPlaybackSource,
   clip: Pick<AnimationClip, "duration">
 ): ManifestPlaybackWindow | null {
-  const playback = isRecord(entry?.playback) ? entry.playback : undefined;
-  if (entry?.playback !== undefined && !playback) return null;
-  const duration = isRecord(clip) && typeof clip.duration === "number" ? clip.duration : Number.NaN;
-  const start = playback?.start ?? 0;
-  const end = playback?.end ?? duration;
+  const playbackValue = isRecord(entry) ? ownValue(entry, "playback") : undefined;
+  const playback = isRecord(playbackValue) ? playbackValue : undefined;
+  if (playbackValue !== undefined && !playback) return null;
+  const durationValue = isRecord(clip) ? ownValue(clip, "duration") : undefined;
+  const duration = typeof durationValue === "number" ? durationValue : Number.NaN;
+  const startValue = playback ? ownValue(playback, "start") : undefined;
+  const endValue = playback ? ownValue(playback, "end") : undefined;
+  const start = startValue === undefined ? 0 : typeof startValue === "number" ? startValue : Number.NaN;
+  const end = endValue === undefined ? duration : typeof endValue === "number" ? endValue : Number.NaN;
   if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > duration + 1e-5)
     return null;
   return { start, end };
@@ -123,14 +128,32 @@ export function duplicatedManifestIds(entries: readonly ManifestIdSource[]): Set
   const seen = new Set<string>();
   const duplicates = new Set<string>();
   for (const entry of entries) {
-    if (typeof entry !== "object" || entry === null) continue;
-    if (typeof entry.id !== "string" || entry.id.length === 0) continue;
-    if (seen.has(entry.id)) duplicates.add(entry.id);
-    else seen.add(entry.id);
+    if (!isRecord(entry)) continue;
+    const id = ownValue(entry, "id");
+    if (!isNonEmptyString(id)) continue;
+    if (seen.has(id)) duplicates.add(id);
+    else seen.add(id);
   }
   return duplicates;
 }
 
+function hasOwn(value: object, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, field);
+}
+
+function ownValue(value: object, field: string): unknown {
+  return hasOwn(value, field) ? (value as Record<string, unknown>)[field] : undefined;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_MANIFEST_ID_LENGTH;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
 }

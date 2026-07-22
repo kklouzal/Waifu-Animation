@@ -12,6 +12,7 @@ import {
   type AnimationManifest,
   type AnimationManifestEntry,
   type AssetValidationStatus,
+  MAX_MANIFEST_CLIPS_PER_MANIFEST,
   inspectClipAsset,
   isInvalidAssetValidationStatus,
   manifestEntryMetadataIssue,
@@ -19,7 +20,8 @@ import {
   manifestRootMotionPolicyIssue,
   readRequiredAnimationCoverage,
   readRootMotionPolicy,
-  readRootMotionProvenance
+  readRootMotionProvenance,
+  validateManifestTopLevel
 } from "./manifest.js";
 import {
   duplicatedManifestIds,
@@ -81,18 +83,21 @@ export async function validateAnimationManifestAssets(
   fetchAsset: AnimationAssetFetch,
   options: AnimationAssetValidationOptions = {}
 ): Promise<AnimationAssetValidationReport> {
-  const manifestClips = readManifestAssetEntries(manifest);
-  if (!manifestClips) {
-    const entries = [
-      buildRejectedEntry(manifestEntry("<manifest>", "Manifest", ""), [
-        { id: "<manifest>", severity: "error", message: "manifest clips must be an array" }
-      ])
-    ];
-    return buildValidationReport(entries, options.now);
+  const topLevelIssues = validateManifestTopLevel(manifest).map((message) => ({
+    id: "<manifest>",
+    severity: "error" as const,
+    message
+  }));
+  if (topLevelIssues.length > 0) {
+    return buildValidationReport(
+      [buildRejectedEntry(manifestEntry("<manifest>", "Manifest", ""), topLevelIssues)],
+      options.now
+    );
   }
+  const manifestClips = readManifestAssetEntries(manifest) ?? [];
   const structuralIssues = inspectManifestStructure(manifest);
   const entries = await Promise.all(
-    Array.from(manifestClips, (entry, index) =>
+    manifestClips.map((entry, index) =>
       validateAnimationManifestEntryWithStructure(entry, fetchAsset, options, structuralIssues.get(index) ?? [])
     )
   );
@@ -113,13 +118,22 @@ async function validateAnimationManifestEntryWithStructure(
   options: AnimationAssetValidationOptions,
   structuralIssues: AnimationAssetValidationIssue[]
 ): Promise<AnimationAssetValidationEntry> {
+  const validationStatus = isRecord(entry) ? readValidationStatus(entry) : undefined;
+  if (validationStatus === "rejected" || validationStatus === "quarantined") {
+    return buildRejectedEntry(
+      entry,
+      dedupeIssues([...structuralIssues, ...inspectManifestValidationStatusIssues(entry, validationStatus)]),
+      validationStatus
+    );
+  }
   if (structuralIssues.length > 0) return buildRejectedEntry(entry, structuralIssues);
   try {
-    const clip = decodeAnimationBinary(await fetchAsset(entry.url), entry.id);
+    const entryId = readEntryId(entry);
+    const clip = decodeAnimationBinary(await fetchAsset(readEntryUrl(entry)), entryId);
     return inspectAnimationAsset(entry, clip, options.skeleton);
   } catch (error) {
     return buildRejectedEntry(entry, [
-      { id: entry.id, severity: "error", message: error instanceof Error ? error.message : String(error) }
+      { id: readEntryId(entry), severity: "error", message: error instanceof Error ? error.message : String(error) }
     ]);
   }
 }
@@ -130,20 +144,25 @@ export function inspectAnimationAsset(
   skeleton?: Skeleton
 ): AnimationAssetValidationEntry {
   if (!isRecord(entry)) return buildRejectedEntry(entry, inspectManifestEntryStructure(entry));
-  const id = typeof entry.id === "string" && entry.id.length > 0 ? entry.id : "<unknown>";
+  const id = readEntryId(entry);
   const structuralIssues = inspectManifestEntryStructure(entry);
   const clipIssues = validateClip(clip, skeleton).map((issue) => toAssetIssue(id, issue));
+  const requestedStatus = readValidationStatus(entry);
+  const validationStatusIssues =
+    requestedStatus === "rejected" || requestedStatus === "quarantined"
+      ? inspectManifestValidationStatusIssues(entry, requestedStatus)
+      : [];
   if (!isInspectableManifestEntry(entry) || !isInspectableAnimationClip(clip)) {
-    return buildRejectedEntry(entry, dedupeIssues([...structuralIssues, ...clipIssues]));
+    return buildRejectedEntry(entry, dedupeIssues([...structuralIssues, ...clipIssues, ...validationStatusIssues]));
   }
   const manifestInspection = inspectClipAsset(entry, clip).issues.map((issue) => toAssetIssue(id, issue));
   const issues = dedupeIssues([
     ...structuralIssues,
     ...clipIssues,
     ...manifestInspection,
+    ...validationStatusIssues,
     ...inspectSemanticAsset(entry, clip, skeleton)
   ]);
-  const requestedStatus = entry.validation?.status;
   let status: AssetValidationStatus;
   if (requestedStatus === "quarantined") {
     status = "quarantined";
@@ -158,14 +177,14 @@ export function inspectAnimationAsset(
   }
   return {
     id,
-    label: typeof entry.label === "string" ? entry.label : "",
-    url: typeof entry.url === "string" ? entry.url : "",
+    label: readOwnString(entry, "label") ?? "",
+    url: readEntryUrl(entry),
     accepted: status === "accepted",
     status,
     duration: clip.duration,
-    loop: Boolean(entry.loop ?? clip.loop),
+    loop: Boolean(ownValue(entry, "loop") ?? clip.loop),
     ...assetReportMetadata(entry, clip),
-    compatibleStates: readStringArray(entry.states),
+    compatibleStates: readStringArray(ownValue(entry, "states")),
     jointCoverage: jointCoverage(clip, skeleton),
     trackCount: clip.tracks.length,
     issues
@@ -191,7 +210,7 @@ function inspectSemanticAsset(
 ): AnimationAssetValidationIssue[] {
   const issues: AnimationAssetValidationIssue[] = [];
   const id = readEntryId(entry);
-  const effectiveLoop = entry.loop ?? clip.loop;
+  const effectiveLoop = ownValue(entry, "loop") ?? clip.loop;
   const coverage = jointCoverage(clip, skeleton);
   if (clip.tracks.length === 0) issues.push({ id, severity: "error", message: "clip has no animation tracks" });
   if (effectiveLoop && clip.duration < 0.25) {
@@ -367,8 +386,9 @@ function inspectManifestStructure(manifest: AnimationManifest): Map<number, Anim
   for (let index = 0; index < clips.length; index += 1) {
     const entry = clips[index]!;
     const entryIssues = inspectManifestEntryStructure(entry);
-    if (isRecord(entry) && typeof entry.id === "string" && entry.id.length > 0 && duplicateIds.has(entry.id)) {
-      entryIssues.push({ id: entry.id, severity: "error", message: `duplicate clip id ${entry.id}` });
+    const id = isRecord(entry) ? readOwnString(entry, "id") : null;
+    if (id && duplicateIds.has(id)) {
+      entryIssues.push({ id, severity: "error", message: `duplicate clip id ${id}` });
     }
     if (entryIssues.length > 0) issues.set(index, entryIssues);
   }
@@ -377,25 +397,45 @@ function inspectManifestStructure(manifest: AnimationManifest): Map<number, Anim
 
 function inspectManifestEntryStructure(entry: AnimationManifestEntry): AnimationAssetValidationIssue[] {
   if (!isRecord(entry)) return [{ id: "<unknown>", severity: "error", message: "manifest entry must be an object" }];
-  const id = typeof entry.id === "string" && entry.id.length > 0 ? entry.id : "<unknown>";
+  const id = readEntryId(entry);
   const issues: AnimationAssetValidationIssue[] = [];
-  if (!entry.id) issues.push({ id, severity: "error", message: "manifest entry is missing id" });
-  if (!entry.url) issues.push({ id, severity: "error", message: `${id} is missing url` });
+  if (!readOwnString(entry, "id")) issues.push({ id, severity: "error", message: "manifest entry is missing id" });
+  if (!readOwnString(entry, "url")) issues.push({ id, severity: "error", message: `${id} is missing url` });
   const metadataIssue = manifestEntryMetadataIssue(entry);
   if (metadataIssue) issues.push({ id, severity: "error", message: metadataIssue });
-  if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) {
-    issues.push({ id, severity: "error", message: `${id} has unsupported format ${String(entry.format)}` });
+  const format = ownValue(entry, "format");
+  if (format !== WAIFU_ANIMATION_BINARY_FORMAT) {
+    issues.push({ id, severity: "error", message: `${id} has unsupported format ${formatUnknownValue(format)}` });
   }
-  if (isInvalidAssetValidationStatus(entry.validation?.status)) {
-    issues.push({ id, severity: "error", message: `invalid validation status ${String(entry.validation?.status)}` });
+  const validationStatus = readValidationStatus(entry);
+  if (isInvalidAssetValidationStatus(validationStatus)) {
+    issues.push({
+      id,
+      severity: "error",
+      message: `invalid validation status ${formatUnknownValue(validationStatus)}`
+    });
   }
-  if (entry.validation?.status === "accepted" && entry.validation.reason) {
+  if (validationStatus === "accepted" && readValidationReason(entry) !== undefined) {
     issues.push({ id, severity: "error", message: `${id} is accepted but still has rejection reason` });
   }
   const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry);
   if (rootMotionPolicyIssue) issues.push({ id, severity: "error", message: rootMotionPolicyIssue });
   const requiredCoverageIssue = manifestRequiredCoverageIssue(entry);
   if (requiredCoverageIssue) issues.push({ id, severity: "error", message: requiredCoverageIssue });
+  return issues;
+}
+
+function inspectManifestValidationStatusIssues(
+  entry: AnimationManifestEntry,
+  status: "rejected" | "quarantined"
+): AnimationAssetValidationIssue[] {
+  const id = readEntryId(entry);
+  const issues: AnimationAssetValidationIssue[] = [
+    { id, severity: "error", message: readValidationReason(entry) ?? `manifest marks clip ${status}` }
+  ];
+  for (const issue of readValidationIssues(entry)) {
+    issues.push({ id, severity: "error", message: issue });
+  }
   return issues;
 }
 
@@ -411,20 +451,21 @@ function countValidationStatuses(entries: AnimationAssetValidationEntry[]): Reco
 
 function buildRejectedEntry(
   entry: AnimationManifestEntry,
-  issues: AnimationAssetValidationIssue[]
+  issues: AnimationAssetValidationIssue[],
+  status: Exclude<AssetValidationStatus, "accepted"> = "rejected"
 ): AnimationAssetValidationEntry {
-  const safeEntry = isRecord(entry) ? (entry as Partial<AnimationManifestEntry>) : {};
+  const safeEntry = isRecord(entry) ? entry : {};
   const metadataEntry = isRecord(entry) ? entry : manifestEntry("<unknown>", "", "");
   return {
-    id: typeof safeEntry.id === "string" ? safeEntry.id : "<unknown>",
-    label: typeof safeEntry.label === "string" ? safeEntry.label : "",
-    url: typeof safeEntry.url === "string" ? safeEntry.url : "",
+    id: isRecord(safeEntry) ? readEntryId(safeEntry as AnimationManifestEntry) : "<unknown>",
+    label: isRecord(safeEntry) ? (readOwnString(safeEntry, "label") ?? "") : "",
+    url: isRecord(safeEntry) ? (readOwnString(safeEntry, "url") ?? "") : "",
     accepted: false,
-    status: "rejected",
+    status,
     duration: 0,
-    loop: safeEntry.loop === true,
+    loop: isRecord(safeEntry) && ownValue(safeEntry, "loop") === true,
     ...assetReportMetadata(metadataEntry),
-    compatibleStates: readStringArray(safeEntry.states),
+    compatibleStates: isRecord(safeEntry) ? readStringArray(ownValue(safeEntry, "states")) : [],
     jointCoverage: [],
     trackCount: 0,
     issues
@@ -449,19 +490,26 @@ function classifyPosture(entry: AnimationManifestEntry): string {
 }
 
 function manifestEntrySearchText(entry: AnimationManifestEntry, clip?: AnimationClip): string {
-  return `${readString(entry.id) ?? ""} ${readString(entry.label) ?? ""} ${readStringArray(entry.tags).join(" ")} ${readString(clip?.name) ?? ""}`.toLowerCase();
+  return `${readOwnString(entry, "id") ?? ""} ${readOwnString(entry, "label") ?? ""} ${readStringArray(ownValue(entry, "tags")).join(" ")} ${readString(clip?.name) ?? ""}`.toLowerCase();
 }
 
 function readString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_MANIFEST_STRING_LENGTH
+    ? value
+    : null;
 }
 
 function readEntryId(entry: AnimationManifestEntry): string {
-  return readString(entry.id) ?? "<unknown>";
+  return readOwnString(entry, "id") ?? "<unknown>";
+}
+
+function readEntryUrl(entry: AnimationManifestEntry): string {
+  return readOwnString(entry, "url") ?? "";
 }
 
 function readStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  if (!Array.isArray(value) || value.length > MAX_MANIFEST_STRING_ARRAY_LENGTH || !isDenseArray(value)) return [];
+  return value.filter((item): item is string => readString(item) !== null);
 }
 
 function assetReportMetadata(
@@ -477,9 +525,12 @@ function assetReportMetadata(
   | "movingRootCarrierTranslationTrackCount"
 > {
   const carrierSummary = clip ? rootCarrierTranslationSummary(entry, clip) : { total: 0, moving: 0 };
+  const source = ownValue(entry, "source");
+  const sourceRecord = isRecord(source) ? source : undefined;
   return {
-    category: readString(entry.source?.category) ?? classifyCategory(entry, clip),
-    posture: readString(entry.source?.posture) ?? classifyPosture(entry),
+    category:
+      readString(sourceRecord ? ownValue(sourceRecord, "category") : undefined) ?? classifyCategory(entry, clip),
+    posture: readString(sourceRecord ? ownValue(sourceRecord, "posture") : undefined) ?? classifyPosture(entry),
     rootMotionPolicy: readRootMotionPolicyLabel(entry, clip),
     rootMotionProvenance: readRootMotionProvenance(entry, clip),
     rootCarrierTranslationTrackCount: carrierSummary.total,
@@ -526,7 +577,11 @@ function manifestEntry(id: string, label: string, url: string): AnimationManifes
 }
 
 function readManifestAssetEntries(manifest: AnimationManifest): AnimationManifestEntry[] | null {
-  return isRecord(manifest) && Array.isArray(manifest.clips) ? manifest.clips : null;
+  if (!isRecord(manifest)) return null;
+  const clips = ownValue(manifest, "clips");
+  return Array.isArray(clips) && clips.length <= MAX_MANIFEST_CLIPS_PER_MANIFEST && isDenseArray(clips)
+    ? (clips as AnimationManifestEntry[])
+    : null;
 }
 
 function isInspectableAnimationClip(value: unknown): value is AnimationClip {
@@ -544,14 +599,70 @@ function isInspectableAnimationClip(value: unknown): value is AnimationClip {
 
 function isInspectableManifestEntry(value: unknown): value is AnimationManifestEntry {
   if (!isRecord(value)) return false;
-  const entry = value as Partial<AnimationManifestEntry>;
+  const id = ownValue(value, "id");
+  const label = ownValue(value, "label");
+  const url = ownValue(value, "url");
   return (
-    (entry.id === undefined || typeof entry.id === "string") &&
-    (entry.label === undefined || typeof entry.label === "string") &&
-    (entry.url === undefined || typeof entry.url === "string")
+    (id === undefined || typeof id === "string") &&
+    (label === undefined || typeof label === "string") &&
+    (url === undefined || typeof url === "string")
   );
 }
 
+const MAX_MANIFEST_STRING_LENGTH = 4_096;
+const MAX_MANIFEST_STRING_ARRAY_LENGTH = 1_024;
+
+function hasOwn(value: object, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, field);
+}
+
+function ownValue(value: object, field: string): unknown {
+  return hasOwn(value, field) ? (value as Record<string, unknown>)[field] : undefined;
+}
+
+function readOwnString(value: object, field: string): string | null {
+  return readString(ownValue(value, field));
+}
+
+function readValidationStatus(entry: AnimationManifestEntry): unknown {
+  const validation = ownValue(entry, "validation");
+  return isRecord(validation) ? ownValue(validation, "status") : undefined;
+}
+
+function readValidationReason(entry: AnimationManifestEntry): string | null {
+  const validation = ownValue(entry, "validation");
+  return isRecord(validation) ? readString(ownValue(validation, "reason")) : null;
+}
+
+function readValidationIssues(entry: AnimationManifestEntry): string[] {
+  const validation = ownValue(entry, "validation");
+  if (!isRecord(validation)) return [];
+  const issues = ownValue(validation, "issues");
+  return readStringArray(issues);
+}
+
+function formatUnknownValue(value: unknown): string {
+  if (typeof value === "string") return value.length <= MAX_MANIFEST_STRING_LENGTH ? value : `${value.slice(0, 512)}…`;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  if (typeof value === "symbol") return value.description ? `Symbol(${value.description})` : "Symbol()";
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (Array.isArray(value)) return `[array length ${value.length}]`;
+  return Object.prototype.toString.call(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
+}
+
+function isDenseArray(value: readonly unknown[]): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
 }

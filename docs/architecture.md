@@ -16,8 +16,8 @@
 - `skinning`: reusable matrix-palette skinning for positions, normals, tangents, inverse-bind palettes, remaps, output reuse, and overlap diagnostics.
 - `baked`: baked-sample helpers for camera joints, rigid-instance matrices, and rigid-instance bounds.
 - `masks`: declarative track-name policies for renderer adapters that need to strip root, finger, or lower-body tracks.
-- `manifest`: manifest include loading, duplicate/id validation, root-motion policy/provenance metadata readers, clip asset inspection, usable/rejected manifest helpers.
-- `asset-validation`: manifest-entry asset loading, binary decode inspection, semantic coverage/root-motion/loop reports, and accepted/rejected/quarantined summaries.
+- `manifest`: bounded manifest include loading, duplicate/id validation, root-motion policy/provenance metadata readers, clip asset inspection, usable/rejected manifest helpers. Runtime JSON readers ignore inherited/prototype-backed fields, reject sparse/non-record metadata shapes, bound public string/array/include inputs, preserve deterministic parent-before-include clip ordering, and use manifest root-motion metadata as the authority over clip fallbacks.
+- `asset-validation`: manifest-entry asset loading, binary decode inspection, semantic coverage/root-motion/loop reports, and accepted/rejected/quarantined summaries. Reports reuse the same structural manifest rejection semantics before fetching binaries so malformed entries, duplicate ids, quarantines, stale rejection reasons, and invalid metadata cannot leak through as accepted assets.
 - `importer-config`: app-agnostic Ozz-style offline import planning for additive references, raw motion extraction, optimization, user tracks, baked camera joints, and rigid instances.
 - `retargeting`: rest-pose quaternion retargeting and humanoid-bone checks.
 - `procedural`: look-at distribution, seeded attention scheduling, speech/backchannel cues, gaze targets, breathing/idle motion, and bounded body/arm/head target planning.

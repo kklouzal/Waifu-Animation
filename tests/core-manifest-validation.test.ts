@@ -1,10 +1,12 @@
-import type { AnimationClip, AnimationManifest } from "./test-api.js";
+import type { AnimationClip, AnimationManifest, AnimationManifestEntry } from "./test-api.js";
 import {
   WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
   encodeAnimationBinary,
   inspectAnimationAsset,
   inspectClipAsset,
+  loadManifest,
+  MAX_MANIFEST_CLIPS_PER_MANIFEST,
   readRequiredAnimationCoverage,
   readRootMotionMetadata,
   readRootMotionProvenance,
@@ -32,10 +34,360 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     ["manifest includes must be an array of non-empty strings"],
     "validateManifest should reject malformed include path metadata"
   );
+  const sparseIncludes = [] as unknown[];
+  sparseIncludes[1] = "/lazy.json";
+  assert.deepEqual(
+    validateManifest({ version: 1, includes: sparseIncludes, clips: [] } as unknown as AnimationManifest),
+    ["manifest includes must be an array of non-empty strings"],
+    "validateManifest should reject sparse include arrays instead of skipping holes"
+  );
   assert.deepEqual(
     validateManifest({ version: 1, clips: [null] } as unknown as AnimationManifest),
     ["manifest entry must be an object"],
     "validateManifest should reject malformed clip entry values instead of dereferencing them"
+  );
+  const inheritedTopLevelManifest = Object.create({ version: 1, clips: [] }) as AnimationManifest;
+  assert.deepEqual(
+    validateManifest(inheritedTopLevelManifest),
+    ["manifest version must be a positive integer", "manifest clips must be an array"],
+    "validateManifest should ignore inherited top-level manifest fields instead of trusting prototype data"
+  );
+  const inheritedManifestEntry = Object.create({
+    id: "proto-entry",
+    label: "Proto Entry",
+    url: "/proto-entry.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  }) as unknown as AnimationManifestEntry;
+  const inheritedEntryManifest = { version: 1, clips: [inheritedManifestEntry] } as unknown as AnimationManifest;
+  assert.deepEqual(
+    validateManifest(inheritedEntryManifest),
+    ["manifest entry is missing id", "<unknown> is missing url", "<unknown> has unsupported format undefined"],
+    "validateManifest should reject inherited manifest entry fields as missing own metadata"
+  );
+  assert.deepEqual(
+    usableManifestClips(inheritedEntryManifest),
+    [],
+    "usableManifestClips should not accept prototype-backed manifest entries"
+  );
+  assert.deepEqual(
+    rejectedAnimationReport(inheritedEntryManifest),
+    [{ id: "<unknown>", reason: "missing id" }],
+    "rejectedAnimationReport should surface inherited manifest entry fields as structural rejects"
+  );
+  const inheritedEntryClipInspection = inspectClipAsset(inheritedManifestEntry, nodClip);
+  assert.equal(inheritedEntryClipInspection.accepted, false);
+  assert.ok(
+    inheritedEntryClipInspection.issues.some((issue) => issue.message === "manifest entry is missing id"),
+    "inspectClipAsset should not accept inherited manifest entry fields"
+  );
+  let inheritedEntryFetchCount = 0;
+  const inheritedEntryAssetReport = await validateAnimationManifestAssets(
+    inheritedEntryManifest,
+    async () => {
+      inheritedEntryFetchCount += 1;
+      return encodeAnimationBinary(nodClip);
+    },
+    { skeleton }
+  );
+  assert.equal(inheritedEntryFetchCount, 0);
+  assert.equal(inheritedEntryAssetReport.rejected, 1);
+  const inheritedSource = Object.create({ category: "locomotion", posture: "sitting" }) as unknown as Record<
+    string,
+    unknown
+  >;
+  const inheritedSourceEntry = {
+    id: "own-source",
+    label: "Own Source",
+    url: "/own-source.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: inheritedSource
+  };
+  assert.deepEqual(
+    validateManifest({ version: 1, clips: [inheritedSourceEntry] }),
+    [],
+    "own manifest entries with empty prototype-backed source objects should remain loadable"
+  );
+  const inheritedSourceAsset = inspectAnimationAsset(inheritedSourceEntry, nodClip, skeleton);
+  assert.equal(
+    inheritedSourceAsset.category,
+    "uncategorized",
+    "asset reports should not classify clips from inherited source.category metadata"
+  );
+  assert.equal(
+    inheritedSourceAsset.posture,
+    "standing",
+    "asset reports should not classify clips from inherited source.posture metadata"
+  );
+  const blankRejectionReasonEntry = {
+    id: "blank-rejected",
+    label: "Blank Rejected",
+    url: "/blank-rejected.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    validation: { status: "rejected" as const, reason: "" }
+  };
+  const blankRejectionReasonManifest = { version: 1, clips: [blankRejectionReasonEntry] } as AnimationManifest;
+  assert.deepEqual(
+    validateManifest(blankRejectionReasonManifest),
+    ["blank-rejected has invalid validation.reason metadata"],
+    "validateManifest should reject empty validation reasons instead of preserving an empty rejection string"
+  );
+  assert.deepEqual(
+    usableManifestClips(blankRejectionReasonManifest),
+    [],
+    "usableManifestClips should not treat a rejected clip with an empty reason as usable"
+  );
+  assert.deepEqual(
+    rejectedAnimationReport(blankRejectionReasonManifest).map((entry) => [entry.id, entry.reason]),
+    [["blank-rejected", "has invalid validation.reason metadata"]],
+    "rejectedAnimationReport should emit deterministic metadata reasons for empty rejection strings"
+  );
+  assert.equal(inspectClipAsset(blankRejectionReasonEntry, nodClip).accepted, false);
+  const oversizedIdEntry = {
+    id: "x".repeat(4_097),
+    label: "Oversized Id",
+    url: "/oversized-id.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  };
+  assert.ok(
+    validateManifest({ version: 1, clips: [oversizedIdEntry] }).includes("<unknown> has invalid id metadata"),
+    "validateManifest should reject unbounded manifest id strings before using them in diagnostics"
+  );
+  await assert.rejects(
+    () => loadManifest("/bad-clips", async () => ({ version: 1, clips: "not-an-array" })),
+    /manifest \/bad-clips clips must be an array/,
+    "loadManifest should reject malformed loaded clip tables instead of silently dropping them"
+  );
+  await assert.rejects(
+    () =>
+      loadManifest("/sparse-clips", async () => {
+        const clips = [] as unknown[];
+        clips[1] = {
+          id: "sparse-loaded",
+          label: "Sparse Loaded",
+          url: "/sparse-loaded.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        };
+        return { version: 1, clips };
+      }),
+    /manifest \/sparse-clips clips must be a dense array/,
+    "loadManifest should reject sparse loaded clip arrays instead of preserving holes"
+  );
+  await assert.rejects(
+    () =>
+      loadManifest("/too-many-clips", async () => ({
+        version: 1,
+        clips: Array.from({ length: MAX_MANIFEST_CLIPS_PER_MANIFEST + 1 }, (_, index) => ({
+          id: `loaded-${index}`,
+          label: `Loaded ${index}`,
+          url: `/loaded-${index}.waifuanim.bin`,
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        }))
+      })),
+    new RegExp(`manifest /too-many-clips clips exceed ${MAX_MANIFEST_CLIPS_PER_MANIFEST} entries`),
+    "loadManifest should apply the same conservative per-manifest clip bound as validation"
+  );
+  await assert.rejects(
+    () => loadManifest("/sparse-includes", async () => ({ version: 1, includes: sparseIncludes, clips: [] })),
+    /manifest \/sparse-includes includes must be an array of non-empty strings/,
+    "loadManifest should reject sparse include arrays instead of recursing into undefined include ids"
+  );
+  const cycleLoadedManifest = await loadManifest("/cycle-a", async (url) => {
+    if (url === "/cycle-a") {
+      return {
+        version: 1,
+        includes: ["/cycle-b"],
+        clips: [
+          {
+            id: "cycle-a",
+            label: "Cycle A",
+            url: "/cycle-a.waifuanim.bin",
+            format: WAIFU_ANIMATION_BINARY_FORMAT
+          }
+        ]
+      };
+    }
+    return {
+      version: 1,
+      includes: ["/cycle-a"],
+      clips: [
+        {
+          id: "cycle-b",
+          label: "Cycle B",
+          url: "/cycle-b.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        }
+      ]
+    };
+  });
+  assert.deepEqual(
+    cycleLoadedManifest.clips.map((entry) => entry.id),
+    ["cycle-a", "cycle-b"],
+    "loadManifest should keep deterministic parent-before-include clip ordering while cutting include cycles"
+  );
+  await assert.rejects(
+    () =>
+      loadManifest("/too-many-includes", async () => ({ version: 1, includes: ["/a", "/b"], clips: [] }), {
+        maxIncludesPerManifest: 1
+      }),
+    /manifest \/too-many-includes includes exceed 1 entries/,
+    "loadManifest should apply a deterministic per-manifest include bound"
+  );
+  await assert.rejects(
+    () =>
+      loadManifest(
+        "/too-deep-a",
+        async (url) => ({
+          version: 1,
+          includes: url.endsWith("a") ? ["/too-deep-b"] : url.endsWith("b") ? ["/too-deep-c"] : [],
+          clips: []
+        }),
+        { maxIncludeDepth: 1 }
+      ),
+    /manifest include depth exceeds 1 at \/too-deep-c/,
+    "loadManifest should apply an explicit include recursion depth bound before loading nested manifests"
+  );
+  await assert.rejects(
+    () =>
+      loadManifest(
+        "/too-many-total-a",
+        async (url) => ({ version: 1, includes: url.endsWith("a") ? ["/too-many-total-b"] : [], clips: [] }),
+        { maxManifestCount: 1 }
+      ),
+    /manifest include count exceeds 1 at \/too-many-total-b/,
+    "loadManifest should apply an explicit total manifest load bound before fetching another include"
+  );
+  await assert.rejects(
+    () =>
+      loadManifest(
+        "/optional-too-many-total-a",
+        async (url) => ({
+          version: 1,
+          includes: url.endsWith("a") ? ["/optional-too-many-total-b"] : [],
+          clips: []
+        }),
+        { maxManifestCount: 1, optionalIncludes: true }
+      ),
+    /manifest include count exceeds 1 at \/optional-too-many-total-b/,
+    "optional include loading should not suppress explicit include resource bounds"
+  );
+  const sharedIncludeOrder: string[] = [];
+  const sharedIncludeManifest = await loadManifest("/shared-root", async (url) => {
+    sharedIncludeOrder.push(url);
+    if (url === "/shared-root") {
+      return {
+        version: 1,
+        includes: ["/left", "/right"],
+        clips: [
+          {
+            id: "root",
+            label: "Root",
+            url: "/root.waifuanim.bin",
+            format: WAIFU_ANIMATION_BINARY_FORMAT
+          }
+        ]
+      };
+    }
+    if (url === "/left") {
+      return {
+        version: 1,
+        includes: ["/shared-leaf"],
+        clips: [
+          {
+            id: "left",
+            label: "Left",
+            url: "/left.waifuanim.bin",
+            format: WAIFU_ANIMATION_BINARY_FORMAT
+          }
+        ]
+      };
+    }
+    if (url === "/right") {
+      return {
+        version: 1,
+        includes: ["/shared-leaf"],
+        clips: [
+          {
+            id: "right",
+            label: "Right",
+            url: "/right.waifuanim.bin",
+            format: WAIFU_ANIMATION_BINARY_FORMAT
+          }
+        ]
+      };
+    }
+    return {
+      version: 1,
+      clips: [
+        {
+          id: "shared-leaf",
+          label: "Shared Leaf",
+          url: "/shared-leaf.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        }
+      ]
+    };
+  });
+  assert.deepEqual(
+    sharedIncludeOrder,
+    ["/shared-root", "/left", "/shared-leaf", "/right"],
+    "loadManifest should load includes deterministically and avoid re-loading a shared include"
+  );
+  assert.deepEqual(
+    sharedIncludeManifest.clips.map((entry) => entry.id),
+    ["root", "left", "shared-leaf", "right"],
+    "loadManifest should preserve depth-first parent-before-include ordering when multiple branches share an include"
+  );
+  assert.deepEqual(
+    validateManifest({
+      version: 1,
+      clips: [
+        {
+          id: "invalid-root-motion-channel-policy",
+          label: "Invalid Root Motion Channel Policy",
+          url: "/invalid-root-motion-channel-policy.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "preserved", translationPolicy: "keep-everything" } }
+        },
+        {
+          id: "sparse-tags",
+          label: "Sparse Tags",
+          url: "/sparse-tags.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          tags: (() => {
+            const tags = ["idle"] as unknown[];
+            tags[2] = "loop";
+            return tags;
+          })()
+        },
+        {
+          id: "oversized-root-motion-axes",
+          label: "Oversized Root Motion Axes",
+          url: "/oversized-root-motion-axes.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "stripped-to-in-place", extractedAxes: ["x", "y", "z", "x"] } }
+        }
+      ]
+    } as unknown as AnimationManifest),
+    [
+      "invalid-root-motion-channel-policy has invalid source.rootMotion.translationPolicy keep-everything",
+      "sparse-tags has invalid tags metadata",
+      "oversized-root-motion-axes has invalid source.rootMotion.extractedAxes metadata"
+    ],
+    "validateManifest should reject malformed broader metadata arrays and root-motion channel policy fields deterministically"
+  );
+  assert.equal(
+    readRootMotionMetadata(
+      {
+        id: "invalid-channel-policy-fallback",
+        label: "Invalid Channel Policy Fallback",
+        url: "/invalid-channel-policy-fallback.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotion: { policy: "preserved", translationPolicy: "keep-everything" } }
+      },
+      { ...nodClip, metadata: { rootMotionPolicy: "stripped-to-in-place" } }
+    ),
+    null,
+    "readRootMotionMetadata should reject invalid manifest channel policy fields instead of partially reading metadata or falling back to clip metadata"
   );
   const malformedEntryMetadataManifest = {
     version: 1,
@@ -108,6 +460,39 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     ),
     "asset report validation should surface a malformed top-level manifest without fetching assets"
   );
+  const invalidTopLevelManifestFetches: string[] = [];
+  const invalidTopLevelManifestReport = await validateAnimationManifestAssets(
+    {
+      version: 0,
+      includes: ["/shared.json", ""],
+      source: [],
+      clips: [
+        {
+          id: "must-not-fetch",
+          label: "Must Not Fetch",
+          url: "/must-not-fetch.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT
+        }
+      ]
+    } as unknown as AnimationManifest,
+    async (url) => {
+      invalidTopLevelManifestFetches.push(url);
+      return encodeAnimationBinary(nodClip);
+    },
+    { skeleton, now: new Date("2026-01-01T00:00:00.000Z") }
+  );
+  assert.deepEqual(invalidTopLevelManifestFetches, []);
+  assert.equal(invalidTopLevelManifestReport.accepted, 0);
+  assert.equal(invalidTopLevelManifestReport.rejected, 1);
+  assert.deepEqual(
+    invalidTopLevelManifestReport.entries[0]!.issues.map((issue) => issue.message),
+    [
+      "manifest version must be a positive integer",
+      "manifest includes must be an array of non-empty strings",
+      "manifest source must be an object"
+    ],
+    "asset validation should preflight invalid top-level version/includes/source before fetching any clip asset"
+  );
   const malformedEntryAssetFetches: string[] = [];
   const malformedEntryAssetReport = await validateAnimationManifestAssets(
     {
@@ -151,12 +536,62 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     },
     { skeleton }
   );
-  assert.deepEqual(sparseManifestFetches, ["/valid-after-hole.waifuanim.bin"]);
-  assert.equal(sparseManifestAssetReport.accepted, 1);
+  assert.deepEqual(sparseManifestFetches, []);
+  assert.equal(sparseManifestAssetReport.accepted, 0);
   assert.equal(sparseManifestAssetReport.rejected, 1);
   assert.ok(
-    sparseManifestAssetReport.entries[0]!.issues.some((issue) => issue.message === "manifest entry must be an object"),
-    "asset report validation should visit sparse manifest clip holes as rejected entries"
+    sparseManifestAssetReport.entries[0]!.issues.some(
+      (issue) => issue.message === "manifest clips must be a dense array"
+    ),
+    "asset report validation should reject sparse manifest clip tables without fetching present entries"
+  );
+  assert.deepEqual(
+    validateManifest({ version: 1, clips: sparseManifestClips } as unknown as AnimationManifest),
+    ["manifest clips must be a dense array"],
+    "validateManifest should reject sparse clip arrays before iterating holes"
+  );
+  const sparseHugeManifestClips = [] as unknown[];
+  sparseHugeManifestClips.length = 1_000_000_000;
+  sparseHugeManifestClips[MAX_MANIFEST_CLIPS_PER_MANIFEST] = {
+    id: "sparse-huge-last",
+    label: "Sparse Huge Last",
+    url: "/sparse-huge-last.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  };
+  assert.deepEqual(
+    validateManifest({ version: 1, clips: sparseHugeManifestClips } as unknown as AnimationManifest),
+    [`manifest clips exceed ${MAX_MANIFEST_CLIPS_PER_MANIFEST} entries`],
+    "validateManifest should reject huge sparse clip arrays by length before scanning holes"
+  );
+  const sparseHugeManifestFetches: string[] = [];
+  const sparseHugeManifestReport = await validateAnimationManifestAssets(
+    { version: 1, clips: sparseHugeManifestClips } as unknown as AnimationManifest,
+    async (url) => {
+      sparseHugeManifestFetches.push(url);
+      return encodeAnimationBinary(nodClip);
+    },
+    { skeleton }
+  );
+  assert.deepEqual(sparseHugeManifestFetches, []);
+  assert.equal(sparseHugeManifestReport.total, 1);
+  assert.equal(sparseHugeManifestReport.rejected, 1);
+  assert.deepEqual(
+    sparseHugeManifestReport.entries[0]!.issues.map((issue) => issue.message),
+    [`manifest clips exceed ${MAX_MANIFEST_CLIPS_PER_MANIFEST} entries`],
+    "asset validation should reject hostile huge clip arrays deterministically before fetching assets"
+  );
+  assert.deepEqual(
+    validateManifest({
+      version: 1,
+      clips: Array.from({ length: MAX_MANIFEST_CLIPS_PER_MANIFEST + 1 }, (_, index) => ({
+        id: `bounded-${index}`,
+        label: `Bounded ${index}`,
+        url: `/bounded-${index}.waifuanim.bin`,
+        format: WAIFU_ANIMATION_BINARY_FORMAT
+      }))
+    }),
+    [`manifest clips exceed ${MAX_MANIFEST_CLIPS_PER_MANIFEST} entries`],
+    "validateManifest should reject dense clip arrays above the explicit resource bound"
   );
   const malformedValidationStatusManifest = {
     version: 1,
@@ -645,6 +1080,21 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     ),
     "inspectAnimationAsset should reject malformed validation.status metadata"
   );
+  const rejectedManifestEntry = {
+    id: "rejected-no-fetch",
+    label: "Rejected No Fetch",
+    url: "/rejected-no-fetch.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    validation: { status: "rejected" as const, reason: "manual reject", issues: ["bad hands"] }
+  };
+  const rejectedAssetInspection = inspectAnimationAsset(rejectedManifestEntry, nodClip, skeleton);
+  assert.equal(rejectedAssetInspection.status, "rejected");
+  assert.equal(rejectedAssetInspection.accepted, false);
+  assert.ok(
+    rejectedAssetInspection.issues.some((issue) => issue.message === "manual reject") &&
+      rejectedAssetInspection.issues.some((issue) => issue.message === "bad hands"),
+    "inspectAnimationAsset should preserve explicit rejected manifest diagnostics"
+  );
   const quarantinedAssetInspection = inspectAnimationAsset(quarantinedManifestEntry, nodClip, skeleton);
   assert.equal(quarantinedAssetInspection.status, "quarantined");
   assert.equal(quarantinedAssetInspection.accepted, false);
@@ -652,12 +1102,39 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     quarantinedAssetInspection.issues.some((issue) => issue.message === "manual hold"),
     "inspectAnimationAsset should preserve manifest quarantine reasons as validation issues"
   );
+  const noFetchManifest = {
+    version: 1,
+    clips: [
+      rejectedManifestEntry,
+      { ...quarantinedManifestEntry, validation: { ...quarantinedManifestEntry.validation, issues: ["needs review"] } }
+    ]
+  } as AnimationManifest;
+  const noFetchUrls: string[] = [];
+  const noFetchAssetValidationReport = await validateAnimationManifestAssets(
+    noFetchManifest,
+    async (url) => {
+      noFetchUrls.push(url);
+      throw new Error(`fetch should not run for ${url}`);
+    },
+    { skeleton, now: new Date("2026-01-01T00:00:00.000Z") }
+  );
+  assert.deepEqual(noFetchUrls, []);
+  assert.equal(noFetchAssetValidationReport.accepted, 0);
+  assert.equal(noFetchAssetValidationReport.rejected, 1);
+  assert.equal(noFetchAssetValidationReport.quarantined, 1);
+  assert.equal(noFetchAssetValidationReport.entries[0]!.status, "rejected");
+  assert.ok(noFetchAssetValidationReport.entries[0]!.issues.some((issue) => issue.message === "manual reject"));
+  assert.equal(noFetchAssetValidationReport.entries[1]!.status, "quarantined");
+  assert.ok(noFetchAssetValidationReport.entries[1]!.issues.some((issue) => issue.message === "manual hold"));
+  assert.ok(noFetchAssetValidationReport.entries[1]!.issues.some((issue) => issue.message === "needs review"));
   const quarantinedAssetValidationReport = await validateAnimationManifestAssets(
     {
       version: 1,
       clips: [quarantinedManifestEntry]
     },
-    async () => encodeAnimationBinary(nodClip),
+    async () => {
+      throw new Error("quarantined clip should not fetch");
+    },
     { skeleton, now: new Date("2026-01-01T00:00:00.000Z") }
   );
   assert.equal(quarantinedAssetValidationReport.accepted, 0);
@@ -715,21 +1192,26 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     ),
     "inspectAnimationAsset should reject manifest entries whose declared format cannot be decoded as waifuanim binaries"
   );
-  const malformedClipAssetInspection = inspectAnimationAsset(
-    {
-      id: "malformed-clip",
-      label: "Malformed Clip",
-      url: "/malformed-clip.waifuanim.bin",
-      format: WAIFU_ANIMATION_BINARY_FORMAT
-    },
-    { id: "malformed-clip", duration: 1 } as unknown as AnimationClip,
-    skeleton
-  );
+  const malformedClipEntry = {
+    id: "malformed-clip",
+    label: "Malformed Clip",
+    url: "/malformed-clip.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT
+  };
+  const malformedClip = { id: "malformed-clip", duration: 1 } as unknown as AnimationClip;
+  const malformedClipAssetInspection = inspectAnimationAsset(malformedClipEntry, malformedClip, skeleton);
   assert.equal(malformedClipAssetInspection.status, "rejected");
   assert.equal(malformedClipAssetInspection.duration, 0);
   assert.ok(
     malformedClipAssetInspection.issues.some((issue) => issue.message === "clip tracks must be an array"),
     "inspectAnimationAsset should return a rejected report for malformed clip containers instead of throwing"
+  );
+  const malformedDirectClipInspection = inspectClipAsset(malformedClipEntry, malformedClip);
+  assert.equal(malformedDirectClipInspection.accepted, false);
+  assert.equal(malformedDirectClipInspection.trackCount, 0);
+  assert.ok(
+    malformedDirectClipInspection.issues.some((issue) => issue.message === "clip tracks must be an array"),
+    "inspectClipAsset should return rejected diagnostics for malformed clip containers instead of throwing"
   );
   const malformedRootCarrierClip = {
     id: "malformed-root-carrier",
@@ -741,8 +1223,13 @@ export async function runCoreManifestValidationTests(): Promise<void> {
       id: "malformed-root-carrier",
       label: "Malformed Root Carrier",
       url: "/malformed-root-carrier.waifuanim.bin",
-      format: WAIFU_ANIMATION_BINARY_FORMAT
-    },
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      states: (() => {
+        const states = ["idle"] as unknown[];
+        states[2] = "walk";
+        return states;
+      })()
+    } as unknown as AnimationManifest["clips"][number],
     malformedRootCarrierClip,
     skeleton
   );
@@ -750,6 +1237,11 @@ export async function runCoreManifestValidationTests(): Promise<void> {
   assert.ok(
     malformedRootCarrierInspection.issues.some((issue) => issue.message === "track times must be a Float32Array"),
     "root-carrier manifest helpers should ignore malformed runtime track buffers after validation reports them"
+  );
+  assert.deepEqual(
+    malformedRootCarrierInspection.compatibleStates,
+    [],
+    "asset reports should not copy sparse metadata arrays after manifest validation rejects them"
   );
   const structurallyRejectedAssetFetches: string[] = [];
   const structuralAssetValidationReport = await validateAnimationManifestAssets(
@@ -833,13 +1325,24 @@ export async function runCoreManifestValidationTests(): Promise<void> {
           source: { requiredHumanBones: ["head", "tail"] }
         },
         {
+          id: "invalid-sparse-states-metadata-asset",
+          label: "Invalid Sparse States Metadata Asset",
+          url: "/invalid-sparse-states-metadata-asset.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          states: (() => {
+            const states = ["idle"] as unknown[];
+            states[2] = "walk";
+            return states;
+          })()
+        },
+        {
           id: "valid-metadata-asset",
           label: "Valid Metadata Asset",
           url: "/valid-metadata-asset.waifuanim.bin",
           format: WAIFU_ANIMATION_BINARY_FORMAT
         }
       ]
-    },
+    } as unknown as AnimationManifest,
     async (url) => {
       metadataRejectedAssetFetches.push(url);
       return encodeAnimationBinary(nodClip);
@@ -852,7 +1355,7 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     "asset report validation should not fetch entries rejected by manifest metadata validation"
   );
   assert.equal(metadataRejectedAssetReport.accepted, 1);
-  assert.equal(metadataRejectedAssetReport.rejected, 3);
+  assert.equal(metadataRejectedAssetReport.rejected, 4);
   assert.ok(
     metadataRejectedAssetReport.entries[0]!.issues.some(
       (issue) => issue.message === "invalid validation status acceptted"
@@ -867,5 +1370,8 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     metadataRejectedAssetReport.entries[2]!.issues.some(
       (issue) => issue.message === "has invalid source.requiredHumanBones entry tail"
     )
+  );
+  assert.ok(
+    metadataRejectedAssetReport.entries[3]!.issues.some((issue) => issue.message === "has invalid states metadata")
   );
 }

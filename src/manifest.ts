@@ -116,9 +116,22 @@ export type RootMotionCarrierHintResolution = {
 const MAX_ROOT_MOTION_CARRIER_STRING_LENGTH = 512;
 const MAX_ROOT_MOTION_BINDING_PRIORITY = 1_000_000;
 const MAX_FORMATTED_UNKNOWN_VALUE_LENGTH = 512;
+const MAX_MANIFEST_STRING_LENGTH = 4_096;
+const MAX_MANIFEST_STRING_ARRAY_LENGTH = 1_024;
+export const MAX_MANIFEST_CLIPS_PER_MANIFEST = 1_024;
+const DEFAULT_MAX_MANIFEST_INCLUDE_DEPTH = 64;
+const DEFAULT_MAX_MANIFEST_TOTAL_LOADS = 1_024;
+const DEFAULT_MAX_MANIFEST_INCLUDES_PER_MANIFEST = 1_024;
 const ROOT_MOTION_CARRIER_INDEX_FIELDS = ["jointIndex", "joint_index", "index"] as const;
 const ROOT_MOTION_CARRIER_JOINT_FIELDS = ["joint", "name", "jointName", "joint_name"] as const;
 const ROOT_MOTION_CARRIER_HUMAN_BONE_FIELDS = ["humanBone", "human_bone", "humanoid"] as const;
+
+class ManifestIncludeLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ManifestIncludeLimitError";
+  }
+}
 
 export type RequiredAnimationCoverage = {
   requiredHumanBones: HumanoidBoneName[];
@@ -130,47 +143,72 @@ export type AssetLoader = (url: string) => Promise<unknown>;
 export type ManifestLoaderOptions = {
   resolveInclude?: (includeUrl: string, parentUrl: string) => string;
   optionalIncludes?: boolean;
+  maxIncludeDepth?: number;
+  maxManifestCount?: number;
+  maxIncludesPerManifest?: number;
+  maxClipsPerManifest?: number;
 };
 
-export function validateManifest(manifest: AnimationManifest): string[] {
+export function validateManifestTopLevel(manifest: AnimationManifest): string[] {
   const issues: string[] = [];
-  const ids = new Set<string>();
   if (!isRecord(manifest)) return ["manifest must be an object"];
-  if (!Number.isInteger(manifest.version) || manifest.version < 1)
-    issues.push("manifest version must be a positive integer");
-  if (manifest.includes !== undefined) {
-    if (!Array.isArray(manifest.includes) || manifest.includes.some((include) => !isNonEmptyString(include))) {
+  const version = ownValue(manifest, "version");
+  if (!Number.isInteger(version) || (version as number) < 1) issues.push("manifest version must be a positive integer");
+  const manifestIncludes = ownValue(manifest, "includes");
+  if (manifestIncludes !== undefined) {
+    if (
+      !Array.isArray(manifestIncludes) ||
+      manifestIncludes.length > DEFAULT_MAX_MANIFEST_INCLUDES_PER_MANIFEST ||
+      !isDenseArray(manifestIncludes) ||
+      manifestIncludes.some((include) => !isNonEmptyString(include))
+    ) {
       issues.push("manifest includes must be an array of non-empty strings");
     }
   }
-  if (manifest.source !== undefined && !isRecord(manifest.source)) issues.push("manifest source must be an object");
+  const manifestSource = ownValue(manifest, "source");
+  if (manifestSource !== undefined && !isRecord(manifestSource)) issues.push("manifest source must be an object");
+  const clipsIssue = manifestClipsTableIssue(ownValue(manifest, "clips"));
+  if (clipsIssue) issues.push(clipsIssue);
+  return issues;
+}
+
+export function validateManifest(manifest: AnimationManifest): string[] {
+  const issues = validateManifestTopLevel(manifest);
+  const ids = new Set<string>();
+  if (!isRecord(manifest)) return issues;
   const clips = readManifestClips(manifest);
-  if (!clips) return [...issues, "manifest clips must be an array"];
-  for (const entry of clips) {
+  if (!clips) return issues;
+  for (let index = 0; index < clips.length; index += 1) {
+    const entry = clips[index]!;
     if (!isManifestEntryObject(entry)) {
       issues.push("manifest entry must be an object");
       continue;
     }
-    if (!entry.id) issues.push("manifest entry is missing id");
-    if (!entry.url) issues.push(`${entry.id || "<unknown>"} is missing url`);
+    const entryId = readManifestEntryId(entry);
+    const entryUrl = readManifestEntryUrl(entry);
+    const issueId = manifestEntryIssueId(entry);
+    if (!entryId) issues.push("manifest entry is missing id");
+    if (!entryUrl) issues.push(`${issueId} is missing url`);
     const metadataIssue = manifestEntryMetadataIssue(entry);
-    if (metadataIssue) issues.push(`${entry.id || "<unknown>"} ${metadataIssue}`);
-    if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT)
-      issues.push(`${entry.id} has unsupported format ${entry.format}`);
-    if (entry.id) {
-      if (ids.has(entry.id)) issues.push(`duplicate clip id ${entry.id}`);
-      ids.add(entry.id);
+    if (metadataIssue) issues.push(`${issueId} ${metadataIssue}`);
+    const entryFormat = ownValue(entry, "format");
+    if (entryFormat !== WAIFU_ANIMATION_BINARY_FORMAT)
+      issues.push(`${issueId} has unsupported format ${formatUnknownValue(entryFormat)}`);
+    if (entryId) {
+      if (ids.has(entryId)) issues.push(`duplicate clip id ${entryId}`);
+      ids.add(entryId);
     }
-    if (isInvalidAssetValidationStatus(entry.validation?.status)) {
-      issues.push(`${entry.id || "<unknown>"} has invalid validation status ${String(entry.validation?.status)}`);
+    const validationStatus = readManifestValidationStatus(entry);
+    if (isInvalidAssetValidationStatus(validationStatus)) {
+      issues.push(`${issueId} has invalid validation status ${formatUnknownValue(validationStatus)}`);
     }
-    if (entry.validation?.status === "accepted" && entry.validation.reason) {
-      issues.push(`${entry.id} is accepted but still has rejection reason`);
+    if (validationStatus === "accepted" && readManifestValidationReason(entry) !== undefined) {
+      issues.push(`${issueId} is accepted but still has rejection reason`);
     }
     const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry);
-    if (rootMotionPolicyIssue) issues.push(`${entry.id || "<unknown>"} ${rootMotionPolicyIssue}`);
+    if (rootMotionPolicyIssue) issues.push(`${issueId} ${rootMotionPolicyIssue}`);
     const coverageIssue = manifestRequiredCoverageIssue(entry);
-    if (coverageIssue) issues.push(`${entry.id || "<unknown>"} ${coverageIssue}`);
+    if (coverageIssue) issues.push(`${issueId} ${coverageIssue}`);
   }
   return issues;
 }
@@ -179,49 +217,87 @@ export async function loadManifest(
   url: string,
   loader: AssetLoader,
   options: ManifestLoaderOptions = {},
-  seen = new Set<string>()
+  seen = new Set<string>(),
+  depth = 0
 ): Promise<AnimationManifest> {
   if (seen.has(url)) return { version: 1, clips: [] };
+  const maxDepth = positiveIntegerOption(options.maxIncludeDepth, DEFAULT_MAX_MANIFEST_INCLUDE_DEPTH);
+  if (depth > maxDepth) throw new ManifestIncludeLimitError(`manifest include depth exceeds ${maxDepth} at ${url}`);
+  const maxManifestCount = positiveIntegerOption(options.maxManifestCount, DEFAULT_MAX_MANIFEST_TOTAL_LOADS);
+  if (seen.size >= maxManifestCount)
+    throw new ManifestIncludeLimitError(`manifest include count exceeds ${maxManifestCount} at ${url}`);
   seen.add(url);
   const manifest = readLoadedManifest(await loader(url), url);
-  const manifestIncludes = readManifestIncludes(manifest, url);
-  const includes = await Promise.all(
-    manifestIncludes.map(async (includeUrl) => {
-      const resolved = options.resolveInclude?.(includeUrl, url) ?? includeUrl;
-      try {
-        return await loadManifest(resolved, loader, options, seen);
-      } catch (error) {
-        if (options.optionalIncludes) return { version: 1, clips: [] };
-        throw error;
-      }
-    })
+  const maxClips = Math.min(
+    positiveIntegerOption(options.maxClipsPerManifest, MAX_MANIFEST_CLIPS_PER_MANIFEST),
+    MAX_MANIFEST_CLIPS_PER_MANIFEST
   );
+  const clips = readManifestClipsForLoad(manifest, url, maxClips);
+  const manifestIncludes = readManifestIncludes(manifest, url, options);
+  const includedClips: AnimationManifestEntry[] = [];
+  for (const includeUrl of manifestIncludes) {
+    const resolved = options.resolveInclude?.(includeUrl, url) ?? includeUrl;
+    if (!isNonEmptyString(resolved)) {
+      throw new Error(`manifest ${url} resolved include must be a non-empty string`);
+    }
+    try {
+      const includedManifest = await loadManifest(resolved, loader, options, seen, depth + 1);
+      const nextIncludedClips = readManifestClips(includedManifest, maxClips) ?? [];
+      if (clips.length + includedClips.length + nextIncludedClips.length > maxClips) {
+        throw new ManifestIncludeLimitError(`manifest ${url} clips exceed ${maxClips} entries after includes`);
+      }
+      includedClips.push(...nextIncludedClips);
+    } catch (error) {
+      if (error instanceof ManifestIncludeLimitError || !options.optionalIncludes) throw error;
+    }
+  }
   return {
     ...manifest,
-    clips: (readManifestClips(manifest) ?? []).concat(includes.flatMap((entry) => readManifestClips(entry) ?? []))
+    clips: clips.concat(includedClips)
   };
 }
 
 export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationClip): ClipAssetInspection {
   const issues = validateClip(clip);
-  if (!entry.id) issues.push({ message: "manifest entry is missing id" });
-  if (!entry.url) issues.push({ message: `${entry.id || "<unknown>"} is missing url` });
+  const clipRecord = isRecord(clip) ? clip : {};
+  const clipTracksValue = ownValue(clipRecord, "tracks");
+  const clipTracks = Array.isArray(clipTracksValue) ? (clipTracksValue as AnimationClip["tracks"]) : [];
+  const clipDurationValue = ownValue(clipRecord, "duration");
+  const clipDuration =
+    typeof clipDurationValue === "number" && Number.isFinite(clipDurationValue) ? clipDurationValue : 0;
+  if (!isManifestEntryObject(entry)) {
+    issues.push({ message: "manifest entry must be an object" });
+    return {
+      id: "<unknown>",
+      url: "",
+      accepted: false,
+      trackCount: clipTracks.length,
+      duration: clipDuration,
+      issues
+    };
+  }
+  const entryId = readManifestEntryId(entry);
+  const entryUrl = readManifestEntryUrl(entry);
+  const issueId = manifestEntryIssueId(entry);
+  if (!entryId) issues.push({ message: "manifest entry is missing id" });
+  if (!entryUrl) issues.push({ message: `${issueId} is missing url` });
   const metadataIssue = manifestEntryMetadataIssue(entry);
   if (metadataIssue) issues.push({ message: metadataIssue });
-  if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) {
-    issues.push({ message: `${entry.id || "<unknown>"} has unsupported format ${String(entry.format)}` });
+  const entryFormat = ownValue(entry, "format");
+  if (entryFormat !== WAIFU_ANIMATION_BINARY_FORMAT) {
+    issues.push({ message: `${issueId} has unsupported format ${formatUnknownValue(entryFormat)}` });
   }
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
   const translationPolicy = readRootMotionChannelPolicy(entry, clip, "translation");
   const yawPolicy = readRootMotionChannelPolicy(entry, clip, "yaw");
-  const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
-  const hasRootCarrierRotationTrack = clip.tracks.some(isRootCarrierRotationTrack);
+  const hasRootCarrierTranslationTrack = clipTracks.some(isRootCarrierTranslationTrack);
+  const hasRootCarrierRotationTrack = clipTracks.some(isRootCarrierRotationTrack);
   const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
   const movingRootCarrierTranslationTrack = playbackWindow
-    ? clip.tracks.find((track) => rootCarrierTranslationTrackHasMotion(track, playbackWindow))
+    ? clipTracks.find((track) => rootCarrierTranslationTrackHasMotion(track, playbackWindow))
     : undefined;
   const movingRootCarrierYawTrack = playbackWindow
-    ? clip.tracks.find((track) => rootCarrierRotationTrackHasYawMotion(track, playbackWindow))
+    ? clipTracks.find((track) => rootCarrierRotationTrackHasYawMotion(track, playbackWindow))
     : undefined;
   const rootMotionPolicyIssue =
     manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip) ?? clipRootMotionConflictIssue(entry, clip);
@@ -280,11 +356,12 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
       message: "root-motion policy is stripped-to-in-place but root carrier yaw still moves"
     });
   }
-  if (entry.playback) {
-    const start = entry.playback.start ?? 0;
-    const end = entry.playback.end ?? clip.duration;
+  const playback = ownValue(entry, "playback");
+  if (playback !== undefined) {
+    const start = isRecord(playback) ? (ownValue(playback, "start") ?? 0) : 0;
+    const end = isRecord(playback) ? (ownValue(playback, "end") ?? clipDuration) : clipDuration;
     if (!playbackWindow) {
-      issues.push({ message: `invalid playback window ${start}..${end}` });
+      issues.push({ message: `invalid playback window ${formatUnknownValue(start)}..${formatUnknownValue(end)}` });
     }
   }
   const statusIssue = manifestValidationStatusIssue(entry);
@@ -292,11 +369,11 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
     issues.push({ message: statusIssue });
   }
   return {
-    id: entry.id,
-    url: entry.url,
+    id: entryId ?? "<unknown>",
+    url: entryUrl ?? "",
     accepted: issues.length === 0,
-    trackCount: clip.tracks.length,
-    duration: clip.duration,
+    trackCount: clipTracks.length,
+    duration: clipDuration,
     issues
   };
 }
@@ -310,28 +387,30 @@ export function isInvalidAssetValidationStatus(value: unknown): boolean {
 }
 
 export function manifestValidationStatusIssue(entry: AnimationManifestEntry): string | null {
-  const status = entry.validation?.status;
+  const status = readManifestValidationStatus(entry);
   if (status === "rejected" || status === "quarantined")
-    return entry.validation?.reason ?? `manifest marks clip ${status}`;
-  if (isInvalidAssetValidationStatus(status)) return `invalid validation status ${String(status)}`;
+    return readManifestValidationReason(entry) ?? `manifest marks clip ${status}`;
+  if (isInvalidAssetValidationStatus(status)) return `invalid validation status ${formatUnknownValue(status)}`;
   return null;
 }
 
 export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): string | null {
-  const entrySource = entry.source ?? {};
-  const sourceRootMotion = entrySource.rootMotion;
+  const sourceValue = ownValue(entry, "source");
+  const entrySource = sourceValue === undefined ? {} : sourceValue;
+  if (!isRecord(entrySource)) return null;
+  const sourceRootMotion = ownValue(entrySource, "rootMotion");
   let declaredPolicy: RootMotionPolicy | null = null;
   if (sourceRootMotion !== undefined) {
     if (typeof sourceRootMotion === "string") {
       if (!isRootMotionPolicy(sourceRootMotion))
-        return `has invalid source.rootMotion policy ${String(sourceRootMotion)}`;
+        return `has invalid source.rootMotion policy ${formatUnknownValue(sourceRootMotion)}`;
       declaredPolicy = sourceRootMotion;
-    } else if (isRecord(sourceRootMotion) && "policy" in sourceRootMotion) {
-      const policy = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).policy;
-      const provenance = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).provenance;
-      const translationPolicy = (sourceRootMotion as { translationPolicy?: unknown }).translationPolicy;
-      const yawPolicy = (sourceRootMotion as { yawPolicy?: unknown }).yawPolicy;
-      if (!isRootMotionPolicy(policy)) return `has invalid source.rootMotion.policy ${String(policy)}`;
+    } else if (isRecord(sourceRootMotion) && hasOwn(sourceRootMotion, "policy")) {
+      const policy = ownValue(sourceRootMotion, "policy");
+      const provenance = ownValue(sourceRootMotion, "provenance");
+      const translationPolicy = ownValue(sourceRootMotion, "translationPolicy");
+      const yawPolicy = ownValue(sourceRootMotion, "yawPolicy");
+      if (!isRootMotionPolicy(policy)) return `has invalid source.rootMotion.policy ${formatUnknownValue(policy)}`;
       if (provenance !== undefined && !isRootMotionProvenance(provenance))
         return `has invalid source.rootMotion.provenance ${formatUnknownValue(provenance)}`;
       if (translationPolicy !== undefined && !isRootMotionPolicy(translationPolicy))
@@ -345,7 +424,7 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
       return "has invalid source.rootMotion metadata";
     }
   }
-  const sourcePolicy = entrySource.rootMotionPolicy;
+  const sourcePolicy = ownValue(entrySource, "rootMotionPolicy");
   if (sourcePolicy !== undefined && !isRootMotionPolicy(sourcePolicy))
     return `has invalid source.rootMotionPolicy ${formatUnknownValue(sourcePolicy)}`;
   if (declaredPolicy && isRootMotionPolicy(sourcePolicy) && sourcePolicy !== declaredPolicy) {
@@ -355,39 +434,50 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
 }
 
 export function manifestRequiredCoverageIssue(entry: AnimationManifestEntry): string | null {
-  const source = entry.source ?? {};
-  if (source.requiredHumanBones !== undefined) {
-    const bones = source.requiredHumanBones;
-    if (!Array.isArray(bones)) return "has invalid source.requiredHumanBones metadata";
+  const sourceValue = ownValue(entry, "source");
+  const source = sourceValue === undefined ? {} : sourceValue;
+  if (!isRecord(source)) return null;
+  const requiredHumanBones = ownValue(source, "requiredHumanBones");
+  if (requiredHumanBones !== undefined) {
+    const bones = requiredHumanBones;
+    if (!Array.isArray(bones) || bones.length > MAX_MANIFEST_STRING_ARRAY_LENGTH || !isDenseArray(bones))
+      return "has invalid source.requiredHumanBones metadata";
     for (const bone of bones) {
       if (!isHumanoidBoneName(bone)) return `has invalid source.requiredHumanBones entry ${formatUnknownValue(bone)}`;
     }
   }
-  if (source.requiredJoints !== undefined) {
-    const joints = source.requiredJoints;
-    if (!Array.isArray(joints)) return "has invalid source.requiredJoints metadata";
+  const requiredJoints = ownValue(source, "requiredJoints");
+  if (requiredJoints !== undefined) {
+    const joints = requiredJoints;
+    if (!Array.isArray(joints) || joints.length > MAX_MANIFEST_STRING_ARRAY_LENGTH || !isDenseArray(joints))
+      return "has invalid source.requiredJoints metadata";
     for (const joint of joints) {
-      if (typeof joint !== "string" || joint.length === 0)
-        return `has invalid source.requiredJoints entry ${formatUnknownValue(joint)}`;
+      if (!isNonEmptyString(joint)) return `has invalid source.requiredJoints entry ${formatUnknownValue(joint)}`;
     }
   }
   return null;
 }
 
 function rootMotionMetadataFieldIssue(metadata: Record<string, unknown>): string | null {
-  const carrierIssue = rootMotionCarrierIssue(metadata.carrier);
+  const carrierIssue = rootMotionCarrierIssue(ownValue(metadata, "carrier"));
   if (carrierIssue) return `has invalid source.rootMotion.carrier ${carrierIssue}`;
-  const extractedAxesIssue = optionalRootMotionAxesIssue(metadata.extractedAxes, "source.rootMotion.extractedAxes");
+  const extractedAxesIssue = optionalRootMotionAxesIssue(
+    ownValue(metadata, "extractedAxes"),
+    "source.rootMotion.extractedAxes"
+  );
   if (extractedAxesIssue) return extractedAxesIssue;
-  const preservedAxesIssue = optionalRootMotionAxesIssue(metadata.preservedAxes, "source.rootMotion.preservedAxes");
+  const preservedAxesIssue = optionalRootMotionAxesIssue(
+    ownValue(metadata, "preservedAxes"),
+    "source.rootMotion.preservedAxes"
+  );
   if (preservedAxesIssue) return preservedAxesIssue;
-  const ownerIssue = optionalNonEmptyStringIssue(metadata.owner, "source.rootMotion.owner");
+  const ownerIssue = optionalNonEmptyStringIssue(ownValue(metadata, "owner"), "source.rootMotion.owner");
   if (ownerIssue) return ownerIssue;
-  const unitsIssue = optionalNonEmptyStringIssue(metadata.units, "source.rootMotion.units");
+  const unitsIssue = optionalNonEmptyStringIssue(ownValue(metadata, "units"), "source.rootMotion.units");
   if (unitsIssue) return unitsIssue;
-  const supportIssue = optionalNonEmptyStringIssue(metadata.support, "source.rootMotion.support");
+  const supportIssue = optionalNonEmptyStringIssue(ownValue(metadata, "support"), "source.rootMotion.support");
   if (supportIssue) return supportIssue;
-  const bakeModeIssue = optionalNonEmptyStringIssue(metadata.bakeMode, "source.rootMotion.bakeMode");
+  const bakeModeIssue = optionalNonEmptyStringIssue(ownValue(metadata, "bakeMode"), "source.rootMotion.bakeMode");
   if (bakeModeIssue) return bakeModeIssue;
   return null;
 }
@@ -408,51 +498,62 @@ function rootMotionCarrierIssue(value: unknown): string | null {
 
 function optionalRootMotionAxesIssue(value: unknown, label: string): string | null {
   if (value === undefined) return null;
-  if (!Array.isArray(value) || value.some((axis) => axis !== "x" && axis !== "y" && axis !== "z")) {
+  if (
+    !Array.isArray(value) ||
+    value.length > 3 ||
+    !isDenseArray(value) ||
+    value.some((axis) => axis !== "x" && axis !== "y" && axis !== "z")
+  ) {
     return `has invalid ${label} metadata`;
   }
   return new Set(value).size === value.length ? null : `has duplicate ${label} metadata`;
 }
 
 export function manifestEntryMetadataIssue(entry: AnimationManifestEntry): string | null {
-  const idIssue = optionalNonEmptyStringIssue(entry.id, "id");
+  const idIssue = optionalNonEmptyStringIssue(ownValue(entry, "id"), "id");
   if (idIssue) return idIssue;
-  const labelIssue = optionalStringIssue(entry.label, "label");
+  const labelIssue = optionalNonEmptyStringIssue(ownValue(entry, "label"), "label");
   if (labelIssue) return labelIssue;
-  const urlIssue = optionalNonEmptyStringIssue(entry.url, "url");
+  const urlIssue = optionalNonEmptyStringIssue(ownValue(entry, "url"), "url");
   if (urlIssue) return urlIssue;
-  if (entry.playback !== undefined) {
-    if (!isRecord(entry.playback)) return "has invalid playback metadata";
-    const start = entry.playback.start;
-    const end = entry.playback.end;
+  const playback = ownValue(entry, "playback");
+  if (playback !== undefined) {
+    if (!isRecord(playback)) return "has invalid playback metadata";
+    const start = ownValue(playback, "start");
+    const end = ownValue(playback, "end");
     if (start !== undefined && !Number.isFinite(start)) return "has invalid playback.start metadata";
     if (end !== undefined && !Number.isFinite(end)) return "has invalid playback.end metadata";
   }
-  const loopIssue = optionalBooleanIssue(entry.loop, "loop");
+  const loopIssue = optionalBooleanIssue(ownValue(entry, "loop"), "loop");
   if (loopIssue) return loopIssue;
-  const preloadIssue = optionalBooleanIssue(entry.preload, "preload");
+  const preloadIssue = optionalBooleanIssue(ownValue(entry, "preload"), "preload");
   if (preloadIssue) return preloadIssue;
-  const autoplayIssue = optionalBooleanIssue(entry.autoplay, "autoplay");
+  const autoplayIssue = optionalBooleanIssue(ownValue(entry, "autoplay"), "autoplay");
   if (autoplayIssue) return autoplayIssue;
-  if (entry.weight !== undefined && (!Number.isFinite(entry.weight) || entry.weight < 0)) {
+  const weight = ownValue(entry, "weight");
+  if (weight !== undefined && (!Number.isFinite(weight) || (weight as number) < 0)) {
     return "has invalid weight metadata";
   }
-  const tagsIssue = optionalStringArrayIssue(entry.tags, "tags");
+  const tagsIssue = optionalStringArrayIssue(ownValue(entry, "tags"), "tags");
   if (tagsIssue) return tagsIssue;
-  const statesIssue = optionalStringArrayIssue(entry.states, "states");
+  const statesIssue = optionalStringArrayIssue(ownValue(entry, "states"), "states");
   if (statesIssue) return statesIssue;
-  const emotionsIssue = optionalStringArrayIssue(entry.emotions, "emotions");
+  const emotionsIssue = optionalStringArrayIssue(ownValue(entry, "emotions"), "emotions");
   if (emotionsIssue) return emotionsIssue;
-  const gesturesIssue = optionalStringArrayIssue(entry.gestures, "gestures");
+  const gesturesIssue = optionalStringArrayIssue(ownValue(entry, "gestures"), "gestures");
   if (gesturesIssue) return gesturesIssue;
-  if (entry.source !== undefined && !isRecord(entry.source)) return "has invalid source metadata";
-  if (entry.validation !== undefined) {
-    if (!isRecord(entry.validation)) return "has invalid validation metadata";
-    if (entry.validation.reason !== undefined && typeof entry.validation.reason !== "string") {
+  const source = ownValue(entry, "source");
+  if (source !== undefined && !isRecord(source)) return "has invalid source metadata";
+  const validation = ownValue(entry, "validation");
+  if (validation !== undefined) {
+    if (!isRecord(validation)) return "has invalid validation metadata";
+    const reasonIssue = optionalNonEmptyStringIssue(ownValue(validation, "reason"), "validation.reason");
+    if (reasonIssue) {
       return "has invalid validation.reason metadata";
     }
-    if (entry.validation.issues !== undefined) {
-      const validationIssuesIssue = optionalStringArrayIssue(entry.validation.issues, "validation.issues");
+    const validationIssues = ownValue(validation, "issues");
+    if (validationIssues !== undefined) {
+      const validationIssuesIssue = optionalStringArrayIssue(validationIssues, "validation.issues");
       if (validationIssuesIssue) return validationIssuesIssue;
     }
   }
@@ -461,61 +562,70 @@ export function manifestEntryMetadataIssue(entry: AnimationManifestEntry): strin
 
 export function readRequiredAnimationCoverage(entry: AnimationManifestEntry): RequiredAnimationCoverage {
   if (manifestRequiredCoverageIssue(entry)) return { requiredHumanBones: [], requiredJoints: [] };
-  const source = entry.source ?? {};
+  const sourceValue = ownValue(entry, "source");
+  const source = isRecord(sourceValue) ? sourceValue : {};
+  const requiredHumanBones = ownValue(source, "requiredHumanBones");
+  const requiredJoints = ownValue(source, "requiredJoints");
   return {
-    requiredHumanBones: Array.isArray(source.requiredHumanBones)
-      ? Array.from(new Set(source.requiredHumanBones.filter(isHumanoidBoneName))).sort()
+    requiredHumanBones: Array.isArray(requiredHumanBones)
+      ? Array.from(new Set(requiredHumanBones.filter(isHumanoidBoneName))).sort()
       : [],
-    requiredJoints: Array.isArray(source.requiredJoints)
-      ? Array.from(
-          new Set(
-            source.requiredJoints.filter((joint): joint is string => typeof joint === "string" && joint.length > 0)
-          )
-        ).sort()
+    requiredJoints: Array.isArray(requiredJoints)
+      ? Array.from(new Set(requiredJoints.filter((joint): joint is string => isNonEmptyString(joint)))).sort()
       : []
   };
 }
 
 function exactRootMotionAxes(value: unknown, expected: readonly string[]): boolean {
-  if (!Array.isArray(value) || value.some((axis) => typeof axis !== "string")) return false;
+  if (
+    !Array.isArray(value) ||
+    value.length > 3 ||
+    !isDenseArray(value) ||
+    value.some((axis) => typeof axis !== "string")
+  ) {
+    return false;
+  }
   const actual = Array.from(new Set(value)).sort();
   const sortedExpected = [...expected].sort();
   return actual.length === sortedExpected.length && actual.every((axis, index) => axis === sortedExpected[index]);
 }
 
 function isIntentionalResidualRootCarrier(entry: AnimationManifestEntry): boolean {
-  const rootMotion = entry.source?.rootMotion;
+  const source = ownValue(entry, "source");
+  const rootMotion = isRecord(source) ? ownValue(source, "rootMotion") : undefined;
   if (!isRecord(rootMotion)) return false;
   const metadata = rootMotion;
   const verticalTransition =
-    metadata.owner === "director-xz" &&
-    metadata.support === "vertical-transition" &&
-    metadata.bakeMode === "reference" &&
-    exactRootMotionAxes(metadata.extractedAxes, ["x", "z"]) &&
-    exactRootMotionAxes(metadata.preservedAxes, ["y"]);
+    ownValue(metadata, "owner") === "director-xz" &&
+    ownValue(metadata, "support") === "vertical-transition" &&
+    ownValue(metadata, "bakeMode") === "reference" &&
+    exactRootMotionAxes(ownValue(metadata, "extractedAxes"), ["x", "z"]) &&
+    exactRootMotionAxes(ownValue(metadata, "preservedAxes"), ["y"]);
   const residualTrajectory =
-    metadata.bakeMode === "remove-linear-trajectory" &&
-    (metadata.owner === "director-xz" ||
-      (metadata.owner === "none" && metadata.support === "contact-aware-stationary"));
+    ownValue(metadata, "bakeMode") === "remove-linear-trajectory" &&
+    (ownValue(metadata, "owner") === "director-xz" ||
+      (ownValue(metadata, "owner") === "none" && ownValue(metadata, "support") === "contact-aware-stationary"));
   return (
-    metadata.policy === "stripped-to-in-place" &&
-    metadata.carrier === "hips" &&
-    metadata.units === "meters-target-rest-offset" &&
+    ownValue(metadata, "policy") === "stripped-to-in-place" &&
+    ownValue(metadata, "carrier") === "hips" &&
+    ownValue(metadata, "units") === "meters-target-rest-offset" &&
     (verticalTransition || residualTrajectory)
   );
 }
 
 function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {
-  const clipPolicy = clip.metadata?.rootMotionPolicy;
+  const metadataValue = isRecord(clip) ? ownValue(clip, "metadata") : undefined;
+  const metadata = isRecord(metadataValue) ? metadataValue : undefined;
+  const clipPolicy = metadata ? ownValue(metadata, "rootMotionPolicy") : undefined;
   if (clipPolicy !== undefined && !isRootMotionPolicy(clipPolicy))
     return `has invalid clip rootMotionPolicy ${formatUnknownValue(clipPolicy)}`;
-  const clipTranslationPolicy = clip.metadata?.rootMotionTranslationPolicy;
+  const clipTranslationPolicy = metadata ? ownValue(metadata, "rootMotionTranslationPolicy") : undefined;
   if (clipTranslationPolicy !== undefined && !isRootMotionPolicy(clipTranslationPolicy))
     return `has invalid clip rootMotionTranslationPolicy ${formatUnknownValue(clipTranslationPolicy)}`;
-  const clipYawPolicy = clip.metadata?.rootMotionYawPolicy;
+  const clipYawPolicy = metadata ? ownValue(metadata, "rootMotionYawPolicy") : undefined;
   if (clipYawPolicy !== undefined && !isRootMotionPolicy(clipYawPolicy))
     return `has invalid clip rootMotionYawPolicy ${formatUnknownValue(clipYawPolicy)}`;
-  const clipProvenance = clip.metadata?.rootMotionProvenance;
+  const clipProvenance = metadata ? ownValue(metadata, "rootMotionProvenance") : undefined;
   if (clipProvenance !== undefined && !isRootMotionProvenance(clipProvenance))
     return `has invalid clip rootMotionProvenance ${formatUnknownValue(clipProvenance)}`;
   return null;
@@ -524,11 +634,13 @@ function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {
 function clipRootMotionConflictIssue(entry: AnimationManifestEntry, clip: AnimationClip): string | null {
   const entryMetadata = readRootMotionMetadata(entry);
   if (!entryMetadata) return null;
-  const clipPolicy = clip.metadata?.rootMotionPolicy;
+  const clipMetadataValue = isRecord(clip) ? ownValue(clip, "metadata") : undefined;
+  const clipMetadata = isRecord(clipMetadataValue) ? clipMetadataValue : undefined;
+  const clipPolicy = clipMetadata ? ownValue(clipMetadata, "rootMotionPolicy") : undefined;
   if (isRootMotionPolicy(clipPolicy) && clipPolicy !== entryMetadata.policy) {
     return `clip rootMotionPolicy ${clipPolicy} conflicts with source.rootMotion.policy ${entryMetadata.policy}`;
   }
-  const clipProvenance = clip.metadata?.rootMotionProvenance;
+  const clipProvenance = clipMetadata ? ownValue(clipMetadata, "rootMotionProvenance") : undefined;
   if (
     isRootMotionProvenance(clipProvenance) &&
     clipProvenance !== "unknown" &&
@@ -541,7 +653,11 @@ function clipRootMotionConflictIssue(entry: AnimationManifestEntry, clip: Animat
 }
 
 function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): boolean {
-  return /\broot[-_ ]?motion\b/i.test(`${entry.id} ${entry.label} ${entry.url} ${clip.id} ${clip.name ?? ""}`);
+  const clipId = isRecord(clip) ? ownValue(clip, "id") : undefined;
+  const clipName = isRecord(clip) ? ownValue(clip, "name") : undefined;
+  return /\broot[-_ ]?motion\b/i.test(
+    `${readManifestEntryId(entry) ?? ""} ${readManifestEntryLabel(entry) ?? ""} ${readManifestEntryUrl(entry) ?? ""} ${typeof clipId === "string" ? clipId : ""} ${typeof clipName === "string" ? clipName : ""}`
+  );
 }
 
 export function readRootMotionPolicy(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionPolicy | null {
@@ -553,15 +669,17 @@ export function readRootMotionChannelPolicy(
   clip: AnimationClip | undefined,
   channel: "translation" | "yaw"
 ): RootMotionPolicy | null {
-  if (entry.source !== undefined && !isRecord(entry.source)) return null;
-  const entrySource = entry.source ?? {};
-  const sourceRootMotion = entrySource.rootMotion;
+  const sourceValue = ownValue(entry, "source");
+  if (sourceValue !== undefined && !isRecord(sourceValue)) return null;
+  const entrySource = isRecord(sourceValue) ? sourceValue : {};
+  const sourceRootMotion = ownValue(entrySource, "rootMotion");
   const sourceChannelPolicy = isRecord(sourceRootMotion)
     ? readRootMotionChannelPolicyValue(sourceRootMotion, channel)
     : null;
   if (sourceChannelPolicy) return sourceChannelPolicy;
-  const clipChannelPolicy = readRootMotionChannelPolicyValue(clip?.metadata, channel, "rootMotion");
-  if (clipChannelPolicy && sourceRootMotion === undefined && entrySource.rootMotionPolicy === undefined) {
+  const clipMetadata = clip && isRecord(clip) ? ownValue(clip, "metadata") : undefined;
+  const clipChannelPolicy = readRootMotionChannelPolicyValue(clipMetadata, channel, "rootMotion");
+  if (clipChannelPolicy && sourceRootMotion === undefined && ownValue(entrySource, "rootMotionPolicy") === undefined) {
     return clipChannelPolicy;
   }
   return readRootMotionPolicy(entry, clip);
@@ -572,38 +690,39 @@ export function readRootMotionProvenance(entry: AnimationManifestEntry, clip?: A
 }
 
 export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionMetadata | null {
-  if (entry.source !== undefined && !isRecord(entry.source)) return null;
-  const entrySource = entry.source ?? {};
-  const clipMetadata = clip?.metadata ?? {};
-  const sourceRootMotion = entrySource.rootMotion;
+  const sourceValue = ownValue(entry, "source");
+  if (sourceValue !== undefined && !isRecord(sourceValue)) return null;
+  const entrySource = isRecord(sourceValue) ? sourceValue : {};
+  const clipMetadataValue = clip && isRecord(clip) ? ownValue(clip, "metadata") : undefined;
+  const clipMetadata = isRecord(clipMetadataValue) ? clipMetadataValue : {};
+  const sourceRootMotion = ownValue(entrySource, "rootMotion");
   if (sourceRootMotion !== undefined) {
     if (typeof sourceRootMotion === "string")
       return isRootMotionPolicy(sourceRootMotion) ? { policy: sourceRootMotion, provenance: "unknown" } : null;
-    if (!isRecord(sourceRootMotion) || !("policy" in sourceRootMotion)) return null;
-    const metadata = sourceRootMotion as {
-      policy?: unknown;
-      provenance?: unknown;
-      translationPolicy?: unknown;
-      yawPolicy?: unknown;
-    };
-    if (!isRootMotionPolicy(metadata.policy)) return null;
-    if (metadata.provenance !== undefined && !isRootMotionProvenance(metadata.provenance)) return null;
+    if (!isRecord(sourceRootMotion) || !hasOwn(sourceRootMotion, "policy")) return null;
+    const policy = ownValue(sourceRootMotion, "policy");
+    const provenance = ownValue(sourceRootMotion, "provenance");
+    const translationPolicy = ownValue(sourceRootMotion, "translationPolicy");
+    const yawPolicy = ownValue(sourceRootMotion, "yawPolicy");
+    if (!isRootMotionPolicy(policy)) return null;
+    if (provenance !== undefined && !isRootMotionProvenance(provenance)) return null;
+    if (translationPolicy !== undefined && !isRootMotionPolicy(translationPolicy)) return null;
+    if (yawPolicy !== undefined && !isRootMotionPolicy(yawPolicy)) return null;
     return {
-      policy: metadata.policy,
-      provenance: isRootMotionProvenance(metadata.provenance) ? metadata.provenance : "unknown",
-      ...(isRootMotionPolicy(metadata.translationPolicy) ? { translationPolicy: metadata.translationPolicy } : {}),
-      ...(isRootMotionPolicy(metadata.yawPolicy) ? { yawPolicy: metadata.yawPolicy } : {})
+      policy,
+      provenance: isRootMotionProvenance(provenance) ? provenance : "unknown",
+      ...(isRootMotionPolicy(translationPolicy) ? { translationPolicy } : {}),
+      ...(isRootMotionPolicy(yawPolicy) ? { yawPolicy } : {})
     };
   }
-  const sourcePolicy = entrySource.rootMotionPolicy;
+  const sourcePolicy = ownValue(entrySource, "rootMotionPolicy");
   if (isRootMotionPolicy(sourcePolicy)) return { policy: sourcePolicy, provenance: "unknown" };
-  const clipPolicy = clipMetadata.rootMotionPolicy;
+  const clipPolicy = ownValue(clipMetadata, "rootMotionPolicy");
   if (isRootMotionPolicy(clipPolicy)) {
+    const clipProvenance = ownValue(clipMetadata, "rootMotionProvenance");
     return {
       policy: clipPolicy,
-      provenance: isRootMotionProvenance(clipMetadata.rootMotionProvenance)
-        ? clipMetadata.rootMotionProvenance
-        : "unknown"
+      provenance: isRootMotionProvenance(clipProvenance) ? clipProvenance : "unknown"
     };
   }
   return null;
@@ -687,7 +806,8 @@ function readManifestRootMotionCarrierHint(
   entry: AnimationManifestEntry,
   issues: RootMotionCarrierHintIssue[]
 ): ManifestRootMotionCarrierHintRead {
-  if (entry.source !== undefined && !isRecord(entry.source)) {
+  const sourceValue = ownValue(entry, "source");
+  if (sourceValue !== undefined && !isRecord(sourceValue)) {
     pushRootMotionCarrierHintIssue(
       issues,
       "manifest",
@@ -697,7 +817,7 @@ function readManifestRootMotionCarrierHint(
     );
     return { candidate: null, blocksClipFallback: true };
   }
-  const entrySource = entry.source ?? {};
+  const entrySource = isRecord(sourceValue) ? sourceValue : {};
   const sourceRootMotion = rootMotionCarrierOwnValue(entrySource, "rootMotion");
   if (sourceRootMotion !== undefined) {
     if (typeof sourceRootMotion === "string") {
@@ -760,7 +880,7 @@ function readClipRootMotionCarrierHints(
   clip: AnimationClip | undefined,
   issues: RootMotionCarrierHintIssue[]
 ): RootMotionCarrierHintCandidate[] {
-  const metadata = clip?.metadata;
+  const metadata = clip && isRecord(clip) ? ownValue(clip, "metadata") : undefined;
   if (metadata === undefined) return [];
   if (!isRecord(metadata)) {
     pushRootMotionCarrierHintIssue(
@@ -1003,7 +1123,7 @@ function presentRootMotionCarrierFields(value: Record<string, unknown>, fields: 
 }
 
 function rootMotionCarrierOwnValue(value: Record<string, unknown>, field: string): unknown {
-  return Object.prototype.hasOwnProperty.call(value, field) ? value[field] : undefined;
+  return ownValue(value, field);
 }
 
 function rootMotionCarrierObjectHasKnownField(value: Record<string, unknown>): boolean {
@@ -1183,7 +1303,8 @@ function readRootMotionChannelPolicyValue(
   if (!isRecord(metadata)) return null;
   const key = `${prefix}${channel === "translation" ? "Translation" : "Yaw"}Policy`;
   const compactKey = channel === "translation" ? "translationPolicy" : "yawPolicy";
-  const value = metadata[compactKey] ?? metadata[key];
+  const compactValue = ownValue(metadata, compactKey);
+  const value = compactValue ?? ownValue(metadata, key);
   return isRootMotionPolicy(value) ? value : null;
 }
 
@@ -1193,11 +1314,8 @@ function formatUnknownValue(value: unknown): string {
   if (typeof value === "symbol") return value.description ? `Symbol(${value.description})` : "Symbol()";
   if (value === null) return "null";
   if (value === undefined) return "undefined";
-  try {
-    return truncateFormattedValue(JSON.stringify(value) ?? Object.prototype.toString.call(value));
-  } catch {
-    return truncateFormattedValue(Object.prototype.toString.call(value));
-  }
+  if (Array.isArray(value)) return `[array length ${value.length}]`;
+  return truncateFormattedValue(Object.prototype.toString.call(value));
 }
 
 function truncateFormattedValue(value: string): string {
@@ -1210,12 +1328,33 @@ function readLoadedManifest(value: unknown, url: string): AnimationManifest {
   return value as AnimationManifest;
 }
 
-function readManifestIncludes(manifest: AnimationManifest, url: string): string[] {
-  if (manifest.includes === undefined) return [];
-  if (!Array.isArray(manifest.includes) || manifest.includes.some((include) => !isNonEmptyString(include))) {
+function readManifestClipsForLoad(
+  manifest: AnimationManifest,
+  url: string,
+  maxClips: number
+): AnimationManifestEntry[] {
+  const clips = ownValue(manifest, "clips");
+  if (!Array.isArray(clips)) throw new Error(`manifest ${url} clips must be an array`);
+  if (clips.length > maxClips) {
+    throw new ManifestIncludeLimitError(`manifest ${url} clips exceed ${maxClips} entries`);
+  }
+  if (!isDenseArray(clips)) throw new Error(`manifest ${url} clips must be a dense array`);
+  return clips as AnimationManifestEntry[];
+}
+
+function readManifestIncludes(manifest: AnimationManifest, url: string, options: ManifestLoaderOptions): string[] {
+  const includes = ownValue(manifest, "includes");
+  if (includes === undefined) return [];
+  const maxIncludes = positiveIntegerOption(options.maxIncludesPerManifest, DEFAULT_MAX_MANIFEST_INCLUDES_PER_MANIFEST);
+  if (!Array.isArray(includes)) {
     throw new Error(`manifest ${url} includes must be an array of non-empty strings`);
   }
-  return manifest.includes;
+  if (includes.length > maxIncludes)
+    throw new ManifestIncludeLimitError(`manifest ${url} includes exceed ${maxIncludes} entries`);
+  if (!isDenseArray(includes) || includes.some((include) => !isNonEmptyString(include))) {
+    throw new Error(`manifest ${url} includes must be an array of non-empty strings`);
+  }
+  return includes as string[];
 }
 
 export function usableManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] {
@@ -1233,8 +1372,10 @@ export function rejectedAnimationReport(
     .map((entry) => ({ entry, reason: manifestRejectionIssue(entry, duplicateIds) }))
     .filter((item): item is { entry: AnimationManifestEntry; reason: string } => item.reason !== null)
     .map(({ entry, reason }) => ({
-      id: isManifestEntryObject(entry) && typeof entry.id === "string" ? entry.id : "<unknown>",
-      ...(isManifestEntryObject(entry) && typeof entry.label === "string" ? { label: entry.label } : {}),
+      id: isManifestEntryObject(entry) ? (readManifestEntryId(entry) ?? "<unknown>") : "<unknown>",
+      ...(isManifestEntryObject(entry) && readManifestEntryLabel(entry) !== undefined
+        ? { label: readManifestEntryLabel(entry)! }
+        : {}),
       reason
     }));
 }
@@ -1253,46 +1394,103 @@ function manifestStructuralRejectionIssue(
   duplicateIds: ReadonlySet<string>
 ): string | null {
   if (!isManifestEntryObject(entry)) return "manifest entry must be an object";
-  if (!entry.id) return "missing id";
-  if (!entry.url) return "missing url";
+  const id = readManifestEntryId(entry);
+  if (!id) return "missing id";
+  if (!readManifestEntryUrl(entry)) return "missing url";
   const metadataIssue = manifestEntryMetadataIssue(entry);
   if (metadataIssue) return metadataIssue;
-  if (entry.format !== WAIFU_ANIMATION_BINARY_FORMAT) return `unsupported format ${String(entry.format)}`;
-  if (duplicateIds.has(entry.id)) return `duplicate clip id ${entry.id}`;
-  if (entry.validation?.status === "accepted" && entry.validation.reason)
+  const format = ownValue(entry, "format");
+  if (format !== WAIFU_ANIMATION_BINARY_FORMAT) return `unsupported format ${formatUnknownValue(format)}`;
+  if (duplicateIds.has(id)) return `duplicate clip id ${id}`;
+  if (readManifestValidationStatus(entry) === "accepted" && readManifestValidationReason(entry) !== undefined)
     return "accepted but still has rejection reason";
   return null;
 }
 
-function readManifestClips(manifest: AnimationManifest): AnimationManifestEntry[] | null {
-  return isRecord(manifest) && Array.isArray(manifest.clips) ? manifest.clips : null;
+function readManifestClips(
+  manifest: AnimationManifest,
+  maxClips = MAX_MANIFEST_CLIPS_PER_MANIFEST
+): AnimationManifestEntry[] | null {
+  if (!isRecord(manifest)) return null;
+  const clips = ownValue(manifest, "clips");
+  return manifestClipsTableIssue(clips, maxClips) === null ? (clips as AnimationManifestEntry[]) : null;
+}
+
+function manifestClipsTableIssue(value: unknown, maxClips = MAX_MANIFEST_CLIPS_PER_MANIFEST): string | null {
+  if (!Array.isArray(value)) return "manifest clips must be an array";
+  if (value.length > maxClips) return `manifest clips exceed ${maxClips} entries`;
+  if (!isDenseArray(value)) return "manifest clips must be a dense array";
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
 }
 
 function isManifestEntryObject(value: unknown): value is AnimationManifestEntry {
   return isRecord(value);
 }
 
+function hasOwn(value: object, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, field);
+}
+
+function ownValue(value: object, field: string): unknown {
+  return hasOwn(value, field) ? (value as Record<string, unknown>)[field] : undefined;
+}
+
+function readManifestEntryId(entry: AnimationManifestEntry): string | undefined {
+  const id = ownValue(entry, "id");
+  return isNonEmptyString(id) ? id : undefined;
+}
+
+function readManifestEntryLabel(entry: AnimationManifestEntry): string | undefined {
+  const label = ownValue(entry, "label");
+  return isNonEmptyString(label) ? label : undefined;
+}
+
+function readManifestEntryUrl(entry: AnimationManifestEntry): string | undefined {
+  const url = ownValue(entry, "url");
+  return isNonEmptyString(url) ? url : undefined;
+}
+
+function readManifestValidationStatus(entry: AnimationManifestEntry): unknown {
+  const validation = ownValue(entry, "validation");
+  return isRecord(validation) ? ownValue(validation, "status") : undefined;
+}
+
+function readManifestValidationReason(entry: AnimationManifestEntry): string | undefined {
+  const validation = ownValue(entry, "validation");
+  if (!isRecord(validation)) return undefined;
+  const reason = ownValue(validation, "reason");
+  return isNonEmptyString(reason) ? reason : undefined;
+}
+
+function manifestEntryIssueId(entry: AnimationManifestEntry): string {
+  return readManifestEntryId(entry) ?? "<unknown>";
+}
+
+function positiveIntegerOption(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_MANIFEST_STRING_LENGTH;
 }
 
 function boundedNonEmptyStringIssue(value: unknown): string | null {
-  if (!isNonEmptyString(value)) return "empty";
+  if (typeof value !== "string" || value.trim().length === 0) return "empty";
   return value.length <= MAX_ROOT_MOTION_CARRIER_STRING_LENGTH ? null : "length";
 }
 
 function optionalNonEmptyStringIssue(value: unknown, label: string): string | null {
   if (value === undefined) return null;
   return isNonEmptyString(value) ? null : `has invalid ${label} metadata`;
-}
-
-function optionalStringIssue(value: unknown, label: string): string | null {
-  if (value === undefined) return null;
-  return typeof value === "string" ? null : `has invalid ${label} metadata`;
 }
 
 function optionalBooleanIssue(value: unknown, label: string): string | null {
@@ -1302,5 +1500,17 @@ function optionalBooleanIssue(value: unknown, label: string): string | null {
 
 function optionalStringArrayIssue(value: unknown, label: string): string | null {
   if (value === undefined) return null;
-  return Array.isArray(value) && value.every(isNonEmptyString) ? null : `has invalid ${label} metadata`;
+  const valid =
+    Array.isArray(value) &&
+    value.length <= MAX_MANIFEST_STRING_ARRAY_LENGTH &&
+    isDenseArray(value) &&
+    value.every(isNonEmptyString);
+  return valid ? null : `has invalid ${label} metadata`;
+}
+
+function isDenseArray(value: readonly unknown[]): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
 }
