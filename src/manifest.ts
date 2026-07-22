@@ -1,5 +1,7 @@
 import { type AnimationClip, type ClipValidationIssue, validateClip } from "./clip.js";
 import { WAIFU_ANIMATION_BINARY_FORMAT } from "./binary.js";
+import type { MotionCarrier } from "./motion.js";
+import type { RootMotionCarrierBinding } from "./root-motion-authority.js";
 import {
   duplicatedManifestIds,
   isRootCarrierRotationTrack,
@@ -8,7 +10,14 @@ import {
   rootCarrierRotationTrackHasYawMotion,
   rootCarrierTranslationTrackHasMotion
 } from "./manifest-clip-helpers.js";
-import { type HumanoidBoneName, isHumanoidBoneName } from "./skeleton.js";
+import {
+  type HumanoidBoneName,
+  type HumanoidBoneNameLike,
+  type Skeleton,
+  isHumanoidBoneName,
+  resolveHumanoidIndex,
+  resolveJointIndex
+} from "./skeleton.js";
 
 export type AssetValidationStatus = "accepted" | "rejected" | "quarantined";
 export type AnimationManifestFormat = typeof WAIFU_ANIMATION_BINARY_FORMAT | (string & {});
@@ -67,6 +76,41 @@ export type RootMotionMetadata = {
   provenance: RootMotionProvenance;
   translationPolicy?: RootMotionPolicy;
   yawPolicy?: RootMotionPolicy;
+};
+export type RootMotionCarrierHintSource = "manifest" | "clip-metadata";
+export type RootMotionCarrierHintIssueCode = "invalid" | "duplicate" | "conflict" | "skeleton-mismatch";
+export type RootMotionCarrierHintIssue = {
+  source: RootMotionCarrierHintSource;
+  field: string;
+  code: RootMotionCarrierHintIssueCode;
+  message: string;
+};
+export type ResolvedRootMotionCarrierHint = {
+  jointIndex: number;
+  joint: string;
+};
+export type RootMotionCarrierHintOptions = {
+  /** Optional decoded clip. When supplied, clip metadata is used as a fallback after manifest source metadata. */
+  clip?: AnimationClip;
+  /** Optional target skeleton used to validate carriers and resolve humanoid hints to concrete runtime report joints. */
+  skeleton?: Skeleton;
+  /** Optional id copied onto the returned RootMotionReconciler carrier binding. */
+  bindingId?: string;
+  /** Optional priority copied onto the returned RootMotionReconciler carrier binding. */
+  bindingPriority?: number;
+};
+export type RootMotionCarrierHintResolution = {
+  /** Winning carrier source. Manifest source metadata is authoritative over clip metadata when both are present. */
+  source: RootMotionCarrierHintSource | null;
+  /** Winning metadata field path, useful for deterministic diagnostics. */
+  field: string | null;
+  /** Explicit value suitable for AnimationRuntime layer options. Null means no validated carrier hint was present. */
+  motionCarrier: MotionCarrier | null;
+  /** Explicit binding suitable for RootMotionReconciler policy.carrierBindings. Null means no safe binding was derivable. */
+  reconcilerCarrierBinding: RootMotionCarrierBinding | null;
+  /** Concrete target-skeleton carrier when a skeleton was supplied and the hint mapped successfully. */
+  resolved: ResolvedRootMotionCarrierHint | null;
+  issues: RootMotionCarrierHintIssue[];
 };
 export type RequiredAnimationCoverage = {
   requiredHumanBones: HumanoidBoneName[];
@@ -353,6 +397,10 @@ function rootMotionCarrierIssue(value: unknown): string | null {
   if (joint !== undefined && !isNonEmptyString(joint)) return formatUnknownValue(joint);
   const humanBone = value.humanBone ?? value.human_bone ?? value.humanoid;
   if (humanBone !== undefined && !isNonEmptyString(humanBone)) return formatUnknownValue(humanBone);
+  const carrierSelectorCount = [jointIndex !== undefined, joint !== undefined, humanBone !== undefined].filter(
+    Boolean
+  ).length;
+  if (carrierSelectorCount > 1) return "metadata";
   return jointIndex !== undefined || joint !== undefined || humanBone !== undefined ? null : "metadata";
 }
 
@@ -557,6 +605,515 @@ export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: Ani
     };
   }
   return null;
+}
+
+export function resolveRootMotionCarrierHint(
+  entry: AnimationManifestEntry,
+  options: RootMotionCarrierHintOptions = {}
+): RootMotionCarrierHintResolution {
+  const issues: RootMotionCarrierHintIssue[] = [];
+  const manifest = readManifestRootMotionCarrierHint(entry, issues);
+  const clipCandidate =
+    manifest.candidate || !manifest.blocksClipFallback
+      ? selectRootMotionCarrierHintCandidate(readClipRootMotionCarrierHints(options.clip, issues), issues)
+      : null;
+  if (
+    manifest.candidate &&
+    clipCandidate &&
+    !rootMotionCarriersEquivalent(manifest.candidate.motionCarrier, clipCandidate.motionCarrier, options.skeleton)
+  ) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      "clip-metadata",
+      clipCandidate.field,
+      "conflict",
+      `clip root-motion carrier hint conflicts with authoritative ${manifest.candidate.field}`
+    );
+  }
+  const candidate = manifest.blocksClipFallback ? manifest.candidate : (manifest.candidate ?? clipCandidate);
+
+  if (!candidate) {
+    return {
+      source: null,
+      field: null,
+      motionCarrier: null,
+      reconcilerCarrierBinding: null,
+      resolved: null,
+      issues
+    };
+  }
+
+  const resolved = resolveRootMotionCarrierHintAgainstSkeleton(candidate, options.skeleton, issues);
+  if (options.skeleton && !resolved) {
+    return {
+      source: candidate.source,
+      field: candidate.field,
+      motionCarrier: null,
+      reconcilerCarrierBinding: null,
+      resolved: null,
+      issues
+    };
+  }
+
+  const motionCarrier = cloneMotionCarrier(candidate.motionCarrier);
+  return {
+    source: candidate.source,
+    field: candidate.field,
+    motionCarrier,
+    reconcilerCarrierBinding: rootMotionCarrierBindingFromHint(motionCarrier, resolved, options),
+    resolved,
+    issues
+  };
+}
+
+type RootMotionCarrierHintCandidate = {
+  source: RootMotionCarrierHintSource;
+  field: string;
+  motionCarrier: MotionCarrier;
+};
+
+type ManifestRootMotionCarrierHintRead = {
+  candidate: RootMotionCarrierHintCandidate | null;
+  blocksClipFallback: boolean;
+};
+
+function readManifestRootMotionCarrierHint(
+  entry: AnimationManifestEntry,
+  issues: RootMotionCarrierHintIssue[]
+): ManifestRootMotionCarrierHintRead {
+  if (entry.source !== undefined && !isRecord(entry.source)) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      "manifest",
+      "source",
+      "invalid",
+      "source metadata must be an object before root-motion carrier hints can be used"
+    );
+    return { candidate: null, blocksClipFallback: true };
+  }
+  const entrySource = entry.source ?? {};
+  const sourceRootMotion = entrySource.rootMotion;
+  if (sourceRootMotion !== undefined) {
+    if (typeof sourceRootMotion === "string") return { candidate: null, blocksClipFallback: true };
+    if (!isRecord(sourceRootMotion)) {
+      pushRootMotionCarrierHintIssue(
+        issues,
+        "manifest",
+        "source.rootMotion",
+        "invalid",
+        "source.rootMotion must be an object before root-motion carrier hints can be used"
+      );
+      return { candidate: null, blocksClipFallback: true };
+    }
+    if (!isRootMotionPolicy(sourceRootMotion.policy)) {
+      pushRootMotionCarrierHintIssue(
+        issues,
+        "manifest",
+        "source.rootMotion.policy",
+        "invalid",
+        "source.rootMotion.policy must be valid before root-motion carrier hints can be used"
+      );
+      return { candidate: null, blocksClipFallback: true };
+    }
+    return {
+      candidate: readRootMotionCarrierHintValue(
+        sourceRootMotion.carrier,
+        "manifest",
+        "source.rootMotion.carrier",
+        issues
+      ),
+      blocksClipFallback: true
+    };
+  }
+  return { candidate: null, blocksClipFallback: entrySource.rootMotionPolicy !== undefined };
+}
+
+function readClipRootMotionCarrierHints(
+  clip: AnimationClip | undefined,
+  issues: RootMotionCarrierHintIssue[]
+): RootMotionCarrierHintCandidate[] {
+  const metadata = clip?.metadata;
+  if (metadata === undefined) return [];
+  if (!isRecord(metadata)) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      "clip-metadata",
+      "clip.metadata",
+      "invalid",
+      "clip metadata must be an object before root-motion carrier hints can be used"
+    );
+    return [];
+  }
+  const candidates: RootMotionCarrierHintCandidate[] = [];
+  const rootMotion = metadata.rootMotion;
+  if (isRecord(rootMotion) && rootMotion.carrier !== undefined) {
+    const candidate = readRootMotionCarrierHintValue(
+      rootMotion.carrier,
+      "clip-metadata",
+      "clip.metadata.rootMotion.carrier",
+      issues
+    );
+    if (candidate) candidates.push(candidate);
+  }
+  if (metadata.rootMotionCarrier !== undefined) {
+    const candidate = readRootMotionCarrierHintValue(
+      metadata.rootMotionCarrier,
+      "clip-metadata",
+      "clip.metadata.rootMotionCarrier",
+      issues
+    );
+    if (candidate) candidates.push(candidate);
+  }
+  if (metadata.motionCarrier !== undefined) {
+    const candidate = readRootMotionCarrierHintValue(
+      metadata.motionCarrier,
+      "clip-metadata",
+      "clip.metadata.motionCarrier",
+      issues
+    );
+    if (candidate) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+function selectRootMotionCarrierHintCandidate(
+  candidates: RootMotionCarrierHintCandidate[],
+  issues: RootMotionCarrierHintIssue[]
+): RootMotionCarrierHintCandidate | null {
+  if (candidates.length === 0) return null;
+  const first = candidates[0]!;
+  if (candidates.length === 1) return first;
+  const firstSignature = rootMotionCarrierSignature(first.motionCarrier);
+  if (candidates.every((candidate) => rootMotionCarrierSignature(candidate.motionCarrier) === firstSignature)) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      first.source,
+      candidates.map((candidate) => candidate.field).join(", "),
+      "duplicate",
+      "duplicate clip root-motion carrier hints resolved to the same carrier"
+    );
+    return first;
+  }
+  pushRootMotionCarrierHintIssue(
+    issues,
+    first.source,
+    candidates.map((candidate) => candidate.field).join(", "),
+    "conflict",
+    "conflicting clip root-motion carrier hints must be deduplicated before use"
+  );
+  return null;
+}
+
+function readRootMotionCarrierHintValue(
+  value: unknown,
+  source: RootMotionCarrierHintSource,
+  field: string,
+  issues: RootMotionCarrierHintIssue[]
+): RootMotionCarrierHintCandidate | null {
+  if (value === undefined) return null;
+  if (typeof value === "number") {
+    if (Number.isInteger(value) && value >= 0) return { source, field, motionCarrier: { jointIndex: value } };
+    pushInvalidRootMotionCarrierHintIssue(issues, source, field, value);
+    return null;
+  }
+  if (typeof value === "string") {
+    if (value.length > 0) return { source, field, motionCarrier: { joint: value } };
+    pushInvalidRootMotionCarrierHintIssue(issues, source, field, value);
+    return null;
+  }
+  if (!isRecord(value)) {
+    pushInvalidRootMotionCarrierHintIssue(issues, source, field, value);
+    return null;
+  }
+
+  const issueCountBefore = issues.length;
+  const categories = [
+    readRootMotionCarrierIndexHint(value, source, field, issues),
+    readRootMotionCarrierJointHint(value, source, field, issues),
+    readRootMotionCarrierHumanBoneHint(value, source, field, issues)
+  ].filter((category): category is MotionCarrier => category !== null);
+  if (issues.length > issueCountBefore) return null;
+  if (categories.length === 0) {
+    if (!rootMotionCarrierObjectHasKnownField(value)) {
+      pushRootMotionCarrierHintIssue(
+        issues,
+        source,
+        field,
+        "invalid",
+        "root-motion carrier object must name jointIndex, joint, or humanBone"
+      );
+    }
+    return null;
+  }
+  if (categories.length > 1) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      source,
+      field,
+      "conflict",
+      "root-motion carrier object must name only one of jointIndex, joint, or humanBone"
+    );
+    return null;
+  }
+  return { source, field, motionCarrier: categories[0]! };
+}
+
+function readRootMotionCarrierIndexHint(
+  value: Record<string, unknown>,
+  source: RootMotionCarrierHintSource,
+  field: string,
+  issues: RootMotionCarrierHintIssue[]
+): MotionCarrier | null {
+  const fields = presentRootMotionCarrierFields(value, ["jointIndex", "joint_index", "index"]);
+  if (fields.length === 0) return null;
+  const numbers: number[] = [];
+  for (const key of fields) {
+    const index = value[key];
+    if (!Number.isInteger(index) || (index as number) < 0) {
+      pushInvalidRootMotionCarrierHintIssue(issues, source, `${field}.${key}`, index);
+      return null;
+    }
+    numbers.push(index as number);
+  }
+  if (new Set(numbers).size > 1) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      source,
+      field,
+      "conflict",
+      "root-motion carrier jointIndex aliases conflict"
+    );
+    return null;
+  }
+  if (fields.length > 1) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      source,
+      field,
+      "duplicate",
+      "root-motion carrier repeats equivalent jointIndex aliases"
+    );
+  }
+  return { jointIndex: numbers[0]! };
+}
+
+function readRootMotionCarrierJointHint(
+  value: Record<string, unknown>,
+  source: RootMotionCarrierHintSource,
+  field: string,
+  issues: RootMotionCarrierHintIssue[]
+): MotionCarrier | null {
+  const fields = presentRootMotionCarrierFields(value, ["joint", "name", "jointName", "joint_name"]);
+  if (fields.length === 0) return null;
+  const joints: string[] = [];
+  for (const key of fields) {
+    const joint = value[key];
+    if (!isNonEmptyString(joint)) {
+      pushInvalidRootMotionCarrierHintIssue(issues, source, `${field}.${key}`, joint);
+      return null;
+    }
+    joints.push(joint);
+  }
+  if (new Set(joints).size > 1) {
+    pushRootMotionCarrierHintIssue(issues, source, field, "conflict", "root-motion carrier joint aliases conflict");
+    return null;
+  }
+  if (fields.length > 1) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      source,
+      field,
+      "duplicate",
+      "root-motion carrier repeats equivalent joint aliases"
+    );
+  }
+  return { joint: joints[0]! };
+}
+
+function readRootMotionCarrierHumanBoneHint(
+  value: Record<string, unknown>,
+  source: RootMotionCarrierHintSource,
+  field: string,
+  issues: RootMotionCarrierHintIssue[]
+): MotionCarrier | null {
+  const fields = presentRootMotionCarrierFields(value, ["humanBone", "human_bone", "humanoid"]);
+  if (fields.length === 0) return null;
+  const humanBones: HumanoidBoneNameLike[] = [];
+  for (const key of fields) {
+    const bone = value[key];
+    if (!isNonEmptyString(bone) || !isHumanoidBoneName(bone)) {
+      pushInvalidRootMotionCarrierHintIssue(issues, source, `${field}.${key}`, bone);
+      return null;
+    }
+    humanBones.push(bone);
+  }
+  if (new Set(humanBones).size > 1) {
+    pushRootMotionCarrierHintIssue(issues, source, field, "conflict", "root-motion carrier humanBone aliases conflict");
+    return null;
+  }
+  if (fields.length > 1) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      source,
+      field,
+      "duplicate",
+      "root-motion carrier repeats equivalent humanBone aliases"
+    );
+  }
+  return { humanBone: humanBones[0]! };
+}
+
+function presentRootMotionCarrierFields(value: Record<string, unknown>, fields: readonly string[]): string[] {
+  return fields.filter((field) => value[field] !== undefined);
+}
+
+function rootMotionCarrierObjectHasKnownField(value: Record<string, unknown>): boolean {
+  return (
+    presentRootMotionCarrierFields(value, ["jointIndex", "joint_index", "index"]).length > 0 ||
+    presentRootMotionCarrierFields(value, ["joint", "name", "jointName", "joint_name"]).length > 0 ||
+    presentRootMotionCarrierFields(value, ["humanBone", "human_bone", "humanoid"]).length > 0
+  );
+}
+
+function resolveRootMotionCarrierHintAgainstSkeleton(
+  candidate: RootMotionCarrierHintCandidate,
+  skeleton: Skeleton | undefined,
+  issues: RootMotionCarrierHintIssue[]
+): ResolvedRootMotionCarrierHint | null {
+  if (!skeleton) return null;
+  const carrier = candidate.motionCarrier;
+  if ("jointIndex" in carrier) {
+    const jointIndex = carrier.jointIndex;
+    if (Number.isInteger(jointIndex) && jointIndex >= 0 && jointIndex < skeleton.joints.length) {
+      return { jointIndex, joint: skeleton.joints[jointIndex]!.name };
+    }
+    pushRootMotionCarrierHintIssue(
+      issues,
+      candidate.source,
+      candidate.field,
+      "skeleton-mismatch",
+      `root-motion carrier joint index ${String(jointIndex)} does not map to target skeleton`
+    );
+    return null;
+  }
+  if ("humanBone" in carrier) {
+    const jointIndex = resolveHumanoidIndex(skeleton, carrier.humanBone as HumanoidBoneName);
+    if (jointIndex >= 0) return { jointIndex, joint: skeleton.joints[jointIndex]!.name };
+    pushRootMotionCarrierHintIssue(
+      issues,
+      candidate.source,
+      candidate.field,
+      "skeleton-mismatch",
+      `root-motion carrier humanoid bone ${String(carrier.humanBone)} does not map to target skeleton`
+    );
+    return null;
+  }
+  const jointIndex = resolveJointIndex(skeleton, carrier.joint);
+  if (jointIndex >= 0) return { jointIndex, joint: skeleton.joints[jointIndex]!.name };
+  pushRootMotionCarrierHintIssue(
+    issues,
+    candidate.source,
+    candidate.field,
+    "skeleton-mismatch",
+    `root-motion carrier joint ${carrier.joint} does not map to target skeleton`
+  );
+  return null;
+}
+
+function rootMotionCarrierBindingFromHint(
+  carrier: MotionCarrier,
+  resolved: ResolvedRootMotionCarrierHint | null,
+  options: RootMotionCarrierHintOptions
+): RootMotionCarrierBinding | null {
+  const base = {
+    select: "bone" as const,
+    ...(options.bindingId !== undefined ? { id: options.bindingId } : {}),
+    ...(options.bindingPriority !== undefined && Number.isFinite(options.bindingPriority)
+      ? { priority: options.bindingPriority }
+      : {})
+  };
+  if (resolved) return { ...base, jointIndex: resolved.jointIndex, joint: resolved.joint };
+  if ("jointIndex" in carrier) return { ...base, jointIndex: carrier.jointIndex };
+  if ("joint" in carrier) return { ...base, joint: carrier.joint };
+  return null;
+}
+
+function rootMotionCarrierSignature(carrier: MotionCarrier): string {
+  if ("jointIndex" in carrier) return `jointIndex:${carrier.jointIndex}`;
+  if ("humanBone" in carrier) return `humanBone:${carrier.humanBone}`;
+  return `joint:${carrier.joint}`;
+}
+
+function rootMotionCarrierLabel(carrier: MotionCarrier): string | null {
+  if ("jointIndex" in carrier) return null;
+  if ("humanBone" in carrier) return carrier.humanBone;
+  return carrier.joint;
+}
+
+function rootMotionCarriersEquivalent(
+  first: MotionCarrier,
+  second: MotionCarrier,
+  skeleton: Skeleton | undefined
+): boolean {
+  if (skeleton) {
+    const firstResolved = resolveRootMotionCarrierForSkeleton(first, skeleton);
+    const secondResolved = resolveRootMotionCarrierForSkeleton(second, skeleton);
+    if (firstResolved && secondResolved) return firstResolved.jointIndex === secondResolved.jointIndex;
+  }
+  if (rootMotionCarrierSignature(first) === rootMotionCarrierSignature(second)) return true;
+  const firstLabel = rootMotionCarrierLabel(first);
+  const secondLabel = rootMotionCarrierLabel(second);
+  return firstLabel !== null && firstLabel === secondLabel;
+}
+
+function resolveRootMotionCarrierForSkeleton(
+  carrier: MotionCarrier,
+  skeleton: Skeleton
+): ResolvedRootMotionCarrierHint | null {
+  if ("jointIndex" in carrier) {
+    const jointIndex = carrier.jointIndex;
+    return Number.isInteger(jointIndex) && jointIndex >= 0 && jointIndex < skeleton.joints.length
+      ? { jointIndex, joint: skeleton.joints[jointIndex]!.name }
+      : null;
+  }
+  if ("humanBone" in carrier) {
+    if (!isHumanoidBoneName(carrier.humanBone)) return null;
+    const jointIndex = resolveHumanoidIndex(skeleton, carrier.humanBone);
+    return jointIndex >= 0 ? { jointIndex, joint: skeleton.joints[jointIndex]!.name } : null;
+  }
+  const jointIndex = resolveJointIndex(skeleton, carrier.joint);
+  return jointIndex >= 0 ? { jointIndex, joint: skeleton.joints[jointIndex]!.name } : null;
+}
+
+function cloneMotionCarrier(carrier: MotionCarrier): MotionCarrier {
+  if ("jointIndex" in carrier) return { jointIndex: carrier.jointIndex };
+  if ("humanBone" in carrier) return { humanBone: carrier.humanBone };
+  return { joint: carrier.joint };
+}
+
+function pushInvalidRootMotionCarrierHintIssue(
+  issues: RootMotionCarrierHintIssue[],
+  source: RootMotionCarrierHintSource,
+  field: string,
+  value: unknown
+): void {
+  pushRootMotionCarrierHintIssue(
+    issues,
+    source,
+    field,
+    "invalid",
+    `invalid root-motion carrier hint ${formatUnknownValue(value)}`
+  );
+}
+
+function pushRootMotionCarrierHintIssue(
+  issues: RootMotionCarrierHintIssue[],
+  source: RootMotionCarrierHintSource,
+  field: string,
+  code: RootMotionCarrierHintIssueCode,
+  message: string
+): void {
+  issues.push({ source, field, code, message });
 }
 
 function isRootMotionPolicy(value: unknown): value is RootMotionPolicy {

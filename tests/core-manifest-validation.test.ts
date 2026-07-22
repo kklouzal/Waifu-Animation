@@ -9,6 +9,7 @@ import {
   readRootMotionMetadata,
   readRootMotionProvenance,
   rejectedAnimationReport,
+  resolveRootMotionCarrierHint,
   usableManifestClips,
   validateAnimationManifestAssets,
   validateManifest
@@ -394,15 +395,81 @@ export async function runCoreManifestValidationTests(): Promise<void> {
           url: "/duplicate-root-motion-axes.waifuanim.bin",
           format: WAIFU_ANIMATION_BINARY_FORMAT,
           source: { rootMotion: { policy: "stripped-to-in-place", extractedAxes: ["x", "x"] } }
+        },
+        {
+          id: "ambiguous-root-motion-carrier",
+          label: "Ambiguous Root Motion Carrier",
+          url: "/ambiguous-root-motion-carrier.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "preserved", carrier: { jointIndex: 0, joint: "hips" } } }
         }
       ]
     }),
     [
       "conflicting-root-motion-policy-alias has conflicting source.rootMotionPolicy preserved for source.rootMotion.policy stripped-to-in-place",
       "invalid-root-motion-carrier has invalid source.rootMotion.carrier Infinity",
-      "duplicate-root-motion-axes has duplicate source.rootMotion.extractedAxes metadata"
+      "duplicate-root-motion-axes has duplicate source.rootMotion.extractedAxes metadata",
+      "ambiguous-root-motion-carrier has invalid source.rootMotion.carrier metadata"
     ],
     "root-motion manifest validation should reject contradictory aliases and malformed carrier/axis declarations deterministically"
+  );
+  const manifestCarrierHint = resolveRootMotionCarrierHint(
+    {
+      id: "manifest-carrier-hint",
+      label: "Manifest Carrier Hint",
+      url: "/manifest-carrier-hint.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "preserved", carrier: "hips" } }
+    },
+    {
+      clip: { ...nodClip, metadata: { rootMotionCarrier: "head" } },
+      skeleton,
+      bindingId: "manifest-carrier"
+    }
+  );
+  assert.deepEqual(
+    manifestCarrierHint.motionCarrier,
+    { joint: "hips" },
+    "manifest source.rootMotion.carrier should normalize to an explicit AnimationRuntime motionCarrier"
+  );
+  assert.deepEqual(
+    manifestCarrierHint.reconcilerCarrierBinding,
+    { select: "bone", id: "manifest-carrier", jointIndex: 0, joint: "hips" },
+    "manifest carrier hints should resolve to concrete RootMotionReconciler bone bindings when a skeleton is supplied"
+  );
+  assert.ok(
+    manifestCarrierHint.issues.some((issue) => issue.code === "conflict" && issue.source === "clip-metadata"),
+    "manifest carrier hints should remain authoritative and report conflicting clip metadata carrier hints"
+  );
+  const malformedCarrierHint = resolveRootMotionCarrierHint(
+    {
+      id: "malformed-carrier-hint",
+      label: "Malformed Carrier Hint",
+      url: "/malformed-carrier-hint.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "preserved", carrier: { jointIndex: 0, joint: "hips" } } }
+    },
+    { skeleton }
+  );
+  assert.equal(malformedCarrierHint.motionCarrier, null);
+  assert.ok(
+    malformedCarrierHint.issues.some((issue) => issue.code === "conflict"),
+    "conflicting source.rootMotion.carrier selector fields should block unsafe handoff helpers"
+  );
+  const missingCarrierHint = resolveRootMotionCarrierHint(
+    {
+      id: "missing-carrier-hint",
+      label: "Missing Carrier Hint",
+      url: "/missing-carrier-hint.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "preserved", carrier: { joint: "missing" } } }
+    },
+    { skeleton }
+  );
+  assert.equal(missingCarrierHint.motionCarrier, null);
+  assert.ok(
+    missingCarrierHint.issues.some((issue) => issue.code === "skeleton-mismatch"),
+    "carrier handoff helpers should reject hints that do not map to the target skeleton instead of falling back to root"
   );
   assert.deepEqual(
     validateManifest({ version: 1, clips: [convertedStrippedRootMotionEntry] }),

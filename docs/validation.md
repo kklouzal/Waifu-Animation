@@ -46,6 +46,8 @@ Current coverage includes:
 
 `RootMotionReconciler.reconcile()` is the optional next step after collection. It validates finite animation/controller motion, converts local actor deltas to world motion when requested, sends the requested displacement/yaw through a caller-owned `RootMotionWorldAdapter`, and reports accepted plus residual motion. It does not mutate controllers, Three mixers, VRM roots, or skeleton poses; ownership tokens and skeleton-root-motion declarations are the caller's guardrails against applying the same motion twice.
 
+`resolveRootMotionCarrierHint(entry, { clip, skeleton })` is the explicit metadata handoff helper for carrier hints. It reads authoritative `source.rootMotion.carrier` first, then clip metadata fallbacks such as `rootMotionCarrier` only when manifest root-motion metadata is absent, and returns a validated `motionCarrier` for `AnimationRuntime` plus a concrete `reconcilerCarrierBinding` when the hint can be matched against runtime root-motion layer reports. The helper reports malformed, duplicate, conflicting, or skeleton-mismatched hints; it never applies motion, chooses an owner, wires app clips, or changes source-basis correction.
+
 ## Waifu Integration Gates
 
 Run these from the consuming Waifu app checkout, shown as `<waifu-app-repo>`, after building both repositories and starting the app server. Set `WAIFU_RENDER_URL` to that app server URL.

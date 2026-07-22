@@ -1,13 +1,18 @@
 import type { RuntimeUpdateResult, Transform, Vec3, WorldCoordinatorActorRequest } from "./test-api.js";
 import {
+  AnimationRuntime,
   CharacterController,
   CharacterWorldCoordinator,
   ROOT_MOTION_COORDINATE_SYSTEM,
   RootMotionReconciler,
+  WAIFU_ANIMATION_BINARY_FORMAT,
   assert,
   createFlatGroundCharacterWorld,
   createRootMotionActorStateFromControllerSnapshot,
+  createSkeleton,
   quatFromAxisAngle,
+  resolveRootMotionCarrierHint,
+  toFloat32Array,
   resolveRootMotionCarrier
 } from "./test-api.js";
 import { vectorNearlyEqual } from "./test-helpers.js";
@@ -132,6 +137,47 @@ function runCarrierResolutionTests(): void {
   assert.ok(invalidPolicy.issues.some((issue) => issue.field === "carrierBindings[0].select"));
   assert.ok(invalidPolicy.issues.some((issue) => issue.field === "policy.animationTranslationWeight"));
   assert.ok(invalidPolicy.issues.some((issue) => issue.field === "policy.maxRequestedYawRadians"));
+
+  const handoffSkeleton = createSkeleton([{ name: "root" }, { name: "pelvis", parentName: "root", humanoid: "hips" }]);
+  const handoffClip = {
+    id: "handoff-walk",
+    duration: 1,
+    metadata: { rootMotionCarrier: { humanBone: "hips" } },
+    tracks: [
+      {
+        humanBone: "hips",
+        property: "translation" as const,
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 0, 0, 2])
+      }
+    ]
+  };
+  const handoff = resolveRootMotionCarrierHint(
+    {
+      id: "handoff-walk-entry",
+      label: "Handoff Walk Entry",
+      url: "/handoff-walk.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
+    { clip: handoffClip, skeleton: handoffSkeleton }
+  );
+  assert.deepEqual(handoff.motionCarrier, { humanBone: "hips" });
+  assert.deepEqual(handoff.resolved, { jointIndex: 1, joint: "pelvis" });
+  assert.deepEqual(handoff.reconcilerCarrierBinding, { select: "bone", jointIndex: 1, joint: "pelvis" });
+
+  const handoffRuntime = new AnimationRuntime(handoffSkeleton);
+  handoffRuntime.setLayer("handoff", handoffClip, {
+    weight: 1,
+    targetWeight: 1,
+    ...(handoff.motionCarrier ? { motionCarrier: handoff.motionCarrier } : {})
+  });
+  const handoffRuntimeReport = handoffRuntime.update(0.5, { collectRootMotion: true });
+  assert.equal(handoffRuntimeReport.rootMotionLayers[0]?.carrier.joint, "pelvis");
+  const handoffSelection = resolveRootMotionCarrier(handoffRuntimeReport, undefined, {
+    carrierBindings: handoff.reconcilerCarrierBinding ? [handoff.reconcilerCarrierBinding] : []
+  });
+  assert.equal(handoffSelection.layer?.id, "handoff");
+  assert.ok(vectorNearlyEqual(handoffSelection.delta.translation, [0, 0, 1], 1e-9));
 }
 
 function runCollisionReconciliationTests(): void {
