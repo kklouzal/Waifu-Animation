@@ -10,12 +10,14 @@ import {
   additiveDeltaPose,
   applyAdditivePose,
   blendPoses,
+  buildPackedRuntimeAnimation,
   createSkeleton,
   localToModelPose,
   loadWaifuAnimationWasmKernel,
   normalizePose,
   quatFromAxisAngle,
   sampleClipToPoseWithContext,
+  samplePackedRuntimeAnimationToPose,
   sanitizeQuaternionTrackValues,
   skinVertices,
   toFloat32Array,
@@ -23,13 +25,16 @@ import {
   type JointMask,
   type Mat4,
   type Pose,
+  type PackedRuntimeAnimation,
   type Quat,
   type Skeleton,
   type SkinningJob,
   WaKernelStatus,
   type WaKernelLoadResult,
   type WasmLocalToModelContext,
-  type WasmPoseArenaContext
+  type WasmPoseArenaContext,
+  type WasmPackedClipAsset,
+  type WasmPackedClipSamplingContext
 } from "../src/index.js";
 
 type BenchmarkConfig = {
@@ -44,6 +49,7 @@ type BenchmarkConfig = {
 type BenchmarkFixture = {
   skeleton: Skeleton;
   clips: [AnimationClip, AnimationClip, AnimationClip];
+  packedClips: [PackedRuntimeAnimation, PackedRuntimeAnimation, PackedRuntimeAnimation];
   upperMask: JointMask;
   sparseMask: JointMask;
   preSampledBase: Pose;
@@ -71,6 +77,12 @@ type AvatarSamplingState = {
   contexts: [AnimationSamplingContext, AnimationSamplingContext, AnimationSamplingContext];
   timeOffset: number;
   modelOut: Mat4[];
+};
+
+type WasmPackedBenchmarkState = {
+  arena: WasmPoseArenaContext;
+  samplers: [WasmPackedClipSamplingContext, WasmPackedClipSamplingContext, WasmPackedClipSamplingContext];
+  timeOffset: number;
 };
 
 type BenchmarkResult = {
@@ -115,6 +127,30 @@ const wasmPoseAvatars =
         createBenchmarkPoseArena(wasmKernel.kernel.createPoseArenaContext(fixture.skeleton))
       )
     : [];
+const packedSetupStart = performance.now();
+const wasmPackedAssets =
+  wasmKernel.kind === "wasm-scalar"
+    ? fixture.packedClips.map((clip) => wasmKernel.kernel.createPackedClipAsset(fixture.skeleton, clip))
+    : undefined;
+const wasmPackedAvatar =
+  wasmKernel.kind === "wasm-scalar" && wasmPackedAssets
+    ? createWasmPackedBenchmarkState(
+        createBenchmarkPoseArena(wasmKernel.kernel.createPoseArenaContext(fixture.skeleton)),
+        wasmPackedAssets,
+        0
+      )
+    : undefined;
+const wasmPackedAvatars =
+  wasmKernel.kind === "wasm-scalar" && wasmPackedAssets
+    ? Array.from({ length: config.multiAvatarCount }, (_value, index) =>
+        createWasmPackedBenchmarkState(
+          createBenchmarkPoseArena(wasmKernel.kernel.createPoseArenaContext(fixture.skeleton)),
+          wasmPackedAssets,
+          index * 0.017
+        )
+      )
+    : [];
+const retainedPackedSetupMs = performance.now() - packedSetupStart;
 const singleAvatar = createAvatarState(0);
 const multiAvatars = Array.from({ length: config.multiAvatarCount }, (_value, index) => createAvatarState(index));
 const runtime = createRuntime(fixture, 0);
@@ -135,6 +171,49 @@ results.push(
 );
 results.push(
   runBenchmark({
+    name: "sampling_packed_typescript_3_clips_1_avatar",
+    description: "sample three already-packed clips with the scalar TypeScript reference into object poses",
+    config,
+    operationCountPerIteration: 1,
+    op: (frame) => sampleThreePackedClipsTypescript(fixture, frame, 0)
+  })
+);
+results.push(
+  runBenchmark({
+    name: "sampling_packed_typescript_3_clips_multi_avatar",
+    description: "same scalar TypeScript packed reference across multiple avatars (object-pose output)",
+    config,
+    operationCountPerIteration: config.multiAvatarCount,
+    op: (frame) =>
+      multiAvatars.reduce(
+        (sum, avatar, index) => sum + sampleThreePackedClipsTypescript(fixture, frame + index, avatar.timeOffset),
+        0
+      )
+  })
+);
+if (wasmPackedAvatar) {
+  results.push(
+    runBenchmark({
+      name: "sampling_packed_scalar_wasm_3_clips_1_avatar",
+      description: "sample three retained packed-clip handles directly into reusable padded-SoA pose slots",
+      config,
+      operationCountPerIteration: 1,
+      op: (frame) => sampleThreePackedClipsWasm(wasmPackedAvatar, frame)
+    })
+  );
+  results.push(
+    runBenchmark({
+      name: "sampling_packed_scalar_wasm_3_clips_multi_avatar",
+      description: "same retained packed sampling with independent lower-key caches and pose arenas per avatar",
+      config,
+      operationCountPerIteration: config.multiAvatarCount,
+      op: (frame) =>
+        wasmPackedAvatars.reduce((sum, avatar, index) => sum + sampleThreePackedClipsWasm(avatar, frame + index), 0)
+    })
+  );
+}
+results.push(
+  runBenchmark({
     name: "blend_additive_masks_typescript_object_pose_1_avatar",
     description: "current TypeScript object-pose blend, additive, masks, and normalization for one avatar",
     config,
@@ -142,6 +221,28 @@ results.push(
     op: () => blendAdditiveAndNormalize(fixture)
   })
 );
+if (wasmPackedAvatar) {
+  results.push(
+    runBenchmark({
+      name: "retained_sample_blend_local_to_model_scalar_wasm_1_avatar",
+      description:
+        "retained WASM sampling -> blend/additive/masks/normalize -> local-to-model without JS pose materialization",
+      config,
+      operationCountPerIteration: 1,
+      op: (frame) => evaluateRetainedWasmPipeline(wasmPackedAvatar, frame)
+    })
+  );
+  results.push(
+    runBenchmark({
+      name: "retained_sample_blend_local_to_model_scalar_wasm_multi_avatar",
+      description: "same fully retained scalar-WASM numeric chain across independent avatar arenas",
+      config,
+      operationCountPerIteration: config.multiAvatarCount,
+      op: (frame) =>
+        wasmPackedAvatars.reduce((sum, avatar, index) => sum + evaluateRetainedWasmPipeline(avatar, frame + index), 0)
+    })
+  );
+}
 if (wasmPoseArena) {
   results.push(
     runBenchmark({
@@ -286,7 +387,9 @@ const output = {
           mode: wasmKernel.kind,
           startupMs: wasmKernel.startupMs,
           simdSupported: wasmKernel.simdSupported,
-          featureFlags: wasmKernel.kernel.featureFlags
+          featureFlags: wasmKernel.kernel.featureFlags,
+          retainedPackedSetupMs,
+          retainedMemoryBytesAfterSetup: wasmKernel.kernel.memory.buffer.byteLength
         }
       : {
           status: "fallback",
@@ -300,10 +403,12 @@ const output = {
   notes: [
     "Timings use deterministic synthetic clips and skeletons; checksums guard against dead-code elimination.",
     "WASM startup is reported separately in wasmKernel.startupMs and is excluded from all scalar-WASM steady-state rows.",
+    "Retained clip/arena/context setup is reported separately in wasmKernel.retainedPackedSetupMs and excluded from steady-state rows.",
     "The scalar-WASM pose rows begin with prepacked retained SoA poses and masks; object packing and Transform[] materialization are intentionally outside those timings.",
     "Each multi-avatar scalar-WASM row uses an independent retained context; offsets and typed views are reused unless WebAssembly.Memory grows.",
     "The TypeScript pose row measures the current object-shaped public API, so the comparison includes its current object allocation behavior but does not isolate allocation cost.",
     "No precise heap-allocation claim is made from Node heap deltas; retained-buffer behavior is enforced structurally by contract tests.",
+    "The retained full-chain rows exclude runtime layer scheduling, Three/VRM adaptation, skinning, IK, diagnostics, and final JS Transform[] materialization; no production speedup claim is made.",
     "Use --smoke for a fast gate and default arguments for a steadier local baseline. Override with --iterations, --warmup, --joints, --avatars, or --runtime-avatars."
   ]
 };
@@ -359,6 +464,11 @@ function createFixture(jointCount: number): BenchmarkFixture {
     createBenchmarkClip(skeleton, "bench_overlay_idle", 0.47),
     createBenchmarkClip(skeleton, "bench_additive_upper", 0.79)
   ];
+  const packedClips: [PackedRuntimeAnimation, PackedRuntimeAnimation, PackedRuntimeAnimation] = [
+    buildPackedRuntimeAnimation(clips[0], skeleton),
+    buildPackedRuntimeAnimation(clips[1], skeleton),
+    buildPackedRuntimeAnimation(clips[2], skeleton)
+  ];
   const upperMask = createDepthMask(skeleton, 2, 1, 0.08);
   const sparseMask = createSparseMask(skeleton);
   const preSampledBase = sampleClipToPoseWithContext(skeleton, clips[0], 0.37, new AnimationSamplingContext(), {
@@ -376,6 +486,7 @@ function createFixture(jointCount: number): BenchmarkFixture {
   const fixtureDraft: Omit<BenchmarkFixture, "preBlendedPose"> = {
     skeleton,
     clips,
+    packedClips,
     upperMask,
     sparseMask,
     preSampledBase,
@@ -387,6 +498,7 @@ function createFixture(jointCount: number): BenchmarkFixture {
   return {
     skeleton,
     clips,
+    packedClips,
     upperMask,
     sparseMask,
     preSampledBase,
@@ -587,6 +699,77 @@ function sampleThreeClips(fixture: BenchmarkFixture, avatar: AvatarSamplingState
     restPose: fixture.skeleton.restPose
   });
   return checksumPose(base) + checksumPose(overlay) * 0.25 + checksumPose(additive) * 0.125;
+}
+
+function sampleThreePackedClipsTypescript(fixture: BenchmarkFixture, frame: number, timeOffset: number): number {
+  const time = frameTime(frame, timeOffset);
+  const base = samplePackedRuntimeAnimationToPose(fixture.skeleton, fixture.packedClips[0], time, {
+    loop: true,
+    restPose: fixture.skeleton.restPose
+  });
+  const overlay = samplePackedRuntimeAnimationToPose(fixture.skeleton, fixture.packedClips[1], time * 0.91, {
+    loop: true,
+    restPose: fixture.skeleton.restPose
+  });
+  const additive = samplePackedRuntimeAnimationToPose(fixture.skeleton, fixture.packedClips[2], time * 1.07, {
+    loop: true,
+    restPose: fixture.skeleton.restPose
+  });
+  return checksumPose(base) + checksumPose(overlay) * 0.25 + checksumPose(additive) * 0.125;
+}
+
+function createWasmPackedBenchmarkState(
+  arena: WasmPoseArenaContext,
+  assets: readonly WasmPackedClipAsset[],
+  timeOffset: number
+): WasmPackedBenchmarkState {
+  if (assets.length !== 3) throw new Error("retained benchmark requires exactly three packed assets");
+  return {
+    arena,
+    samplers: [
+      arena.createPackedSamplingContext(assets[0]!),
+      arena.createPackedSamplingContext(assets[1]!),
+      arena.createPackedSamplingContext(assets[2]!)
+    ],
+    timeOffset
+  };
+}
+
+function sampleThreePackedClipsWasm(state: WasmPackedBenchmarkState, frame: number): number {
+  const time = frameTime(frame, state.timeOffset);
+  if (
+    state.samplers[0].sampleTime(time, 1, { loop: true }) !== WaKernelStatus.Ok ||
+    state.samplers[1].sampleTime(time * 0.91, 2, { loop: true }) !== WaKernelStatus.Ok ||
+    state.samplers[2].sampleTime(time * 1.07, 3, { loop: true }) !== WaKernelStatus.Ok
+  ) {
+    throw new Error("scalar WASM retained packed sampling failed");
+  }
+  return (
+    checksumTransformSoa(state.arena.poseView(1), state.arena.jointCount) +
+    checksumTransformSoa(state.arena.poseView(2), state.arena.jointCount) * 0.25 +
+    checksumTransformSoa(state.arena.poseView(3), state.arena.jointCount) * 0.125
+  );
+}
+
+function evaluateRetainedWasmPipeline(state: WasmPackedBenchmarkState, frame: number): number {
+  sampleThreePackedClipsWasm(state, frame);
+  const arena = state.arena;
+  if (
+    arena.blend(
+      [
+        { pose: 1, weight: 0.82 },
+        { pose: 2, weight: 0.34, mask: 0 }
+      ],
+      { outputPose: 4, threshold: 0.1 }
+    ) !== WaKernelStatus.Ok ||
+    arena.additiveDelta(0, 3, 5) !== WaKernelStatus.Ok ||
+    arena.applyAdditive(4, 5, 0.2, 6, 1) !== WaKernelStatus.Ok ||
+    arena.normalize(6) !== WaKernelStatus.Ok ||
+    arena.localToModel(6) !== WaKernelStatus.Ok
+  ) {
+    throw new Error("scalar WASM retained full pipeline failed");
+  }
+  return checksumTransformSoa(arena.poseView(6), arena.jointCount) + checksumMatrixBuffer(arena.modelPoseView);
 }
 
 function evaluateManualPipeline(fixture: BenchmarkFixture, avatar: AvatarSamplingState, frame: number): number {

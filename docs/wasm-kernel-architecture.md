@@ -1,6 +1,6 @@
 # Rust/WASM Kernel Architecture Contract
 
-Status: implemented through Phase 2 scalar Rust/WASM local-to-model plus retained padded-SoA blend, additive, masks, and normalization. Packed sampling, runtime scheduling, skinning, IK, Three.js/VRM, and app integration remain outside the kernel.
+Status: implemented through Phase 3 scalar Rust/WASM retained packed-clip sampling plus padded-SoA blend, additive, masks, normalization, and local-to-model. Runtime scheduling, skinning, IK, Three.js/VRM, and app integration remain outside the kernel.
 
 ## Bounded kernel boundary
 
@@ -97,7 +97,20 @@ Observed smoke baseline on Dev-01, 2026-07-22 UTC, command `npm run bench:wasm-k
 | `animation_runtime_evaluate_1_avatar`                          |     0.801986383 |   1246.904 |  731.334951 |
 | `animation_runtime_evaluate_multi_avatar`                      |     0.779247675 |   1283.289 | 1463.644778 |
 
-These smoke numbers are local synthetic evidence, not a production speedup claim. The TypeScript pose row uses object-shaped poses; the WASM rows begin already packed, so packing/materialization and end-to-end sampling/runtime costs are intentionally outside that comparison.
+Phase 3 retained-sampling smoke on the same host/config reported 16.227170 ms WASM startup and 5.882422 ms retained clip/arena/context setup, both excluded from steady-state rows:
+
+| Phase 3 workload                                                    | ms/avatar-frame |  ops/sec |    Checksum |
+| ------------------------------------------------------------------- | --------------: | -------: | ----------: |
+| `sampling_packed_typescript_3_clips_1_avatar`                       |     2.667618583 |  374.866 |   19.292506 |
+| `sampling_packed_typescript_3_clips_multi_avatar`                   |      2.62115065 |  381.512 |   77.095598 |
+| `sampling_packed_scalar_wasm_3_clips_1_avatar`                      |     0.123164867 | 8119.198 |   19.292507 |
+| `sampling_packed_scalar_wasm_3_clips_multi_avatar`                  |     0.109007592 | 9173.673 |   77.095599 |
+| `retained_sample_blend_local_to_model_scalar_wasm_1_avatar`         |      0.17633665 | 5670.971 |  732.760640 |
+| `retained_sample_blend_local_to_model_scalar_wasm_multi_avatar`     |     0.163261917 | 6125.127 | 2933.879872 |
+| `sample_blend_local_to_model_1_avatar` (current TS object pipeline) |       0.9044071 | 1105.697 |  732.760487 |
+| `sample_blend_local_to_model_multi_avatar` (current TS object path) |     0.919288729 | 1087.798 | 2933.879263 |
+
+These smoke numbers are local synthetic evidence, not a production speedup claim. TS packed rows intentionally include object-pose materialization; retained WASM rows exclude setup, scheduling, diagnostics, skinning, IK, Three/VRM adaptation, and final JS materialization.
 
 Measured/structural priority:
 
@@ -114,9 +127,9 @@ If future target-workload JSON contradicts this order, measured workload priorit
 
 ### Versioning
 
-- ABI identity: `waifu_animation_kernel`, major `1`. Phase 1 is minor `0`; Phase 2 pose jobs report minor `1`.
+- ABI identity: `waifu_animation_kernel`, major `1`. Phase 1 is minor `0`; Phase 2 pose jobs report minor `1`; Phase 3 retained packed sampling reports minor `2`.
 - Loader calls `wa_version_major()`, `wa_version_minor()`, and `wa_feature_flags()` before enabling any kernel job.
-- Major mismatch rejects the kernel. The default scalar local-to-model loader still accepts ABI v1.0. Pose jobs require ABI v1.1, their feature bits, and all four pose-job exports, so the minor addition remains backward-compatible and explicitly gated.
+- Major mismatch rejects the kernel. The default scalar local-to-model loader still accepts ABI v1.0. Pose jobs require ABI v1.1; retained packed sampling requires ABI v1.2. Each path also requires its feature bits and exports, so additions remain backward-compatible and explicitly gated.
 - Exports use C-compatible scalar parameters and return `i32` status. Multi-value returns are written into caller-provided memory structs.
 
 ### Status codes
@@ -200,7 +213,7 @@ Phase 2 adds `wa_blend_poses`, `wa_additive_delta`, `wa_apply_additive`, and `wa
 
 `WasmPoseArenaContext` owns contiguous retained pose slots, mask slots, and layer descriptors per avatar. Slot 0 starts as the skeleton rest pose. `poseView()` and `maskView()` permit already-packed steady-state jobs with caller-selected reusable output slots. `writePose()` and `copyPoseToTransforms()` are explicit object packing/materialization adapters; they do not claim allocation-free object conversion. The contexts keep no process-global TypeScript mutable state, and refresh typed views after memory growth. Existing object-shaped pose APIs remain scalar TypeScript by default.
 
-Later phases add packed sampling, runtime composition, skinning, and IK/foot-plant behind feature bits.
+Phase 3 adds immutable packed-clip handles, retained sampling-context handles/lower-key caches, explicit reset, time/ratio sampling, and direct writes into caller-owned padded-SoA pose slots through `wa_create_packed_clip`, `wa_create_sampling_context`, `wa_reset_sampling_context`, `wa_sample_packed_clip`, and `wa_sample_packed_clip_ratio`. Packed controllers are fixed 64-byte numeric descriptors; clip data and lower-key storage are reserved during setup. Later phases add runtime composition, skinning, and IK/foot-plant behind feature bits.
 
 ## Memory model and layouts
 
@@ -289,7 +302,8 @@ Feature bits:
 - bit 1: scalar override blend;
 - bit 2: scalar additive delta/application;
 - bit 3: scalar dense/short/sparse-by-zero joint masks;
-- bits 4-15: reserved for later scalar jobs (packed sampling, runtime composition, skinning, IK, foot plant);
+- bit 4: retained scalar packed-clip sampling;
+- bits 5-15: reserved for later scalar jobs (runtime composition, skinning, IK, foot plant);
 - bit 16: SIMD local-to-model;
 - bit 17: SIMD blend/additive/masks;
 - bit 18: SIMD packed sampling;
@@ -367,9 +381,17 @@ Implemented:
 - differential tests across single/multiple layers, custom fallback, antipodes, signed/non-finite weights, padded counts, malformed ranges/capacities, and additive ordering;
 - benchmark rows for current TypeScript object-pose composition versus scalar-WASM already-packed one- and multi-avatar arenas. Startup is separate and no production speedup or precise heap-allocation claim is made.
 
-### Phase 3 — packed clip sampling kernel
+### Phase 3 — packed clip sampling kernel (implemented)
 
-Gates: parity for loops/clamps/seeks, coherent lower-key caches, packed/raw sampling equivalence, source-rest retargeting, quaternion repairs, skip-unsupported behavior, and memory growth only outside frames.
+Implemented:
+
+- immutable generation-checked numeric packed-clip handles and per-avatar sampling-context handles with retained lower-key caches;
+- setup-time copies of numeric controllers/times/values, with already-resolved joint indices and no per-frame JS track traversal or `Transform[]` creation on the WASM path;
+- looping/clamping, numeric time and ratio entry points, forward coherence, rewind/search, explicit cache reset, duplicate/sparse key behavior, translation/rotation/scale strides, quaternion hemisphere/normalization/finite repair, missing-channel rest fill, and source-rest/normalized-delta rotation retargeting;
+- direct output into any non-rest retained pose slot, composable with Phase 2 jobs and the pose arena's direct Phase 1 local-to-model job;
+- capacity/alignment/range/handle/generation checks, epoch-based view refresh, deterministic repeats, no steady-state memory growth after asset/context reservation, and explicit scalar-TypeScript fallback materialization only when requested;
+- differential coverage for raw vs packed TS vs WASM, loop/clamp edges, negative/multi-loop times, forward/backward/reset seeks, duplicate/sparse keys, 1/3/4/5/8/9 joints, missing channels/rest fill, source-rest retargeting, antipodal/invalid finite repair, malformed/stale handles/capacities, forced fallback, memory growth, and multi-clip/multi-avatar independence;
+- benchmark rows separating startup/setup from TS packed sampling, retained scalar-WASM sampling, and the fully retained sampling -> blend/additive/masks -> local-to-model chain. Runtime scheduling, skinning, IK, diagnostics, and JS materialization remain explicit exclusions; the benchmark makes no production speedup claim.
 
 ### Phase 4 — AnimationRuntime WASM-backed composition facade
 

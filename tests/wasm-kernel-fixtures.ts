@@ -43,7 +43,7 @@ export type WasmKernelSyntheticFixture = {
 };
 
 export function createWasmKernelSyntheticFixture(options: WasmKernelSyntheticOptions = {}): WasmKernelSyntheticFixture {
-  const jointCount = sanitizeCount(options.jointCount, 48, 4, 256);
+  const jointCount = sanitizeCount(options.jointCount, 48, 1, 256);
   const keyCount = sanitizeCount(options.keyCount, 5, 2, 32);
   const vertexCount = sanitizeCount(options.vertexCount, 1024, 0, 200_000);
   const influences = sanitizeCount(options.influences, 4, 1, 8);
@@ -131,7 +131,7 @@ function createWasmKernelClip(
   phase: number,
   amplitude: number
 ): AnimationClip {
-  const duration = 1.6;
+  const duration = new Float32Array([1.6])[0]!;
   const times = Array.from({ length: keyCount }, (_, index) => (duration * index) / (keyCount - 1));
   const tracks: AnimationClip["tracks"] = [];
   for (let joint = 0; joint < jointCount; joint += 1) {

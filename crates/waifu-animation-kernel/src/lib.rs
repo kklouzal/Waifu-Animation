@@ -6,11 +6,12 @@ use core::arch::wasm32;
 use core::panic::PanicInfo;
 
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 1;
+pub const ABI_MINOR: u32 = 2;
 pub const FEATURE_SCALAR_LOCAL_TO_MODEL: u32 = 1 << 0;
 pub const FEATURE_SCALAR_POSE_BLEND: u32 = 1 << 1;
 pub const FEATURE_SCALAR_ADDITIVE: u32 = 1 << 2;
 pub const FEATURE_SCALAR_JOINT_MASKS: u32 = 1 << 3;
+pub const FEATURE_RETAINED_PACKED_SAMPLING: u32 = 1 << 4;
 pub const FEATURE_DEBUG_SELF_TEST: u32 = 1 << 31;
 
 pub const WA_OK: u32 = 0;
@@ -30,21 +31,33 @@ const SOA_TRANSFORM_BYTES: u32 = 160;
 const MAT4_BYTES: u32 = 64;
 const OPTIONS_BYTES: u32 = 32;
 const BLEND_LAYER_BYTES: u32 = 24;
+const PACKED_TRACK_BYTES: u32 = 64;
 const F32_BYTES: u32 = 4;
 const TRANSFORM_COMPONENTS: usize = 10;
 const EPSILON: f32 = 1.0e-8;
 const AVATAR_MAGIC: u32 = 0x5741_4101;
 const SKELETON_MAGIC: u32 = 0x5741_5301;
+const CLIP_MAGIC: u32 = 0x5741_4301;
+const SAMPLING_CONTEXT_MAGIC: u32 = 0x5741_5801;
 const AVATAR_FLAG_DESTROYED: u32 = 1;
 const SKELETON_FLAG_DESTROYED: u32 = 1;
 const HANDLE_INDEX_BITS: u32 = 16;
 const HANDLE_INDEX_MASK: u32 = (1 << HANDLE_INDEX_BITS) - 1;
 const HANDLE_GENERATION_SHIFT: u32 = HANDLE_INDEX_BITS;
-const HANDLE_GENERATION_MASK: u32 = 0x7fff;
+const HANDLE_GENERATION_MASK: u32 = 0x3fff;
+const HANDLE_KIND_MASK: u32 = 3 << 30;
+const HANDLE_KIND_AVATAR: u32 = 0;
+const HANDLE_KIND_CLIP: u32 = 1 << 30;
 const HANDLE_KIND_SKELETON: u32 = 1 << 31;
+const HANDLE_KIND_SAMPLING_CONTEXT: u32 = 3 << 30;
 const MIN_GENERATION: u32 = 1;
 const MAX_SKELETONS: usize = 128;
 const MAX_AVATARS: usize = 128;
+const MAX_CLIPS: usize = 128;
+const MAX_SAMPLING_CONTEXTS: usize = 128;
+
+const SAMPLE_FLAG_LOOP: u32 = 1 << 0;
+const SAMPLE_FLAG_RESET_CACHE: u32 = 1 << 1;
 
 #[cfg(target_arch = "wasm32")]
 unsafe extern "C" {
@@ -77,6 +90,37 @@ struct SkeletonRecord {
     reserved1: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ClipRecord {
+    magic: u32,
+    generation: u32,
+    track_count: u32,
+    flags: u32,
+    tracks_offset: u32,
+    tracks_capacity_bytes: u32,
+    times_offset: u32,
+    times_count: u32,
+    times_capacity_bytes: u32,
+    values_offset: u32,
+    values_count: u32,
+    values_capacity_bytes: u32,
+    duration_bits: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SamplingContextRecord {
+    magic: u32,
+    generation: u32,
+    clip_handle: u32,
+    flags: u32,
+    lower_keys_offset: u32,
+    lower_keys_capacity_bytes: u32,
+    last_time_bits: u32,
+    sample_count: u32,
+}
+
 impl SkeletonRecord {
     const fn empty() -> Self {
         Self {
@@ -103,6 +147,41 @@ impl AvatarRecord {
             reserved0: 0,
             reserved1: 0,
             reserved2: 0,
+        }
+    }
+}
+
+impl ClipRecord {
+    const fn empty() -> Self {
+        Self {
+            magic: 0,
+            generation: 0,
+            track_count: 0,
+            flags: 0,
+            tracks_offset: 0,
+            tracks_capacity_bytes: 0,
+            times_offset: 0,
+            times_count: 0,
+            times_capacity_bytes: 0,
+            values_offset: 0,
+            values_count: 0,
+            values_capacity_bytes: 0,
+            duration_bits: 0,
+        }
+    }
+}
+
+impl SamplingContextRecord {
+    const fn empty() -> Self {
+        Self {
+            magic: 0,
+            generation: 0,
+            clip_handle: 0,
+            flags: 0,
+            lower_keys_offset: 0,
+            lower_keys_capacity_bytes: 0,
+            last_time_bits: 0,
+            sample_count: 0,
         }
     }
 }
@@ -146,6 +225,9 @@ static mut MEMORY_EPOCH: u32 = 0;
 static mut BUMP_PTR: u32 = 0;
 static mut SKELETONS: [SkeletonRecord; MAX_SKELETONS] = [SkeletonRecord::empty(); MAX_SKELETONS];
 static mut AVATARS: [AvatarRecord; MAX_AVATARS] = [AvatarRecord::empty(); MAX_AVATARS];
+static mut CLIPS: [ClipRecord; MAX_CLIPS] = [ClipRecord::empty(); MAX_CLIPS];
+static mut SAMPLING_CONTEXTS: [SamplingContextRecord; MAX_SAMPLING_CONTEXTS] =
+    [SamplingContextRecord::empty(); MAX_SAMPLING_CONTEXTS];
 
 #[unsafe(no_mangle)]
 pub extern "C" fn wa_version_major() -> u32 {
@@ -163,6 +245,7 @@ pub extern "C" fn wa_feature_flags() -> u32 {
         | FEATURE_SCALAR_POSE_BLEND
         | FEATURE_SCALAR_ADDITIVE
         | FEATURE_SCALAR_JOINT_MASKS
+        | FEATURE_RETAINED_PACKED_SAMPLING
         | FEATURE_DEBUG_SELF_TEST
 }
 
@@ -305,11 +388,540 @@ pub extern "C" fn wa_create_avatar(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn wa_create_packed_clip(
+    tracks_offset: u32,
+    track_count: u32,
+    tracks_capacity_bytes: u32,
+    times_offset: u32,
+    times_count: u32,
+    times_capacity_bytes: u32,
+    values_offset: u32,
+    values_count: u32,
+    values_capacity_bytes: u32,
+    duration: f32,
+    flags: u32,
+    out_handle_ptr: u32,
+) -> u32 {
+    if track_count == 0
+        || track_count > MAX_JOINTS
+        || !duration.is_finite()
+        || duration <= 0.0
+        || flags != 0
+        || !is_aligned(tracks_offset, 4)
+        || !is_aligned(times_offset, 4)
+        || !is_aligned(values_offset, 4)
+        || !is_aligned(out_handle_ptr, 4)
+        || out_handle_ptr == 0
+    {
+        return WA_ERR_INVALID_ARG;
+    }
+    let Some(track_bytes) = track_count.checked_mul(PACKED_TRACK_BYTES) else {
+        return WA_ERR_CAPACITY;
+    };
+    let Some(time_bytes) = times_count.checked_mul(F32_BYTES) else {
+        return WA_ERR_CAPACITY;
+    };
+    let Some(value_bytes) = values_count.checked_mul(F32_BYTES) else {
+        return WA_ERR_CAPACITY;
+    };
+    if tracks_capacity_bytes < track_bytes
+        || times_capacity_bytes < time_bytes
+        || values_capacity_bytes < value_bytes
+    {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(tracks_offset, track_bytes)
+        || !memory_range_valid(times_offset, time_bytes)
+        || !memory_range_valid(values_offset, value_bytes)
+        || !memory_range_valid(out_handle_ptr, 4)
+    {
+        return WA_ERR_OOB;
+    }
+    for track in 0..track_count {
+        let descriptor = tracks_offset + track * PACKED_TRACK_BYTES;
+        let property = unsafe { read_u32(descriptor + 4) };
+        let stride = unsafe { read_u32(descriptor + 8) };
+        let key_count = unsafe { read_u32(descriptor + 12) };
+        let time_offset = unsafe { read_u32(descriptor + 16) };
+        let value_offset = unsafe { read_u32(descriptor + 20) };
+        let track_flags = unsafe { read_u32(descriptor + 24) };
+        if property > 2
+            || stride != if property == 1 { 4 } else { 3 }
+            || key_count == 0
+            || track_flags & !3 != 0
+            || time_offset
+                .checked_add(key_count)
+                .is_none_or(|end| end > times_count)
+            || value_offset
+                .checked_add(key_count.saturating_mul(stride))
+                .is_none_or(|end| end > values_count)
+        {
+            return WA_ERR_INVALID_ARG;
+        }
+        let mut previous = f32::NEG_INFINITY;
+        for key in 0..key_count {
+            let time = unsafe { read_f32(times_offset + (time_offset + key) * F32_BYTES) };
+            if !time.is_finite() || time < previous {
+                return WA_ERR_INVALID_ARG;
+            }
+            previous = time;
+        }
+    }
+    let Some(slot) = find_free_clip_slot() else {
+        return WA_ERR_CAPACITY;
+    };
+    unsafe {
+        let records = core::ptr::addr_of_mut!(CLIPS) as *mut ClipRecord;
+        let record = records.add(slot);
+        let generation = next_generation((*record).generation);
+        *record = ClipRecord {
+            magic: CLIP_MAGIC,
+            generation,
+            track_count,
+            flags: 0,
+            tracks_offset,
+            tracks_capacity_bytes,
+            times_offset,
+            times_count,
+            times_capacity_bytes,
+            values_offset,
+            values_count,
+            values_capacity_bytes,
+            duration_bits: duration.to_bits(),
+        };
+        write_u32(
+            out_handle_ptr,
+            make_handle(slot, generation, HANDLE_KIND_CLIP),
+        );
+    }
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_create_sampling_context(
+    clip_handle: u32,
+    lower_keys_offset: u32,
+    lower_keys_capacity_bytes: u32,
+    out_handle_ptr: u32,
+) -> u32 {
+    let Some(clip) = clip_record(clip_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let required = match clip.track_count.checked_mul(F32_BYTES) {
+        Some(value) => value,
+        None => return WA_ERR_CAPACITY,
+    };
+    if !is_aligned(lower_keys_offset, 4) || !is_aligned(out_handle_ptr, 4) || out_handle_ptr == 0 {
+        return WA_ERR_INVALID_ARG;
+    }
+    if lower_keys_capacity_bytes < required {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(lower_keys_offset, required) || !memory_range_valid(out_handle_ptr, 4) {
+        return WA_ERR_OOB;
+    }
+    let Some(slot) = find_free_sampling_context_slot() else {
+        return WA_ERR_CAPACITY;
+    };
+    for track in 0..clip.track_count {
+        unsafe { write_u32(lower_keys_offset + track * 4, u32::MAX) };
+    }
+    unsafe {
+        let records = core::ptr::addr_of_mut!(SAMPLING_CONTEXTS) as *mut SamplingContextRecord;
+        let record = records.add(slot);
+        let generation = next_generation((*record).generation);
+        *record = SamplingContextRecord {
+            magic: SAMPLING_CONTEXT_MAGIC,
+            generation,
+            clip_handle,
+            flags: 0,
+            lower_keys_offset,
+            lower_keys_capacity_bytes,
+            last_time_bits: 0,
+            sample_count: 0,
+        };
+        write_u32(
+            out_handle_ptr,
+            make_handle(slot, generation, HANDLE_KIND_SAMPLING_CONTEXT),
+        );
+    }
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_reset_sampling_context(context_handle: u32) -> u32 {
+    let Some(context) = sampling_context_record_mut(context_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let Some(clip) = clip_record(context.clip_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    for track in 0..clip.track_count {
+        unsafe { write_u32(context.lower_keys_offset + track * 4, u32::MAX) };
+    }
+    context.flags = 0;
+    context.last_time_bits = 0;
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_sample_packed_clip(
+    avatar_handle: u32,
+    clip_handle: u32,
+    context_handle: u32,
+    rest_pose_offset: u32,
+    rest_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+    time: f32,
+    flags: u32,
+) -> u32 {
+    sample_packed_clip_impl(
+        avatar_handle,
+        clip_handle,
+        context_handle,
+        rest_pose_offset,
+        rest_pose_capacity_bytes,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+        joint_count,
+        time,
+        flags,
+        false,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_sample_packed_clip_ratio(
+    avatar_handle: u32,
+    clip_handle: u32,
+    context_handle: u32,
+    rest_pose_offset: u32,
+    rest_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+    ratio: f32,
+    flags: u32,
+) -> u32 {
+    sample_packed_clip_impl(
+        avatar_handle,
+        clip_handle,
+        context_handle,
+        rest_pose_offset,
+        rest_pose_capacity_bytes,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+        joint_count,
+        ratio,
+        flags,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sample_packed_clip_impl(
+    avatar_handle: u32,
+    clip_handle: u32,
+    context_handle: u32,
+    rest_pose_offset: u32,
+    rest_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+    input: f32,
+    flags: u32,
+    ratio_input: bool,
+) -> u32 {
+    let Some(avatar) = avatar_record(avatar_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let Some(clip) = clip_record(clip_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let Some(context) = sampling_context_record_mut(context_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    if context.clip_handle != clip_handle {
+        return WA_ERR_BAD_HANDLE;
+    }
+    if flags & !(SAMPLE_FLAG_LOOP | SAMPLE_FLAG_RESET_CACHE) != 0 {
+        return WA_ERR_INVALID_ARG;
+    }
+    let pose_bytes = match validate_pose_job(
+        avatar,
+        joint_count,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+    ) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let rest_status = validate_pose_range(rest_pose_offset, rest_pose_capacity_bytes, pose_bytes);
+    if rest_status != WA_OK {
+        return rest_status;
+    }
+    let duration = f32::from_bits(clip.duration_bits);
+    let mut time = if input.is_finite() { input } else { 0.0 };
+    if ratio_input {
+        time = time.clamp(0.0, 1.0) * duration;
+    } else if flags & SAMPLE_FLAG_LOOP != 0 {
+        time %= duration;
+        if time < 0.0 {
+            time += duration;
+        }
+    } else {
+        time = time.clamp(0.0, duration);
+    }
+    let had_sample = context.flags & 1 != 0;
+    let coherent_forward = had_sample
+        && flags & SAMPLE_FLAG_RESET_CACHE == 0
+        && time >= f32::from_bits(context.last_time_bits);
+    if flags & SAMPLE_FLAG_RESET_CACHE != 0 {
+        for track in 0..clip.track_count {
+            unsafe { write_u32(context.lower_keys_offset + track * 4, u32::MAX) };
+        }
+    }
+    // Validate every avatar-specific controller target before touching output,
+    // preserving the ABI's no-partial-write rule for malformed descriptors.
+    for track_index in 0..clip.track_count {
+        let descriptor = clip.tracks_offset + track_index * PACKED_TRACK_BYTES;
+        if unsafe { read_u32(descriptor) } >= joint_count {
+            return WA_ERR_INVALID_ARG;
+        }
+    }
+    for joint in 0..joint_count {
+        write_transform(
+            output_pose_offset,
+            joint,
+            read_transform_repaired(rest_pose_offset, joint),
+        );
+    }
+    write_padded_identity_lanes(output_pose_offset, joint_count);
+
+    for track_index in 0..clip.track_count {
+        let descriptor = clip.tracks_offset + track_index * PACKED_TRACK_BYTES;
+        let joint = unsafe { read_u32(descriptor) };
+        let property = unsafe { read_u32(descriptor + 4) };
+        let stride = unsafe { read_u32(descriptor + 8) };
+        let key_count = unsafe { read_u32(descriptor + 12) };
+        let time_offset = unsafe { read_u32(descriptor + 16) };
+        let value_offset = unsafe { read_u32(descriptor + 20) };
+        let track_flags = unsafe { read_u32(descriptor + 24) };
+        let cache_offset = context.lower_keys_offset + track_index * 4;
+        let first_time = unsafe { read_f32(clip.times_offset + time_offset * 4) };
+        let last_key = key_count - 1;
+        let last_time = unsafe { read_f32(clip.times_offset + (time_offset + last_key) * 4) };
+        let (lower, upper) = if time <= first_time {
+            unsafe { write_u32(cache_offset, 0) };
+            (0, 0)
+        } else if time >= last_time {
+            unsafe { write_u32(cache_offset, last_key.saturating_sub(1)) };
+            (last_key, last_key)
+        } else {
+            let last_lower = key_count - 2;
+            let cached = unsafe { read_u32(cache_offset) };
+            let lower = if coherent_forward
+                && cached <= last_lower
+                && time >= unsafe { read_f32(clip.times_offset + (time_offset + cached) * 4) }
+            {
+                let mut value = cached;
+                while value < last_lower
+                    && time > unsafe { read_f32(clip.times_offset + (time_offset + value + 1) * 4) }
+                {
+                    value += 1;
+                }
+                value
+            } else {
+                find_packed_lower_key(clip, time_offset, key_count, time)
+            };
+            unsafe { write_u32(cache_offset, lower) };
+            (lower, lower + 1)
+        };
+        let mut sampled = read_packed_sample(
+            clip,
+            value_offset,
+            stride,
+            lower,
+            property,
+            descriptor,
+            track_flags,
+        );
+        if lower != upper {
+            let start = unsafe { read_f32(clip.times_offset + (time_offset + lower) * 4) };
+            let end = unsafe { read_f32(clip.times_offset + (time_offset + upper) * 4) };
+            let amount = if end > start {
+                ((time - start) / (end - start)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let other = read_packed_sample(
+                clip,
+                value_offset,
+                stride,
+                upper,
+                property,
+                descriptor,
+                track_flags,
+            );
+            if property == 1 {
+                let rotation = slerp_quat(
+                    [sampled[0], sampled[1], sampled[2], sampled[3]],
+                    [other[0], other[1], other[2], other[3]],
+                    amount,
+                );
+                sampled[..4].copy_from_slice(&rotation);
+            } else {
+                for component in 0..3 {
+                    sampled[component] += (other[component] - sampled[component]) * amount;
+                }
+            }
+        }
+        let mut transform = read_transform_raw(output_pose_offset, joint);
+        if property == 0 {
+            transform[..3].copy_from_slice(&sampled[..3]);
+        } else if property == 2 {
+            transform[7..10].copy_from_slice(&sampled[..3]);
+        } else {
+            let target_rest = [transform[3], transform[4], transform[5], transform[6]];
+            let mut rotation = [sampled[0], sampled[1], sampled[2], sampled[3]];
+            if track_flags & 2 != 0 {
+                rotation = multiply_quat(rotation, target_rest);
+            } else if track_flags & 1 != 0 {
+                let source_rest = read_descriptor_quat(descriptor + 28, [0.0, 0.0, 0.0, 1.0]);
+                rotation = multiply_quat(
+                    multiply_quat(rotation, invert_quat(source_rest)),
+                    target_rest,
+                );
+            }
+            transform[3..7].copy_from_slice(&rotation);
+        }
+        write_transform(output_pose_offset, joint, normalize_transform(transform));
+    }
+    context.flags |= 1;
+    context.last_time_bits = time.to_bits();
+    context.sample_count = context.sample_count.wrapping_add(1);
+    WA_OK
+}
+
+fn find_packed_lower_key(clip: ClipRecord, time_offset: u32, key_count: u32, time: f32) -> u32 {
+    let mut low = 1;
+    let mut high = key_count - 1;
+    while low < high {
+        let mid = (low + high) >> 1;
+        let value = unsafe { read_f32(clip.times_offset + (time_offset + mid) * 4) };
+        if value < time {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low - 1
+}
+
+fn read_descriptor_quat(offset: u32, fallback: [f32; 4]) -> [f32; 4] {
+    normalize_quat_with_fallback(
+        [
+            unsafe { read_f32(offset) },
+            unsafe { read_f32(offset + 4) },
+            unsafe { read_f32(offset + 8) },
+            unsafe { read_f32(offset + 12) },
+        ],
+        fallback,
+    )
+}
+
+fn read_packed_sample(
+    clip: ClipRecord,
+    value_offset: u32,
+    stride: u32,
+    key: u32,
+    property: u32,
+    descriptor: u32,
+    track_flags: u32,
+) -> [f32; 4] {
+    let base = clip.values_offset + (value_offset + key * stride) * 4;
+    if property == 1 {
+        let fallback = if track_flags & 2 != 0 {
+            [0.0, 0.0, 0.0, 1.0]
+        } else if track_flags & 1 != 0 {
+            read_descriptor_quat(descriptor + 28, [0.0, 0.0, 0.0, 1.0])
+        } else {
+            [0.0, 0.0, 0.0, 1.0]
+        };
+        normalize_quat_with_fallback(
+            [
+                unsafe { read_f32(base) },
+                unsafe { read_f32(base + 4) },
+                unsafe { read_f32(base + 8) },
+                unsafe { read_f32(base + 12) },
+            ],
+            fallback,
+        )
+    } else {
+        let fallback = if property == 2 { 1.0 } else { 0.0 };
+        [
+            sanitize_f32(unsafe { read_f32(base) }, fallback),
+            sanitize_f32(unsafe { read_f32(base + 4) }, fallback),
+            sanitize_f32(unsafe { read_f32(base + 8) }, fallback),
+            0.0,
+        ]
+    }
+}
+
+fn normalize_quat_with_fallback(value: [f32; 4], fallback: [f32; 4]) -> [f32; 4] {
+    let length = libm_hypot4(value[0], value[1], value[2], value[3]);
+    if value.iter().all(|component| component.is_finite()) && length.is_finite() && length > EPSILON
+    {
+        [
+            value[0] / length,
+            value[1] / length,
+            value[2] / length,
+            value[3] / length,
+        ]
+    } else {
+        normalize_quat_array(fallback)
+    }
+}
+
+fn slerp_quat(a: [f32; 4], mut b: [f32; 4], amount: f32) -> [f32; 4] {
+    let mut cosine = dot_quat(a, b);
+    if cosine < 0.0 {
+        for value in &mut b {
+            *value = -*value;
+        }
+        cosine = -cosine;
+    }
+    if cosine > 0.9995 {
+        return normalize_quat_array([
+            a[0] + (b[0] - a[0]) * amount,
+            a[1] + (b[1] - a[1]) * amount,
+            a[2] + (b[2] - a[2]) * amount,
+            a[3] + (b[3] - a[3]) * amount,
+        ]);
+    }
+    let theta0 = libm::acosf(cosine.clamp(-1.0, 1.0));
+    let theta = theta0 * amount;
+    let sin_theta = libm::sinf(theta);
+    let sin_theta0 = libm::sinf(theta0);
+    let s0 = libm::cosf(theta) - cosine * sin_theta / sin_theta0;
+    let s1 = sin_theta / sin_theta0;
+    normalize_quat_array([
+        a[0] * s0 + b[0] * s1,
+        a[1] * s0 + b[1] * s1,
+        a[2] * s0 + b[2] * s1,
+        a[3] * s0 + b[3] * s1,
+    ])
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn wa_destroy_handle(handle: u32) -> u32 {
     let Some(slot) = handle_slot(handle) else {
         return WA_ERR_BAD_HANDLE;
     };
-    if handle & HANDLE_KIND_SKELETON != 0 {
+    let kind = handle & HANDLE_KIND_MASK;
+    if kind == HANDLE_KIND_SKELETON {
         unsafe {
             let records = core::ptr::addr_of_mut!(SKELETONS) as *mut SkeletonRecord;
             let record = records.add(slot);
@@ -321,6 +933,36 @@ pub extern "C" fn wa_destroy_handle(handle: u32) -> u32 {
             (*record).magic = 0;
         }
         return WA_OK;
+    }
+
+    if kind == HANDLE_KIND_CLIP {
+        unsafe {
+            let records = core::ptr::addr_of_mut!(CLIPS) as *mut ClipRecord;
+            let record = records.add(slot);
+            if !clip_matches_handle(*record, handle) {
+                return WA_ERR_BAD_HANDLE;
+            }
+            (*record).magic = 0;
+            (*record).generation = next_generation((*record).generation);
+        }
+        return WA_OK;
+    }
+
+    if kind == HANDLE_KIND_SAMPLING_CONTEXT {
+        unsafe {
+            let records = core::ptr::addr_of_mut!(SAMPLING_CONTEXTS) as *mut SamplingContextRecord;
+            let record = records.add(slot);
+            if !sampling_context_matches_handle(*record, handle) {
+                return WA_ERR_BAD_HANDLE;
+            }
+            (*record).magic = 0;
+            (*record).generation = next_generation((*record).generation);
+        }
+        return WA_OK;
+    }
+
+    if kind != HANDLE_KIND_AVATAR {
+        return WA_ERR_BAD_HANDLE;
     }
 
     unsafe {
@@ -658,6 +1300,14 @@ pub extern "C" fn wa_reset_for_test() -> u32 {
         for index in 0..MAX_SKELETONS {
             let record = skeletons.add(index);
             *record = SkeletonRecord::empty();
+        }
+        let clips = core::ptr::addr_of_mut!(CLIPS) as *mut ClipRecord;
+        for index in 0..MAX_CLIPS {
+            *clips.add(index) = ClipRecord::empty();
+        }
+        let contexts = core::ptr::addr_of_mut!(SAMPLING_CONTEXTS) as *mut SamplingContextRecord;
+        for index in 0..MAX_SAMPLING_CONTEXTS {
+            *contexts.add(index) = SamplingContextRecord::empty();
         }
         MEMORY_EPOCH = MEMORY_EPOCH.wrapping_add(1);
         BUMP_PTR = heap_base();
@@ -1305,7 +1955,7 @@ fn validate_parent_table(parent_indices_offset: u32, joint_count: u32) -> u32 {
 }
 
 fn skeleton_record(handle: u32) -> Option<SkeletonRecord> {
-    if handle & HANDLE_KIND_SKELETON == 0 {
+    if handle & HANDLE_KIND_MASK != HANDLE_KIND_SKELETON {
         return None;
     }
     let slot = handle_slot(handle)?;
@@ -1323,11 +1973,11 @@ fn skeleton_matches_handle(record: SkeletonRecord, handle: u32) -> bool {
     record.magic == SKELETON_MAGIC
         && record.flags & SKELETON_FLAG_DESTROYED == 0
         && record.generation == handle_generation(handle)
-        && handle & HANDLE_KIND_SKELETON != 0
+        && handle & HANDLE_KIND_MASK == HANDLE_KIND_SKELETON
 }
 
 fn avatar_record(handle: u32) -> Option<AvatarRecord> {
-    if handle & HANDLE_KIND_SKELETON != 0 {
+    if handle & HANDLE_KIND_MASK != HANDLE_KIND_AVATAR {
         return None;
     }
     let slot = handle_slot(handle)?;
@@ -1345,7 +1995,51 @@ fn record_matches_handle(record: AvatarRecord, handle: u32) -> bool {
     record.magic == AVATAR_MAGIC
         && record.flags & AVATAR_FLAG_DESTROYED == 0
         && record.generation == handle_generation(handle)
-        && handle & HANDLE_KIND_SKELETON == 0
+        && handle & HANDLE_KIND_MASK == HANDLE_KIND_AVATAR
+}
+
+fn clip_record(handle: u32) -> Option<ClipRecord> {
+    if handle & HANDLE_KIND_MASK != HANDLE_KIND_CLIP {
+        return None;
+    }
+    let slot = handle_slot(handle)?;
+    unsafe {
+        let record = *((core::ptr::addr_of!(CLIPS) as *const ClipRecord).add(slot));
+        if clip_matches_handle(record, handle) {
+            Some(record)
+        } else {
+            None
+        }
+    }
+}
+
+fn clip_matches_handle(record: ClipRecord, handle: u32) -> bool {
+    record.magic == CLIP_MAGIC
+        && record.generation == handle_generation(handle)
+        && handle & HANDLE_KIND_MASK == HANDLE_KIND_CLIP
+}
+
+fn sampling_context_record_mut(handle: u32) -> Option<&'static mut SamplingContextRecord> {
+    if handle & HANDLE_KIND_MASK != HANDLE_KIND_SAMPLING_CONTEXT {
+        return None;
+    }
+    let slot = handle_slot(handle)?;
+    unsafe {
+        let record = &mut *((core::ptr::addr_of_mut!(SAMPLING_CONTEXTS)
+            as *mut SamplingContextRecord)
+            .add(slot));
+        if sampling_context_matches_handle(*record, handle) {
+            Some(record)
+        } else {
+            None
+        }
+    }
+}
+
+fn sampling_context_matches_handle(record: SamplingContextRecord, handle: u32) -> bool {
+    record.magic == SAMPLING_CONTEXT_MAGIC
+        && record.generation == handle_generation(handle)
+        && handle & HANDLE_KIND_MASK == HANDLE_KIND_SAMPLING_CONTEXT
 }
 
 fn find_free_skeleton_slot() -> Option<usize> {
@@ -1367,6 +2061,30 @@ fn find_free_avatar_slot() -> Option<usize> {
         for slot in 0..MAX_AVATARS {
             let record = *records.add(slot);
             if record.magic != AVATAR_MAGIC || record.flags & AVATAR_FLAG_DESTROYED != 0 {
+                return Some(slot);
+            }
+        }
+    }
+    None
+}
+
+fn find_free_clip_slot() -> Option<usize> {
+    unsafe {
+        let records = core::ptr::addr_of!(CLIPS) as *const ClipRecord;
+        for slot in 0..MAX_CLIPS {
+            if (*records.add(slot)).magic != CLIP_MAGIC {
+                return Some(slot);
+            }
+        }
+    }
+    None
+}
+
+fn find_free_sampling_context_slot() -> Option<usize> {
+    unsafe {
+        let records = core::ptr::addr_of!(SAMPLING_CONTEXTS) as *const SamplingContextRecord;
+        for slot in 0..MAX_SAMPLING_CONTEXTS {
+            if (*records.add(slot)).magic != SAMPLING_CONTEXT_MAGIC {
                 return Some(slot);
             }
         }

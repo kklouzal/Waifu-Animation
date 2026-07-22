@@ -1,15 +1,23 @@
 import { type Mat4, type Transform, normalizeQuat } from "./math.js";
 import { NO_PARENT, type LocalToModelPoseRangeOptions, type Skeleton } from "./skeleton.js";
+import {
+  samplePackedRuntimeAnimationToPose,
+  validatePackedRuntimeAnimation,
+  type PackedRuntimeAnimation,
+  type PackedRuntimeAnimationKeyController
+} from "./packed-runtime.js";
 
 export const WA_KERNEL_ABI_MAJOR = 1;
 /** Oldest ABI v1 minor accepted by the scalar local-to-model facade. */
 export const WA_KERNEL_ABI_MINOR = 0;
 export const WA_KERNEL_POSE_JOBS_ABI_MINOR = 1;
+export const WA_KERNEL_PACKED_SAMPLING_ABI_MINOR = 2;
 
 export const WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL = 1 << 0;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_BLEND = 1 << 1;
 export const WA_KERNEL_FEATURE_SCALAR_ADDITIVE = 1 << 2;
 export const WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS = 1 << 3;
+export const WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING = 1 << 4;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_JOBS =
   WA_KERNEL_FEATURE_SCALAR_POSE_BLEND | WA_KERNEL_FEATURE_SCALAR_ADDITIVE | WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS;
 export const WA_KERNEL_FEATURE_SIMD_LOCAL_TO_MODEL = 1 << 16;
@@ -87,6 +95,51 @@ export type WaKernelRawExports = {
     outHandlePtr: number
   ) => number;
   wa_create_avatar: (skeletonHandle: number, jointCount: number, flags: number, outHandlePtr: number) => number;
+  wa_create_packed_clip?: (
+    tracksOffset: number,
+    trackCount: number,
+    tracksCapacityBytes: number,
+    timesOffset: number,
+    timesCount: number,
+    timesCapacityBytes: number,
+    valuesOffset: number,
+    valuesCount: number,
+    valuesCapacityBytes: number,
+    duration: number,
+    flags: number,
+    outHandlePtr: number
+  ) => number;
+  wa_create_sampling_context?: (
+    clipHandle: number,
+    lowerKeysOffset: number,
+    lowerKeysCapacityBytes: number,
+    outHandlePtr: number
+  ) => number;
+  wa_reset_sampling_context?: (contextHandle: number) => number;
+  wa_sample_packed_clip?: (
+    avatarHandle: number,
+    clipHandle: number,
+    contextHandle: number,
+    restPoseOffset: number,
+    restPoseCapacityBytes: number,
+    outputPoseOffset: number,
+    outputPoseCapacityBytes: number,
+    jointCount: number,
+    time: number,
+    flags: number
+  ) => number;
+  wa_sample_packed_clip_ratio?: (
+    avatarHandle: number,
+    clipHandle: number,
+    contextHandle: number,
+    restPoseOffset: number,
+    restPoseCapacityBytes: number,
+    outputPoseOffset: number,
+    outputPoseCapacityBytes: number,
+    jointCount: number,
+    ratio: number,
+    flags: number
+  ) => number;
   wa_destroy_handle: (handle: number) => number;
   wa_local_to_model: (
     avatarHandle: number,
@@ -173,6 +226,17 @@ export type WasmPoseBlendOptions = {
   threshold?: number;
 };
 
+export type WasmPackedSamplingOptions = {
+  /** Defaults to the packed animation's loop flag. Ignored by ratio sampling. */
+  loop?: boolean;
+  /** Reset all retained lower-key caches before this sample. */
+  resetCache?: boolean;
+};
+
+export type WasmPackedSamplingFallbackResult =
+  | { kind: "wasm-scalar"; status: WaKernelStatus }
+  | { kind: "typescript"; status: WaKernelStatus.Unsupported; reason: string };
+
 export type WasmRawBlendInvocation = {
   avatarHandle: number;
   layersOffset: number;
@@ -230,6 +294,7 @@ const MAT4_FLOATS = 16;
 const MAT4_BYTES = MAT4_FLOATS * 4;
 const OPTIONS_BYTES = 32;
 const BLEND_LAYER_BYTES = 24;
+const PACKED_TRACK_BYTES = 64;
 const PARENT_BYTES = 4;
 const DEFAULT_ALIGNMENT = 16;
 const MATRIX_ALIGNMENT = 64;
@@ -238,6 +303,8 @@ const MAX_JOINTS = 1024;
 
 const OPTION_FLAG_FROM_EXCLUDED = 1 << 0;
 const OPTION_FLAG_HAS_ROOT = 1 << 1;
+const SAMPLE_FLAG_LOOP = 1 << 0;
+const SAMPLE_FLAG_RESET_CACHE = 1 << 1;
 
 // Minimal module using one SIMD instruction. This is a capability seam only;
 // Phase 1 always selects scalar-WASM when WASM is enabled.
@@ -342,6 +409,22 @@ export function validateWaifuAnimationKernelExports(
         return { ok: false, reason: `missing-export:${name}`, major, minor, featureFlags };
     }
   }
+  if ((requiredFeatures & WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING) !== 0) {
+    if (minor < WA_KERNEL_PACKED_SAMPLING_ABI_MINOR) {
+      return { ok: false, reason: "packed-sampling-abi-minor-too-old", major, minor, featureFlags };
+    }
+    for (const name of [
+      "wa_create_packed_clip",
+      "wa_create_sampling_context",
+      "wa_reset_sampling_context",
+      "wa_sample_packed_clip",
+      "wa_sample_packed_clip_ratio"
+    ]) {
+      if (typeof exports[name] !== "function") {
+        return { ok: false, reason: `missing-export:${name}`, major, minor, featureFlags };
+      }
+    }
+  }
   return { ok: true, major, minor, featureFlags };
 }
 
@@ -432,6 +515,12 @@ export class WaifuAnimationWasmKernel {
     return new WasmPoseArenaContext(this, skeleton, options);
   }
 
+  createPackedClipAsset(skeleton: Skeleton, animation: PackedRuntimeAnimation): WasmPackedClipAsset {
+    const validation = validateWaifuAnimationKernelExports(this.exports, WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING);
+    if (!validation.ok) throw new Error(`WASM retained packed sampling unavailable: ${validation.reason}`);
+    return new WasmPackedClipAsset(this, skeleton, animation);
+  }
+
   forceDisableForTests(reason = "forced-disable"): void {
     this.forcedDisableReason = reason;
   }
@@ -483,6 +572,89 @@ export class WaifuAnimationWasmKernel {
     this.refreshViewsIfNeeded();
     if (status !== 0) throw new Error(`WASM kernel avatar creation failed: ${statusName(status)}`);
     return this.dataView.getUint32(this.scratchOffset, true);
+  }
+
+  createPackedClip(
+    tracksOffset: number,
+    trackCount: number,
+    timesOffset: number,
+    timesCount: number,
+    valuesOffset: number,
+    valuesCount: number,
+    duration: number
+  ): number {
+    if (!this.available || !this.exports.wa_create_packed_clip) {
+      throw new Error(`WASM retained packed sampling is disabled: ${this.disabledReason ?? "missing export"}`);
+    }
+    const status = this.exports.wa_create_packed_clip(
+      tracksOffset,
+      trackCount,
+      trackCount * PACKED_TRACK_BYTES,
+      timesOffset,
+      timesCount,
+      timesCount * F32_BYTES,
+      valuesOffset,
+      valuesCount,
+      valuesCount * F32_BYTES,
+      duration,
+      0,
+      this.scratchOffset
+    );
+    this.refreshViewsIfNeeded();
+    if (status !== 0) throw new Error(`WASM packed clip creation failed: ${statusName(status)}`);
+    return this.dataView.getUint32(this.scratchOffset, true);
+  }
+
+  createSamplingContext(clipHandle: number, lowerKeysOffset: number, trackCount: number): number {
+    if (!this.available || !this.exports.wa_create_sampling_context) {
+      throw new Error(`WASM retained packed sampling is disabled: ${this.disabledReason ?? "missing export"}`);
+    }
+    const status = this.exports.wa_create_sampling_context(
+      clipHandle,
+      lowerKeysOffset,
+      trackCount * F32_BYTES,
+      this.scratchOffset
+    );
+    this.refreshViewsIfNeeded();
+    if (status !== 0) throw new Error(`WASM packed sampling context creation failed: ${statusName(status)}`);
+    return this.dataView.getUint32(this.scratchOffset, true);
+  }
+
+  resetSamplingContext(contextHandle: number): WaKernelStatus {
+    if (!this.available || !this.exports.wa_reset_sampling_context) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(this.exports.wa_reset_sampling_context(contextHandle));
+  }
+
+  invokePackedSample(input: {
+    avatarHandle: number;
+    clipHandle: number;
+    contextHandle: number;
+    restPoseOffset: number;
+    restPoseCapacityBytes: number;
+    outputPoseOffset: number;
+    outputPoseCapacityBytes: number;
+    jointCount: number;
+    value: number;
+    flags: number;
+    ratio: boolean;
+  }): WaKernelStatus {
+    if (!this.available) return WaKernelStatus.Unsupported;
+    const invoke = input.ratio ? this.exports.wa_sample_packed_clip_ratio : this.exports.wa_sample_packed_clip;
+    if (!invoke) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      invoke(
+        input.avatarHandle,
+        input.clipHandle,
+        input.contextHandle,
+        input.restPoseOffset,
+        input.restPoseCapacityBytes,
+        input.outputPoseOffset,
+        input.outputPoseCapacityBytes,
+        input.jointCount,
+        input.value,
+        input.flags
+      )
+    );
   }
 
   destroyHandle(handle: number): WaKernelStatus {
@@ -608,6 +780,247 @@ export class WaifuAnimationWasmKernel {
   }
 }
 
+/** Immutable packed animation copied once into retained WASM memory. */
+export class WasmPackedClipAsset {
+  readonly handle: number;
+  readonly jointCount: number;
+  readonly trackCount: number;
+  readonly tracksOffset: number;
+  readonly timesOffset: number;
+  readonly valuesOffset: number;
+  readonly animation: PackedRuntimeAnimation;
+  private readonly kernel: WaifuAnimationWasmKernel;
+  private destroyed = false;
+
+  constructor(kernel: WaifuAnimationWasmKernel, skeleton: Skeleton, animation: PackedRuntimeAnimation) {
+    const issues = validatePackedRuntimeAnimation(animation, skeleton);
+    if (issues.length > 0) {
+      throw new Error(
+        `packed runtime animation is invalid for WASM: ${issues.map((issue) => issue.message).join("; ")}`
+      );
+    }
+    this.kernel = kernel;
+    this.animation = animation;
+    this.jointCount = skeleton.joints.length;
+    this.trackCount = animation.keyControllers.length;
+    this.tracksOffset = kernel.allocateBytes(this.trackCount * PACKED_TRACK_BYTES, DEFAULT_ALIGNMENT);
+    this.timesOffset = kernel.allocateBytes(animation.times.length * F32_BYTES, DEFAULT_ALIGNMENT);
+    this.valuesOffset = kernel.allocateBytes(animation.values.length * F32_BYTES, DEFAULT_ALIGNMENT);
+    const view = kernel.dataViewForCurrentMemory();
+    for (let index = 0; index < animation.times.length; index += 1) {
+      view.setFloat32(this.timesOffset + index * F32_BYTES, animation.times[index]!, true);
+    }
+    for (let index = 0; index < animation.values.length; index += 1) {
+      view.setFloat32(this.valuesOffset + index * F32_BYTES, animation.values[index]!, true);
+    }
+    for (let index = 0; index < this.trackCount; index += 1) {
+      const controller = animation.keyControllers[index]!;
+      const descriptor = this.tracksOffset + index * PACKED_TRACK_BYTES;
+      const joint = resolvePackedControllerJoint(controller, this.jointCount);
+      const property =
+        controller.normalizedProperty === "translation" ? 0 : controller.normalizedProperty === "rotation" ? 1 : 2;
+      let flags = 0;
+      if (controller.sourceRestQuaternion?.length === 4) flags |= 1;
+      if (controller.rotationSpace === "normalized-humanoid-delta") flags |= 2;
+      view.setUint32(descriptor, joint, true);
+      view.setUint32(descriptor + 4, property, true);
+      view.setUint32(descriptor + 8, controller.stride, true);
+      view.setUint32(descriptor + 12, controller.keyCount, true);
+      view.setUint32(descriptor + 16, controller.timeOffset, true);
+      view.setUint32(descriptor + 20, controller.valueOffset, true);
+      view.setUint32(descriptor + 24, flags, true);
+      for (let component = 0; component < 4; component += 1) {
+        view.setFloat32(
+          descriptor + 28 + component * F32_BYTES,
+          controller.sourceRestQuaternion?.[component] ?? (component === 3 ? 1 : 0),
+          true
+        );
+      }
+      for (let offset = 44; offset < PACKED_TRACK_BYTES; offset += F32_BYTES) {
+        view.setUint32(descriptor + offset, 0, true);
+      }
+    }
+    this.handle = kernel.createPackedClip(
+      this.tracksOffset,
+      this.trackCount,
+      this.timesOffset,
+      animation.times.length,
+      this.valuesOffset,
+      animation.values.length,
+      animation.duration
+    );
+  }
+
+  get available(): boolean {
+    return !this.destroyed && this.kernel.available;
+  }
+
+  destroy(): WaKernelStatus {
+    if (this.destroyed) return WaKernelStatus.BadHandle;
+    this.destroyed = true;
+    return this.kernel.destroyHandle(this.handle);
+  }
+}
+
+export type WasmPackedSamplingSnapshot = {
+  sampleCount: number;
+  resetCount: number;
+  lastMode: "reset" | "coherent-forward" | "seek";
+  lastTime: number;
+};
+
+/** Retained lower-key cache bound to one packed clip and one pose arena/avatar. */
+export class WasmPackedClipSamplingContext {
+  readonly lowerKeysOffset: number;
+  readonly handle: number;
+  private readonly kernel: WaifuAnimationWasmKernel;
+  private readonly arena: WasmPoseArenaContext;
+  private readonly asset: WasmPackedClipAsset;
+  private destroyed = false;
+  private sampleCount = 0;
+  private resetCount = 0;
+  private lastTime = 0;
+  private lastMode: WasmPackedSamplingSnapshot["lastMode"] = "reset";
+
+  constructor(
+    kernel: WaifuAnimationWasmKernel,
+    arena: WasmPoseArenaContext,
+    asset: WasmPackedClipAsset,
+    avatarHandle: number
+  ) {
+    if (asset.jointCount !== arena.jointCount) throw new Error("WASM packed clip and pose arena joint counts differ");
+    this.kernel = kernel;
+    this.arena = arena;
+    this.asset = asset;
+    this.lowerKeysOffset = kernel.allocateBytes(asset.trackCount * F32_BYTES, DEFAULT_ALIGNMENT);
+    this.handle = kernel.createSamplingContext(asset.handle, this.lowerKeysOffset, asset.trackCount);
+    this.avatarHandle = avatarHandle;
+  }
+
+  private readonly avatarHandle: number;
+
+  snapshot(): WasmPackedSamplingSnapshot {
+    return {
+      sampleCount: this.sampleCount,
+      resetCount: this.resetCount,
+      lastMode: this.lastMode,
+      lastTime: this.lastTime
+    };
+  }
+
+  reset(): WaKernelStatus {
+    if (this.destroyed) return WaKernelStatus.BadHandle;
+    const status = this.kernel.resetSamplingContext(this.handle);
+    if (status === WaKernelStatus.Ok) {
+      this.resetCount += 1;
+      this.lastMode = "reset";
+      this.sampleCount = 0;
+      this.lastTime = 0;
+    }
+    return status;
+  }
+
+  sampleTime(time: number, outputPose: number, options: WasmPackedSamplingOptions = {}): WaKernelStatus {
+    return this.sample(time, outputPose, false, options);
+  }
+
+  sampleRatio(
+    ratio: number,
+    outputPose: number,
+    options: Omit<WasmPackedSamplingOptions, "loop"> = {}
+  ): WaKernelStatus {
+    return this.sample(ratio, outputPose, true, options);
+  }
+
+  sampleTimeOrFallback(
+    time: number,
+    outputPose: number,
+    options: WasmPackedSamplingOptions = {}
+  ): WasmPackedSamplingFallbackResult {
+    const status = this.sampleTime(time, outputPose, options);
+    if (status !== WaKernelStatus.Unsupported) return { kind: "wasm-scalar", status };
+    this.arena.writePose(
+      outputPose,
+      samplePackedRuntimeAnimationToPose(this.arena.skeleton, this.asset.animation, time, {
+        loop: options.loop ?? this.asset.animation.loop,
+        restPose: this.arena.skeleton.restPose
+      })
+    );
+    return {
+      kind: "typescript",
+      status: WaKernelStatus.Unsupported,
+      reason: this.kernel.disabledReason ?? "unsupported"
+    };
+  }
+
+  invokeRawForTests(
+    overrides: Partial<Parameters<WaifuAnimationWasmKernel["invokePackedSample"]>[0]> = {}
+  ): WaKernelStatus {
+    return this.kernel.invokePackedSample({
+      avatarHandle: this.avatarHandle,
+      clipHandle: this.asset.handle,
+      contextHandle: this.handle,
+      restPoseOffset: this.arena.poseOffset(0),
+      restPoseCapacityBytes: this.arena.poseStrideBytes,
+      outputPoseOffset: this.arena.poseOffset(1),
+      outputPoseCapacityBytes: this.arena.poseStrideBytes,
+      jointCount: this.arena.jointCount,
+      value: 0,
+      flags: 0,
+      ratio: false,
+      ...overrides
+    });
+  }
+
+  destroy(): WaKernelStatus {
+    if (this.destroyed) return WaKernelStatus.BadHandle;
+    this.destroyed = true;
+    return this.kernel.destroyHandle(this.handle);
+  }
+
+  private sample(
+    value: number,
+    outputPose: number,
+    ratio: boolean,
+    options: WasmPackedSamplingOptions | Omit<WasmPackedSamplingOptions, "loop">
+  ): WaKernelStatus {
+    if (this.destroyed || !this.asset.available || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (outputPose === 0) return WaKernelStatus.InvalidArgument;
+    const requestedLoop = "loop" in options ? options.loop : undefined;
+    const loop = !ratio && (requestedLoop ?? this.asset.animation.loop);
+    let flags = loop ? SAMPLE_FLAG_LOOP : 0;
+    if (options.resetCache === true) flags |= SAMPLE_FLAG_RESET_CACHE;
+    const resolvedTime = ratio
+      ? Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0)) * this.asset.animation.duration
+      : resolvePackedSampleTime(this.asset.animation.duration, value, loop);
+    this.lastMode =
+      options.resetCache === true || this.sampleCount === 0
+        ? "reset"
+        : resolvedTime < this.lastTime
+          ? "seek"
+          : "coherent-forward";
+    const status = this.kernel.invokePackedSample({
+      avatarHandle: this.avatarHandle,
+      clipHandle: this.asset.handle,
+      contextHandle: this.handle,
+      restPoseOffset: this.arena.poseOffset(0),
+      restPoseCapacityBytes: this.arena.poseStrideBytes,
+      outputPoseOffset: this.arena.poseOffset(outputPose),
+      outputPoseCapacityBytes: this.arena.poseStrideBytes,
+      jointCount: this.arena.jointCount,
+      value,
+      flags,
+      ratio
+    });
+    if (status === WaKernelStatus.Ok) {
+      this.sampleCount += 1;
+      this.lastTime = resolvedTime;
+      if (options.resetCache === true) this.resetCount += 1;
+    }
+    return status;
+  }
+}
+
 /**
  * Retained scalar-WASM pose arena. Numeric jobs read and write padded SoA slots
  * in-place; steady-state blend/additive calls do not create `Transform[]`.
@@ -615,6 +1028,7 @@ export class WaifuAnimationWasmKernel {
  * materialization adapters and therefore are not allocation-free promises.
  */
 export class WasmPoseArenaContext {
+  readonly skeleton: Skeleton;
   readonly jointCount: number;
   readonly groupCount: number;
   readonly poseCapacity: number;
@@ -627,18 +1041,23 @@ export class WasmPoseArenaContext {
   readonly maskArenaOffset: number;
   readonly layerDescriptorsOffset: number;
   readonly parentIndicesOffset: number;
+  readonly modelPoseOffset: number;
+  readonly localToModelOptionsOffset: number;
+  readonly rootMatrixOffset: number;
   private readonly kernel: WaifuAnimationWasmKernel;
   private readonly avatarHandle: number;
   private readonly skeletonHandle: number;
   private readonly maskLengths: Uint32Array;
   private poseViewCache: Float32Array[];
   private maskViewCache: Float32Array[];
+  private modelPoseViewCache: Float32Array;
   private cachedBuffer: ArrayBuffer;
   private destroyed = false;
 
   constructor(kernel: WaifuAnimationWasmKernel, skeleton: Skeleton, options: WasmPoseArenaOptions = {}) {
     assertSupportedJointCount(skeleton.joints.length);
     this.kernel = kernel;
+    this.skeleton = skeleton;
     this.jointCount = skeleton.joints.length;
     this.groupCount = Math.ceil(this.jointCount / 4);
     this.poseCapacity = positiveCapacity(options.poseCapacity, 8, "poseCapacity");
@@ -651,9 +1070,13 @@ export class WasmPoseArenaContext {
     this.poseArenaOffset = kernel.allocateBytes(this.poseCapacity * this.poseStrideBytes, DEFAULT_ALIGNMENT);
     this.maskArenaOffset = kernel.allocateBytes(this.maskCapacity * this.maskStrideBytes, DEFAULT_ALIGNMENT);
     this.layerDescriptorsOffset = kernel.allocateBytes(this.layerCapacity * BLEND_LAYER_BYTES, DEFAULT_ALIGNMENT);
+    this.modelPoseOffset = kernel.allocateBytes(this.jointCount * MAT4_BYTES, MATRIX_ALIGNMENT);
+    this.localToModelOptionsOffset = kernel.allocateBytes(OPTIONS_BYTES, DEFAULT_ALIGNMENT);
+    this.rootMatrixOffset = kernel.allocateBytes(MAT4_BYTES, DEFAULT_ALIGNMENT);
     this.cachedBuffer = kernel.memory.buffer;
     this.poseViewCache = this.createPoseViews();
     this.maskViewCache = this.createMaskViews();
+    this.modelPoseViewCache = new Float32Array(this.cachedBuffer, this.modelPoseOffset, this.jointCount * MAT4_FLOATS);
     this.maskLengths = new Uint32Array(this.maskCapacity);
 
     const dataView = kernel.dataViewForCurrentMemory();
@@ -669,6 +1092,12 @@ export class WasmPoseArenaContext {
     for (let slot = 0; slot < this.poseCapacity; slot += 1) writeIdentitySoa(this.poseView(slot), this.jointCount);
     for (let slot = 0; slot < this.maskCapacity; slot += 1) this.maskView(slot).fill(0);
     this.writePose(0, skeleton.restPose);
+    this.modelPoseViewCache.fill(0);
+  }
+
+  createPackedSamplingContext(asset: WasmPackedClipAsset): WasmPackedClipSamplingContext {
+    if (this.destroyed) throw new Error("WASM pose arena is destroyed");
+    return new WasmPackedClipSamplingContext(this.kernel, this, asset, this.avatarHandle);
   }
 
   poseOffset(slot: number): number {
@@ -691,6 +1120,11 @@ export class WasmPoseArenaContext {
     this.assertMaskSlot(slot);
     this.refreshViews();
     return this.maskViewCache[slot]!;
+  }
+
+  get modelPoseView(): Float32Array {
+    this.refreshViews();
+    return this.modelPoseViewCache;
   }
 
   writePose(slot: number, pose: readonly Transform[]): Float32Array {
@@ -844,6 +1278,35 @@ export class WasmPoseArenaContext {
     });
   }
 
+  localToModel(pose: number, options: WasmLocalToModelUpdateOptions = {}): WaKernelStatus {
+    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    const resolved = resolveUpdateRange(this.jointCount, options);
+    const view = this.kernel.dataViewForCurrentMemory();
+    let flags = resolved.fromExcluded ? OPTION_FLAG_FROM_EXCLUDED : 0;
+    if (resolved.root) {
+      if (resolved.root.length < MAT4_FLOATS) return WaKernelStatus.InvalidArgument;
+      new Float32Array(this.kernel.memory.buffer, this.rootMatrixOffset, MAT4_FLOATS).set(
+        resolved.root.subarray(0, 16)
+      );
+      flags |= OPTION_FLAG_HAS_ROOT;
+    }
+    view.setUint32(this.localToModelOptionsOffset, this.parentIndicesOffset, true);
+    view.setUint32(this.localToModelOptionsOffset + 4, this.jointCount, true);
+    view.setUint32(this.localToModelOptionsOffset + 8, this.jointCount * PARENT_BYTES, true);
+    view.setInt32(this.localToModelOptionsOffset + 12, resolved.from, true);
+    view.setInt32(this.localToModelOptionsOffset + 16, resolved.to, true);
+    view.setUint32(this.localToModelOptionsOffset + 20, flags, true);
+    view.setUint32(this.localToModelOptionsOffset + 24, resolved.root ? this.rootMatrixOffset : 0, true);
+    view.setUint32(this.localToModelOptionsOffset + 28, resolved.root ? MAT4_BYTES : 0, true);
+    return this.kernel.invokeLocalToModel(
+      this.avatarHandle,
+      this.poseOffset(pose),
+      this.modelPoseOffset,
+      this.jointCount,
+      this.localToModelOptionsOffset
+    );
+  }
+
   invokeRawBlendForTests(overrides: Partial<WasmRawBlendInvocation> = {}): WaKernelStatus {
     return this.kernel.invokeBlendPoses({
       avatarHandle: this.avatarHandle,
@@ -890,6 +1353,11 @@ export class WasmPoseArenaContext {
       this.cachedBuffer = this.kernel.memory.buffer;
       this.poseViewCache = this.createPoseViews();
       this.maskViewCache = this.createMaskViews();
+      this.modelPoseViewCache = new Float32Array(
+        this.cachedBuffer,
+        this.modelPoseOffset,
+        this.jointCount * MAT4_FLOATS
+      );
     }
   }
 
@@ -1297,6 +1765,20 @@ function readSkeletonParent(skeleton: Skeleton, index: number): number {
 
 function finiteOr(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) ? value! : fallback;
+}
+
+function resolvePackedControllerJoint(controller: PackedRuntimeAnimationKeyController, jointCount: number): number {
+  const joint = controller.jointIndex ?? Number(controller.targetKey);
+  if (!Number.isInteger(joint) || joint < 0 || joint >= jointCount) {
+    throw new Error(`packed animation track ${controller.track} is not resolved to a numeric joint index`);
+  }
+  return joint;
+}
+
+function resolvePackedSampleTime(duration: number, value: number, loop: boolean): number {
+  const time = Number.isFinite(value) ? value : 0;
+  if (!loop) return Math.min(duration, Math.max(0, time));
+  return ((time % duration) + duration) % duration;
 }
 
 async function instantiateKernel(

@@ -12,6 +12,7 @@ import {
   WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL,
   WA_KERNEL_FEATURE_SCALAR_POSE_BLEND,
   WA_KERNEL_FEATURE_SCALAR_POSE_JOBS,
+  WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING,
   WaKernelStatus,
   additiveDeltaPose,
   applyAdditivePose,
@@ -20,6 +21,7 @@ import {
   applyTwoBoneIkLocalCorrections,
   assert,
   blendPoses,
+  buildPackedRuntimeAnimation,
   clonePose,
   createRestPose,
   createSkeleton,
@@ -29,6 +31,7 @@ import {
   normalizePose,
   sampleClipToPose,
   sampleClipToPoseWithContext,
+  samplePackedRuntimeAnimationToPose,
   skinVertices,
   solveAimIk,
   solveFootPlant,
@@ -210,6 +213,7 @@ async function assertWasmLocalToModelParity(): Promise<void> {
     "ABI v1.1 kernel should feature-gate blend/additive/mask jobs"
   );
   assertWasmPoseJobsParity(kernel);
+  assertWasmPackedSamplingParity(kernel);
   assert.equal(
     typeof detectWaKernelSimdSupport(typeof WebAssembly === "undefined" ? undefined : WebAssembly),
     "boolean",
@@ -374,6 +378,11 @@ async function assertWasmLocalToModelParity(): Promise<void> {
   assert.equal(noSourceResult.kind, "typescript", "missing WASM source should fall back to TypeScript");
   const invalidResult = await loadWaifuAnimationWasmKernel({ source: { bytes: new Uint8Array([0, 1, 2, 3]) } });
   assert.equal(invalidResult.kind, "typescript", "instantiate failure should fall back to TypeScript");
+  const missingFeatureResult = await loadWaifuAnimationWasmKernel({
+    source: { bytes: ensureWasmKernelBytes() },
+    requiredFeatures: 1 << 30
+  });
+  assert.equal(missingFeatureResult.kind, "typescript", "missing required feature should fall back to TypeScript");
   assert.equal(
     validateWaifuAnimationKernelExports({
       memory: new WebAssembly.Memory({ initial: 1 }),
@@ -442,12 +451,290 @@ async function assertWasmLocalToModelParity(): Promise<void> {
     false,
     "pose-job feature request should reject missing additive export"
   );
+  const packedSamplingExports: Record<string, unknown> = {
+    ...oldMinorPoseExports,
+    wa_version_minor: () => 2,
+    wa_feature_flags: () => poseFeatureFlags | WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING,
+    wa_create_packed_clip: () => WaKernelStatus.Ok,
+    wa_create_sampling_context: () => WaKernelStatus.Ok,
+    wa_reset_sampling_context: () => WaKernelStatus.Ok,
+    wa_sample_packed_clip: () => WaKernelStatus.Ok,
+    wa_sample_packed_clip_ratio: () => WaKernelStatus.Ok
+  };
+  assert.equal(
+    validateWaifuAnimationKernelExports(
+      { ...packedSamplingExports, wa_version_minor: () => 1 },
+      WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING
+    ).ok,
+    false,
+    "packed sampling should reject ABI v1.1"
+  );
+  assert.equal(
+    validateWaifuAnimationKernelExports(
+      { ...packedSamplingExports, wa_feature_flags: () => poseFeatureFlags },
+      WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING
+    ).ok,
+    false,
+    "packed sampling should reject a missing feature bit"
+  );
+  delete packedSamplingExports.wa_sample_packed_clip_ratio;
+  assert.equal(
+    validateWaifuAnimationKernelExports(packedSamplingExports, WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING).ok,
+    false,
+    "packed sampling should reject a missing ratio export"
+  );
 
   const disabledContext = kernel.createLocalToModelContext(fixture.skeleton);
   kernel.forceDisableForTests("unit-test forced disable");
   const fallbackOut = updateLocalToModelPoseRange(fixture.skeleton, animatedPose, [], { kernel: disabledContext });
   assertModelPosesNearlyEqual(fallbackOut, localToModelPose(fixture.skeleton, animatedPose), "forced disable fallback");
   kernel.clearForcedDisableForTests();
+}
+
+function assertWasmPackedSamplingParity(kernel: WaifuAnimationWasmKernel): void {
+  assert.equal(
+    kernel.featureFlags & WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING,
+    WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING,
+    "ABI v1.2 kernel should feature-gate retained packed sampling"
+  );
+
+  for (const jointCount of [1, 3, 4, 5, 8, 9]) {
+    const fixture = createWasmKernelSyntheticFixture({ jointCount, keyCount: 5, vertexCount: 0, phase: 0.19 });
+    const packed = buildPackedRuntimeAnimation(fixture.clip, fixture.skeleton);
+    const asset = kernel.createPackedClipAsset(fixture.skeleton, packed);
+    const arena = kernel.createPoseArenaContext(fixture.skeleton, { poseCapacity: 6 });
+    const context = arena.createPackedSamplingContext(asset);
+    const memoryAfterSetup = kernel.memory.buffer.byteLength;
+    const cases = [
+      { time: 0, loop: true },
+      { time: fixture.clip.duration, loop: true },
+      { time: fixture.clip.duration, loop: false },
+      { time: -0.25, loop: true },
+      { time: fixture.clip.duration * 3.25, loop: true },
+      { time: 0.73, loop: false },
+      { time: 0.31, loop: false },
+      { time: 1.11, loop: false }
+    ];
+    for (let index = 0; index < cases.length; index += 1) {
+      const testCase = cases[index]!;
+      assert.equal(context.sampleTime(testCase.time, 1, { loop: testCase.loop }), WaKernelStatus.Ok);
+      const raw = sampleClipToPose(fixture.skeleton, fixture.clip, testCase.time, {
+        loop: testCase.loop,
+        restPose: fixture.skeleton.restPose
+      });
+      const packedReference = samplePackedRuntimeAnimationToPose(fixture.skeleton, packed, testCase.time, {
+        loop: testCase.loop,
+        restPose: fixture.skeleton.restPose
+      });
+      assertPoseNearlyEqual(packedReference, raw, 2e-5, `packed TS/raw parity ${jointCount}/${index}`);
+      assertPoseNearlyEqual(
+        arena.copyPoseToTransforms(1),
+        packedReference,
+        6e-5,
+        `WASM packed parity ${jointCount}/${index}`
+      );
+    }
+    assert.equal(context.sampleRatio(0, 2, { resetCache: true }), WaKernelStatus.Ok);
+    assert.equal(context.sampleRatio(1, 2), WaKernelStatus.Ok);
+    assertPoseNearlyEqual(
+      arena.copyPoseToTransforms(2),
+      samplePackedRuntimeAnimationToPose(fixture.skeleton, packed, packed.duration, { loop: false }),
+      6e-5,
+      `WASM ratio endpoint ${jointCount}`
+    );
+    assert.equal(context.reset(), WaKernelStatus.Ok);
+    assert.equal(context.sampleTime(0.5, 1, { loop: false }), WaKernelStatus.Ok);
+    const repeat = arena.poseView(1).slice();
+    assert.equal(context.sampleTime(0.5, 1, { loop: false, resetCache: true }), WaKernelStatus.Ok);
+    assert.deepEqual(arena.poseView(1), repeat, `WASM packed deterministic reset ${jointCount}`);
+    for (let iteration = 0; iteration < 32; iteration += 1) {
+      assert.equal(context.sampleTime(iteration / 30, 1), WaKernelStatus.Ok);
+    }
+    assert.equal(
+      kernel.memory.buffer.byteLength,
+      memoryAfterSetup,
+      `sampling must not grow memory for ${jointCount} joints`
+    );
+    assertPaddedIdentity(arena.poseView(1), jointCount);
+    assert.equal(arena.localToModel(1), WaKernelStatus.Ok, "sampled SoA slot should feed local-to-model directly");
+    assertModelViewNearlyEqual(
+      arena.modelPoseView,
+      localToModelPose(fixture.skeleton, arena.copyPoseToTransforms(1)),
+      `sampled local-to-model ${jointCount}`
+    );
+    context.destroy();
+    asset.destroy();
+    arena.destroy();
+  }
+
+  const edgeSkeleton = createSkeleton([
+    { name: "root", rest: { translation: [3, 4, 5], rotation: [0, 0.3826834324, 0, 0.9238795325], scale: [2, 3, 4] } },
+    { name: "child", parentIndex: 0, rest: { translation: [0, 2, 0], scale: [1, 1, 1] } }
+  ]);
+  const unsupportedClip = {
+    id: "unsupported-channel",
+    duration: 1,
+    loop: false,
+    tracks: [
+      {
+        joint: "root",
+        property: "weights" as never,
+        times: new Float32Array([0, 1]),
+        values: new Float32Array([0, 1])
+      }
+    ]
+  };
+  assert.deepEqual(
+    sampleClipToPose(edgeSkeleton, unsupportedClip, 0.5, { skipUnsupportedTracks: true }),
+    createRestPose(edgeSkeleton),
+    "existing scalar object API keeps explicit skip-unsupported semantics outside numeric packed setup"
+  );
+  assert.throws(
+    () => sampleClipToPose(edgeSkeleton, unsupportedClip, 0.5),
+    /unsupported animation track property/,
+    "unsupported object tracks still reject by default"
+  );
+  const sourceRest = new Float32Array([0, 0, 0.2588190451, 0.9659258263]);
+  const edgeClip = {
+    id: "packed-edge-cases",
+    duration: 1,
+    loop: false,
+    tracks: [
+      {
+        joint: "root",
+        property: "rotation" as const,
+        times: new Float32Array([0, 0.25, 0.75, 1]),
+        values: new Float32Array([
+          ...sourceRest,
+          0,
+          0,
+          0.70710677,
+          0.70710677,
+          0,
+          0,
+          -0.70710677,
+          -0.70710677,
+          0,
+          0,
+          0,
+          1
+        ]),
+        sourceRestQuaternion: sourceRest
+      },
+      {
+        joint: "child",
+        property: "translation" as const,
+        times: new Float32Array([0, 1]),
+        values: new Float32Array([0, 2, 0, Number.NaN, 7, Number.POSITIVE_INFINITY])
+      }
+    ]
+  };
+  // Packing validation intentionally rejects non-finite source payloads, so build a finite archive then poison
+  // retained WASM values to prove the kernel's finite repair contract independently of importer validation.
+  edgeClip.tracks[1]!.values.set([0, 2, 0, 9, 7, 11]);
+  const edgePacked = buildPackedRuntimeAnimation(edgeClip, edgeSkeleton);
+  const edgeAsset = kernel.createPackedClipAsset(edgeSkeleton, edgePacked);
+  const edgeArena = kernel.createPoseArenaContext(edgeSkeleton, { poseCapacity: 6 });
+  const edgeContext = edgeArena.createPackedSamplingContext(edgeAsset);
+  const edgeReference = samplePackedRuntimeAnimationToPose(edgeSkeleton, edgePacked, 0.5, { loop: false });
+  assert.equal(edgeContext.sampleTime(0.5, 1, { loop: false }), WaKernelStatus.Ok);
+  assertPoseNearlyEqual(
+    edgeArena.copyPoseToTransforms(1),
+    edgeReference,
+    6e-5,
+    "duplicate/source-rest/missing-channel parity"
+  );
+  const edgeTimesView = new Float32Array(kernel.memory.buffer, edgeAsset.timesOffset, edgePacked.times.length);
+  const rotationController = edgePacked.keyControllers.find(
+    (controller) => controller.normalizedProperty === "rotation"
+  )!;
+  edgeTimesView[rotationController.timeOffset + 2] = edgeTimesView[rotationController.timeOffset + 1]!;
+  const duplicateClip = {
+    ...edgeClip,
+    tracks: edgeClip.tracks.map((track) =>
+      track.property === "rotation" ? { ...track, times: new Float32Array([0, 0.25, 0.25, 1]) } : track
+    )
+  };
+  assert.equal(edgeContext.sampleTime(0.4, 1, { loop: false, resetCache: true }), WaKernelStatus.Ok);
+  assertPoseNearlyEqual(
+    edgeArena.copyPoseToTransforms(1),
+    sampleClipToPose(edgeSkeleton, duplicateClip, 0.4, { loop: false }),
+    6e-5,
+    "duplicate key deterministic parity"
+  );
+  const edgeValueView = new Float32Array(kernel.memory.buffer, edgeAsset.valuesOffset, edgePacked.values.length);
+  edgeValueView[edgePacked.keyControllers[0]!.valueOffset + 12] = Number.NaN;
+  edgeValueView[edgePacked.keyControllers[1]!.valueOffset + 3] = Number.NaN;
+  assert.equal(edgeContext.sampleTime(1, 1, { loop: false, resetCache: true }), WaKernelStatus.Ok);
+  assertPoseFinite(edgeArena.copyPoseToTransforms(1), "WASM packed invalid quaternion/vector repair");
+  assert.deepEqual(
+    edgeArena.copyPoseToTransforms(1)[1]!.scale,
+    edgeSkeleton.restPose[1]!.scale,
+    "missing scale stays rest"
+  );
+
+  assert.equal(
+    edgeContext.invokeRawForTests({ outputPoseCapacityBytes: 0 }),
+    WaKernelStatus.Capacity,
+    "packed sampling output capacity validation"
+  );
+  assert.equal(
+    edgeContext.invokeRawForTests({ outputPoseOffset: kernel.memory.buffer.byteLength + 64 }),
+    WaKernelStatus.OutOfBounds,
+    "packed sampling output range validation"
+  );
+  assert.equal(
+    edgeContext.invokeRawForTests({ jointCount: edgeArena.jointCount + 1 }),
+    WaKernelStatus.InvalidArgument,
+    "packed sampling joint capacity validation"
+  );
+  const oldBuffer = edgeArena.poseView(1).buffer;
+  assert.equal(kernel.forceMemoryGrowthForTests(1), WaKernelStatus.Ok);
+  assert.notEqual(edgeArena.poseView(1).buffer, oldBuffer, "sampling arena views refresh after memory epoch change");
+  assert.equal(edgeContext.sampleTime(0.25, 1), WaKernelStatus.Ok);
+  kernel.forceDisableForTests("packed sampling forced fallback");
+  const fallback = edgeContext.sampleTimeOrFallback(0.25, 2, { loop: false });
+  assert.equal(fallback.kind, "typescript", "forced disable should take explicit scalar TS fallback");
+  assertPoseNearlyEqual(
+    edgeArena.copyPoseToTransforms(2),
+    samplePackedRuntimeAnimationToPose(edgeSkeleton, edgePacked, 0.25, { loop: false }),
+    2e-5,
+    "forced packed fallback parity"
+  );
+  kernel.clearForcedDisableForTests();
+
+  const secondFixture = createWasmKernelSyntheticFixture({ jointCount: 2, keyCount: 3, vertexCount: 0, phase: 0.77 });
+  const secondPacked = buildPackedRuntimeAnimation(secondFixture.overlayClip, secondFixture.skeleton);
+  const secondAsset = kernel.createPackedClipAsset(secondFixture.skeleton, secondPacked);
+  const secondArena = kernel.createPoseArenaContext(secondFixture.skeleton, { poseCapacity: 4 });
+  const secondContext = secondArena.createPackedSamplingContext(secondAsset);
+  assert.equal(secondContext.sampleTime(0.66, 1), WaKernelStatus.Ok);
+  assert.equal(edgeContext.sampleTime(0.33, 1, { loop: false }), WaKernelStatus.Ok);
+  assertPoseNearlyEqual(
+    secondArena.copyPoseToTransforms(1),
+    samplePackedRuntimeAnimationToPose(secondFixture.skeleton, secondPacked, 0.66),
+    6e-5,
+    "multi-clip/multi-avatar independent context"
+  );
+
+  const staleContextHandle = secondContext.handle;
+  assert.equal(secondContext.destroy(), WaKernelStatus.Ok);
+  assert.equal(
+    edgeContext.invokeRawForTests({ contextHandle: staleContextHandle, clipHandle: secondAsset.handle }),
+    WaKernelStatus.BadHandle,
+    "stale packed context generation"
+  );
+  const staleClipHandle = secondAsset.handle;
+  assert.equal(secondAsset.destroy(), WaKernelStatus.Ok);
+  assert.equal(
+    edgeContext.invokeRawForTests({ clipHandle: staleClipHandle }),
+    WaKernelStatus.BadHandle,
+    "stale clip generation"
+  );
+  secondArena.destroy();
+  edgeContext.destroy();
+  edgeAsset.destroy();
+  edgeArena.destroy();
 }
 
 function assertWasmPoseJobsParity(kernel: WaifuAnimationWasmKernel): void {
@@ -870,6 +1157,18 @@ function assertModelPosesNearlyEqual(
   assert.equal(actual.length, expected.length, `${label}: joint count`);
   for (let joint = 0; joint < actual.length; joint += 1) {
     assertMat4NearlyEqual(actual[joint]!, expected[joint]!, 2e-5, `${label}: joint ${joint}`);
+  }
+}
+
+function assertModelViewNearlyEqual(actual: Float32Array, expected: readonly Float32Array[], label: string): void {
+  assert.equal(actual.length, expected.length * 16, `${label}: matrix float count`);
+  for (let joint = 0; joint < expected.length; joint += 1) {
+    assertMat4NearlyEqual(
+      actual.subarray(joint * 16, joint * 16 + 16),
+      expected[joint]!,
+      2e-4,
+      `${label}: joint ${joint}`
+    );
   }
 }
 
