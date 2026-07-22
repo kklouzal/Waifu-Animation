@@ -402,6 +402,27 @@ export async function runCoreManifestValidationTests(): Promise<void> {
           url: "/ambiguous-root-motion-carrier.waifuanim.bin",
           format: WAIFU_ANIMATION_BINARY_FORMAT,
           source: { rootMotion: { policy: "preserved", carrier: { jointIndex: 0, joint: "hips" } } }
+        },
+        {
+          id: "conflicting-root-motion-carrier-aliases",
+          label: "Conflicting Root Motion Carrier Aliases",
+          url: "/conflicting-root-motion-carrier-aliases.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "preserved", carrier: { jointIndex: 0, index: 1 } } }
+        },
+        {
+          id: "duplicate-root-motion-carrier-aliases",
+          label: "Duplicate Root Motion Carrier Aliases",
+          url: "/duplicate-root-motion-carrier-aliases.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "preserved", carrier: { jointIndex: 0, index: 0 } } }
+        },
+        {
+          id: "invalid-root-motion-carrier-human-bone",
+          label: "Invalid Root Motion Carrier Human Bone",
+          url: "/invalid-root-motion-carrier-human-bone.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "preserved", carrier: { humanBone: "tail" } } }
         }
       ]
     }),
@@ -409,7 +430,10 @@ export async function runCoreManifestValidationTests(): Promise<void> {
       "conflicting-root-motion-policy-alias has conflicting source.rootMotionPolicy preserved for source.rootMotion.policy stripped-to-in-place",
       "invalid-root-motion-carrier has invalid source.rootMotion.carrier Infinity",
       "duplicate-root-motion-axes has duplicate source.rootMotion.extractedAxes metadata",
-      "ambiguous-root-motion-carrier has invalid source.rootMotion.carrier metadata"
+      "ambiguous-root-motion-carrier has invalid source.rootMotion.carrier metadata",
+      "conflicting-root-motion-carrier-aliases has invalid source.rootMotion.carrier metadata",
+      "duplicate-root-motion-carrier-aliases has invalid source.rootMotion.carrier metadata",
+      "invalid-root-motion-carrier-human-bone has invalid source.rootMotion.carrier tail"
     ],
     "root-motion manifest validation should reject contradictory aliases and malformed carrier/axis declarations deterministically"
   );
@@ -470,6 +494,86 @@ export async function runCoreManifestValidationTests(): Promise<void> {
   assert.ok(
     missingCarrierHint.issues.some((issue) => issue.code === "skeleton-mismatch"),
     "carrier handoff helpers should reject hints that do not map to the target skeleton instead of falling back to root"
+  );
+  const invalidPolicyAliasCarrierHint = resolveRootMotionCarrierHint(
+    {
+      id: "invalid-policy-alias-carrier-hint",
+      label: "Invalid Policy Alias Carrier Hint",
+      url: "/invalid-policy-alias-carrier-hint.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotionPolicy: "keep-everything" }
+    },
+    { clip: { ...nodClip, metadata: { rootMotionCarrier: "hips" } }, skeleton }
+  );
+  assert.equal(invalidPolicyAliasCarrierHint.motionCarrier, null);
+  assert.ok(
+    invalidPolicyAliasCarrierHint.issues.some(
+      (issue) => issue.code === "invalid" && issue.field === "source.rootMotionPolicy"
+    ),
+    "invalid manifest root-motion aliases should report why clip carrier fallback was blocked"
+  );
+  const inheritedCarrier = Object.create({ joint: "hips" }) as Record<string, unknown>;
+  const inheritedCarrierHint = resolveRootMotionCarrierHint(
+    {
+      id: "inherited-carrier-hint",
+      label: "Inherited Carrier Hint",
+      url: "/inherited-carrier-hint.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "preserved", carrier: inheritedCarrier } }
+    },
+    { skeleton }
+  );
+  assert.equal(inheritedCarrierHint.motionCarrier, null);
+  assert.ok(
+    inheritedCarrierHint.issues.some((issue) => issue.code === "invalid"),
+    "carrier handoff helpers should not accept inherited prototype selector fields as manifest metadata"
+  );
+  const equivalentClipCarrierHint = resolveRootMotionCarrierHint(
+    {
+      id: "equivalent-clip-carrier-hint",
+      label: "Equivalent Clip Carrier Hint",
+      url: "/equivalent-clip-carrier-hint.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
+    {
+      clip: { ...nodClip, metadata: { rootMotionCarrier: { humanBone: "hips" }, motionCarrier: { joint: "hips" } } },
+      skeleton
+    }
+  );
+  assert.deepEqual(equivalentClipCarrierHint.motionCarrier, { humanBone: "hips" });
+  assert.deepEqual(equivalentClipCarrierHint.resolved, { jointIndex: 0, joint: "hips" });
+  assert.ok(
+    equivalentClipCarrierHint.issues.some((issue) => issue.code === "duplicate") &&
+      !equivalentClipCarrierHint.issues.some((issue) => issue.code === "conflict"),
+    "clip carrier aliases that resolve to the same skeleton joint should be duplicate diagnostics, not conflicts"
+  );
+  const humanoidCarrierWithoutSkeleton = resolveRootMotionCarrierHint({
+    id: "humanoid-carrier-without-skeleton",
+    label: "Humanoid Carrier Without Skeleton",
+    url: "/humanoid-carrier-without-skeleton.waifuanim.bin",
+    format: WAIFU_ANIMATION_BINARY_FORMAT,
+    source: { rootMotion: { policy: "preserved", carrier: { humanBone: "hips" } } }
+  });
+  assert.deepEqual(humanoidCarrierWithoutSkeleton.motionCarrier, { humanBone: "hips" });
+  assert.equal(
+    humanoidCarrierWithoutSkeleton.reconcilerCarrierBinding,
+    null,
+    "humanBone carriers need a target skeleton before the helper can safely derive RootMotionReconciler bindings"
+  );
+  const sanitizedBindingHint = resolveRootMotionCarrierHint(
+    {
+      id: "sanitized-binding-carrier-hint",
+      label: "Sanitized Binding Carrier Hint",
+      url: "/sanitized-binding-carrier-hint.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "preserved", carrier: "hips" } }
+    },
+    { bindingId: "", bindingPriority: 1e100 }
+  );
+  assert.deepEqual(
+    sanitizedBindingHint.reconcilerCarrierBinding,
+    { select: "bone", priority: 1_000_000, joint: "hips" },
+    "carrier handoff helpers should omit unsafe binding ids and clamp binding priority before returning policy bindings"
   );
   assert.deepEqual(
     validateManifest({ version: 1, clips: [convertedStrippedRootMotionEntry] }),

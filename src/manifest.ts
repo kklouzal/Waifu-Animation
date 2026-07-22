@@ -112,6 +112,14 @@ export type RootMotionCarrierHintResolution = {
   resolved: ResolvedRootMotionCarrierHint | null;
   issues: RootMotionCarrierHintIssue[];
 };
+
+const MAX_ROOT_MOTION_CARRIER_STRING_LENGTH = 512;
+const MAX_ROOT_MOTION_BINDING_PRIORITY = 1_000_000;
+const MAX_FORMATTED_UNKNOWN_VALUE_LENGTH = 512;
+const ROOT_MOTION_CARRIER_INDEX_FIELDS = ["jointIndex", "joint_index", "index"] as const;
+const ROOT_MOTION_CARRIER_JOINT_FIELDS = ["joint", "name", "jointName", "joint_name"] as const;
+const ROOT_MOTION_CARRIER_HUMAN_BONE_FIELDS = ["humanBone", "human_bone", "humanoid"] as const;
+
 export type RequiredAnimationCoverage = {
   requiredHumanBones: HumanoidBoneName[];
   requiredJoints: string[];
@@ -386,22 +394,16 @@ function rootMotionMetadataFieldIssue(metadata: Record<string, unknown>): string
 
 function rootMotionCarrierIssue(value: unknown): string | null {
   if (value === undefined) return null;
-  if (typeof value === "string") return value.length > 0 ? null : "metadata";
-  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? null : formatUnknownValue(value);
+  const issues: RootMotionCarrierHintIssue[] = [];
+  const candidate = readRootMotionCarrierHintValue(value, "manifest", "source.rootMotion.carrier", issues);
+  if (candidate && issues.length === 0) return null;
+  if (typeof value === "number") return formatUnknownValue(value);
+  if (typeof value === "string") return "metadata";
   if (!isRecord(value)) return formatUnknownValue(value);
-  const jointIndex = value.jointIndex ?? value.joint_index ?? value.index;
-  if (jointIndex !== undefined && (!Number.isInteger(jointIndex) || (jointIndex as number) < 0)) {
-    return formatUnknownValue(jointIndex);
-  }
-  const joint = value.joint ?? value.name ?? value.jointName ?? value.joint_name;
-  if (joint !== undefined && !isNonEmptyString(joint)) return formatUnknownValue(joint);
-  const humanBone = value.humanBone ?? value.human_bone ?? value.humanoid;
-  if (humanBone !== undefined && !isNonEmptyString(humanBone)) return formatUnknownValue(humanBone);
-  const carrierSelectorCount = [jointIndex !== undefined, joint !== undefined, humanBone !== undefined].filter(
-    Boolean
-  ).length;
-  if (carrierSelectorCount > 1) return "metadata";
-  return jointIndex !== undefined || joint !== undefined || humanBone !== undefined ? null : "metadata";
+  const invalidHintPrefix = "invalid root-motion carrier hint ";
+  const invalidIssue = issues.find((issue) => issue.code === "invalid" && issue.message.startsWith(invalidHintPrefix));
+  const invalidValue = invalidIssue?.message.slice(invalidHintPrefix.length);
+  return invalidValue ? invalidValue : "metadata";
 }
 
 function optionalRootMotionAxesIssue(value: unknown, label: string): string | null {
@@ -615,7 +617,11 @@ export function resolveRootMotionCarrierHint(
   const manifest = readManifestRootMotionCarrierHint(entry, issues);
   const clipCandidate =
     manifest.candidate || !manifest.blocksClipFallback
-      ? selectRootMotionCarrierHintCandidate(readClipRootMotionCarrierHints(options.clip, issues), issues)
+      ? selectRootMotionCarrierHintCandidate(
+          readClipRootMotionCarrierHints(options.clip, issues),
+          issues,
+          options.skeleton
+        )
       : null;
   if (
     manifest.candidate &&
@@ -692,9 +698,20 @@ function readManifestRootMotionCarrierHint(
     return { candidate: null, blocksClipFallback: true };
   }
   const entrySource = entry.source ?? {};
-  const sourceRootMotion = entrySource.rootMotion;
+  const sourceRootMotion = rootMotionCarrierOwnValue(entrySource, "rootMotion");
   if (sourceRootMotion !== undefined) {
-    if (typeof sourceRootMotion === "string") return { candidate: null, blocksClipFallback: true };
+    if (typeof sourceRootMotion === "string") {
+      if (!isRootMotionPolicy(sourceRootMotion)) {
+        pushRootMotionCarrierHintIssue(
+          issues,
+          "manifest",
+          "source.rootMotion",
+          "invalid",
+          "source.rootMotion policy must be valid before root-motion carrier hints can be used"
+        );
+      }
+      return { candidate: null, blocksClipFallback: true };
+    }
     if (!isRecord(sourceRootMotion)) {
       pushRootMotionCarrierHintIssue(
         issues,
@@ -705,7 +722,8 @@ function readManifestRootMotionCarrierHint(
       );
       return { candidate: null, blocksClipFallback: true };
     }
-    if (!isRootMotionPolicy(sourceRootMotion.policy)) {
+    const sourceRootMotionPolicy = rootMotionCarrierOwnValue(sourceRootMotion, "policy");
+    if (!isRootMotionPolicy(sourceRootMotionPolicy)) {
       pushRootMotionCarrierHintIssue(
         issues,
         "manifest",
@@ -717,7 +735,7 @@ function readManifestRootMotionCarrierHint(
     }
     return {
       candidate: readRootMotionCarrierHintValue(
-        sourceRootMotion.carrier,
+        rootMotionCarrierOwnValue(sourceRootMotion, "carrier"),
         "manifest",
         "source.rootMotion.carrier",
         issues
@@ -725,7 +743,17 @@ function readManifestRootMotionCarrierHint(
       blocksClipFallback: true
     };
   }
-  return { candidate: null, blocksClipFallback: entrySource.rootMotionPolicy !== undefined };
+  const sourcePolicy = rootMotionCarrierOwnValue(entrySource, "rootMotionPolicy");
+  if (sourcePolicy !== undefined && !isRootMotionPolicy(sourcePolicy)) {
+    pushRootMotionCarrierHintIssue(
+      issues,
+      "manifest",
+      "source.rootMotionPolicy",
+      "invalid",
+      "source.rootMotionPolicy must be valid before clip root-motion carrier fallbacks can be used"
+    );
+  }
+  return { candidate: null, blocksClipFallback: sourcePolicy !== undefined };
 }
 
 function readClipRootMotionCarrierHints(
@@ -745,28 +773,31 @@ function readClipRootMotionCarrierHints(
     return [];
   }
   const candidates: RootMotionCarrierHintCandidate[] = [];
-  const rootMotion = metadata.rootMotion;
-  if (isRecord(rootMotion) && rootMotion.carrier !== undefined) {
+  const rootMotion = rootMotionCarrierOwnValue(metadata, "rootMotion");
+  const rootMotionCarrier = isRecord(rootMotion) ? rootMotionCarrierOwnValue(rootMotion, "carrier") : undefined;
+  if (rootMotionCarrier !== undefined) {
     const candidate = readRootMotionCarrierHintValue(
-      rootMotion.carrier,
+      rootMotionCarrier,
       "clip-metadata",
       "clip.metadata.rootMotion.carrier",
       issues
     );
     if (candidate) candidates.push(candidate);
   }
-  if (metadata.rootMotionCarrier !== undefined) {
+  const legacyRootMotionCarrier = rootMotionCarrierOwnValue(metadata, "rootMotionCarrier");
+  if (legacyRootMotionCarrier !== undefined) {
     const candidate = readRootMotionCarrierHintValue(
-      metadata.rootMotionCarrier,
+      legacyRootMotionCarrier,
       "clip-metadata",
       "clip.metadata.rootMotionCarrier",
       issues
     );
     if (candidate) candidates.push(candidate);
   }
-  if (metadata.motionCarrier !== undefined) {
+  const motionCarrier = rootMotionCarrierOwnValue(metadata, "motionCarrier");
+  if (motionCarrier !== undefined) {
     const candidate = readRootMotionCarrierHintValue(
-      metadata.motionCarrier,
+      motionCarrier,
       "clip-metadata",
       "clip.metadata.motionCarrier",
       issues
@@ -778,13 +809,17 @@ function readClipRootMotionCarrierHints(
 
 function selectRootMotionCarrierHintCandidate(
   candidates: RootMotionCarrierHintCandidate[],
-  issues: RootMotionCarrierHintIssue[]
+  issues: RootMotionCarrierHintIssue[],
+  skeleton: Skeleton | undefined
 ): RootMotionCarrierHintCandidate | null {
   if (candidates.length === 0) return null;
   const first = candidates[0]!;
   if (candidates.length === 1) return first;
-  const firstSignature = rootMotionCarrierSignature(first.motionCarrier);
-  if (candidates.every((candidate) => rootMotionCarrierSignature(candidate.motionCarrier) === firstSignature)) {
+  if (
+    candidates.every((candidate) =>
+      rootMotionCarriersEquivalent(candidate.motionCarrier, first.motionCarrier, skeleton)
+    )
+  ) {
     pushRootMotionCarrierHintIssue(
       issues,
       first.source,
@@ -817,7 +852,7 @@ function readRootMotionCarrierHintValue(
     return null;
   }
   if (typeof value === "string") {
-    if (value.length > 0) return { source, field, motionCarrier: { joint: value } };
+    if (!boundedNonEmptyStringIssue(value)) return { source, field, motionCarrier: { joint: value } };
     pushInvalidRootMotionCarrierHintIssue(issues, source, field, value);
     return null;
   }
@@ -832,7 +867,6 @@ function readRootMotionCarrierHintValue(
     readRootMotionCarrierJointHint(value, source, field, issues),
     readRootMotionCarrierHumanBoneHint(value, source, field, issues)
   ].filter((category): category is MotionCarrier => category !== null);
-  if (issues.length > issueCountBefore) return null;
   if (categories.length === 0) {
     if (!rootMotionCarrierObjectHasKnownField(value)) {
       pushRootMotionCarrierHintIssue(
@@ -855,6 +889,7 @@ function readRootMotionCarrierHintValue(
     );
     return null;
   }
+  if (issues.length > issueCountBefore) return null;
   return { source, field, motionCarrier: categories[0]! };
 }
 
@@ -864,11 +899,11 @@ function readRootMotionCarrierIndexHint(
   field: string,
   issues: RootMotionCarrierHintIssue[]
 ): MotionCarrier | null {
-  const fields = presentRootMotionCarrierFields(value, ["jointIndex", "joint_index", "index"]);
+  const fields = presentRootMotionCarrierFields(value, ROOT_MOTION_CARRIER_INDEX_FIELDS);
   if (fields.length === 0) return null;
   const numbers: number[] = [];
   for (const key of fields) {
-    const index = value[key];
+    const index = rootMotionCarrierOwnValue(value, key);
     if (!Number.isInteger(index) || (index as number) < 0) {
       pushInvalidRootMotionCarrierHintIssue(issues, source, `${field}.${key}`, index);
       return null;
@@ -903,16 +938,16 @@ function readRootMotionCarrierJointHint(
   field: string,
   issues: RootMotionCarrierHintIssue[]
 ): MotionCarrier | null {
-  const fields = presentRootMotionCarrierFields(value, ["joint", "name", "jointName", "joint_name"]);
+  const fields = presentRootMotionCarrierFields(value, ROOT_MOTION_CARRIER_JOINT_FIELDS);
   if (fields.length === 0) return null;
   const joints: string[] = [];
   for (const key of fields) {
-    const joint = value[key];
-    if (!isNonEmptyString(joint)) {
+    const joint = rootMotionCarrierOwnValue(value, key);
+    if (boundedNonEmptyStringIssue(joint)) {
       pushInvalidRootMotionCarrierHintIssue(issues, source, `${field}.${key}`, joint);
       return null;
     }
-    joints.push(joint);
+    joints.push(joint as string);
   }
   if (new Set(joints).size > 1) {
     pushRootMotionCarrierHintIssue(issues, source, field, "conflict", "root-motion carrier joint aliases conflict");
@@ -936,12 +971,12 @@ function readRootMotionCarrierHumanBoneHint(
   field: string,
   issues: RootMotionCarrierHintIssue[]
 ): MotionCarrier | null {
-  const fields = presentRootMotionCarrierFields(value, ["humanBone", "human_bone", "humanoid"]);
+  const fields = presentRootMotionCarrierFields(value, ROOT_MOTION_CARRIER_HUMAN_BONE_FIELDS);
   if (fields.length === 0) return null;
   const humanBones: HumanoidBoneNameLike[] = [];
   for (const key of fields) {
-    const bone = value[key];
-    if (!isNonEmptyString(bone) || !isHumanoidBoneName(bone)) {
+    const bone = rootMotionCarrierOwnValue(value, key);
+    if (boundedNonEmptyStringIssue(bone) || !isHumanoidBoneName(bone)) {
       pushInvalidRootMotionCarrierHintIssue(issues, source, `${field}.${key}`, bone);
       return null;
     }
@@ -964,14 +999,18 @@ function readRootMotionCarrierHumanBoneHint(
 }
 
 function presentRootMotionCarrierFields(value: Record<string, unknown>, fields: readonly string[]): string[] {
-  return fields.filter((field) => value[field] !== undefined);
+  return fields.filter((field) => rootMotionCarrierOwnValue(value, field) !== undefined);
+}
+
+function rootMotionCarrierOwnValue(value: Record<string, unknown>, field: string): unknown {
+  return Object.prototype.hasOwnProperty.call(value, field) ? value[field] : undefined;
 }
 
 function rootMotionCarrierObjectHasKnownField(value: Record<string, unknown>): boolean {
   return (
-    presentRootMotionCarrierFields(value, ["jointIndex", "joint_index", "index"]).length > 0 ||
-    presentRootMotionCarrierFields(value, ["joint", "name", "jointName", "joint_name"]).length > 0 ||
-    presentRootMotionCarrierFields(value, ["humanBone", "human_bone", "humanoid"]).length > 0
+    presentRootMotionCarrierFields(value, ROOT_MOTION_CARRIER_INDEX_FIELDS).length > 0 ||
+    presentRootMotionCarrierFields(value, ROOT_MOTION_CARRIER_JOINT_FIELDS).length > 0 ||
+    presentRootMotionCarrierFields(value, ROOT_MOTION_CARRIER_HUMAN_BONE_FIELDS).length > 0
   );
 }
 
@@ -1025,17 +1064,22 @@ function rootMotionCarrierBindingFromHint(
   resolved: ResolvedRootMotionCarrierHint | null,
   options: RootMotionCarrierHintOptions
 ): RootMotionCarrierBinding | null {
+  const bindingId = boundedNonEmptyStringIssue(options.bindingId) ? undefined : options.bindingId;
+  const bindingPriority = sanitizeRootMotionCarrierBindingPriority(options.bindingPriority);
   const base = {
     select: "bone" as const,
-    ...(options.bindingId !== undefined ? { id: options.bindingId } : {}),
-    ...(options.bindingPriority !== undefined && Number.isFinite(options.bindingPriority)
-      ? { priority: options.bindingPriority }
-      : {})
+    ...(bindingId !== undefined ? { id: bindingId } : {}),
+    ...(bindingPriority !== undefined ? { priority: bindingPriority } : {})
   };
   if (resolved) return { ...base, jointIndex: resolved.jointIndex, joint: resolved.joint };
   if ("jointIndex" in carrier) return { ...base, jointIndex: carrier.jointIndex };
   if ("joint" in carrier) return { ...base, joint: carrier.joint };
   return null;
+}
+
+function sanitizeRootMotionCarrierBindingPriority(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return Math.max(-MAX_ROOT_MOTION_BINDING_PRIORITY, Math.min(MAX_ROOT_MOTION_BINDING_PRIORITY, value));
 }
 
 function rootMotionCarrierSignature(carrier: MotionCarrier): string {
@@ -1144,16 +1188,21 @@ function readRootMotionChannelPolicyValue(
 }
 
 function formatUnknownValue(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return truncateFormattedValue(value);
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
   if (typeof value === "symbol") return value.description ? `Symbol(${value.description})` : "Symbol()";
   if (value === null) return "null";
   if (value === undefined) return "undefined";
   try {
-    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+    return truncateFormattedValue(JSON.stringify(value) ?? Object.prototype.toString.call(value));
   } catch {
-    return Object.prototype.toString.call(value);
+    return truncateFormattedValue(Object.prototype.toString.call(value));
   }
+}
+
+function truncateFormattedValue(value: string): string {
+  if (value.length <= MAX_FORMATTED_UNKNOWN_VALUE_LENGTH) return value;
+  return `${value.slice(0, MAX_FORMATTED_UNKNOWN_VALUE_LENGTH)}…`;
 }
 
 function readLoadedManifest(value: unknown, url: string): AnimationManifest {
@@ -1229,6 +1278,11 @@ function isManifestEntryObject(value: unknown): value is AnimationManifestEntry 
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function boundedNonEmptyStringIssue(value: unknown): string | null {
+  if (!isNonEmptyString(value)) return "empty";
+  return value.length <= MAX_ROOT_MOTION_CARRIER_STRING_LENGTH ? null : "length";
 }
 
 function optionalNonEmptyStringIssue(value: unknown, label: string): string | null {
