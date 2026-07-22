@@ -70,7 +70,7 @@
     "quality": "npm run lint && npm run format:check && npm run knip && npm run package:lint && npm run audit && npm run coverage && npm run cycles",
     "test": "tsx tests/run-tests.ts",
     "prepack": "npm run build",
-    "coverage": "c8 --exclude tests/reference/** --check-coverage --statements 90 --branches 70 --functions 90 --lines 90 tsx tests/run-tests.ts",
+    "coverage": "c8 --exclude \"tests/reference/**\" --check-coverage --statements 90 --branches 70 --functions 90 --lines 90 tsx tests/run-tests.ts",
     "cycles": "madge --circular --extensions ts --ts-config tsconfig.json src tests",
     "bench:wasm-kernel:smoke": "npm run bench:wasm-kernel -- --smoke",
     "check:bench": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --noUnusedLocals --noUnusedParameters --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck benchmarks/wasm-kernel-baseline.ts benchmarks/wasm-simd-differential.ts",
