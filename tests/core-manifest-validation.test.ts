@@ -371,6 +371,40 @@ export async function runCoreManifestValidationTests(): Promise<void> {
     "invalid source.rootMotion provenance should not be partially interpreted as a valid policy"
   );
   assert.deepEqual(
+    validateManifest({
+      version: 1,
+      clips: [
+        {
+          id: "conflicting-root-motion-policy-alias",
+          label: "Conflicting Root Motion Policy Alias",
+          url: "/conflicting-root-motion-policy-alias.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "stripped-to-in-place" }, rootMotionPolicy: "preserved" }
+        },
+        {
+          id: "invalid-root-motion-carrier",
+          label: "Invalid Root Motion Carrier",
+          url: "/invalid-root-motion-carrier.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "preserved", carrier: Number.POSITIVE_INFINITY } }
+        },
+        {
+          id: "duplicate-root-motion-axes",
+          label: "Duplicate Root Motion Axes",
+          url: "/duplicate-root-motion-axes.waifuanim.bin",
+          format: WAIFU_ANIMATION_BINARY_FORMAT,
+          source: { rootMotion: { policy: "stripped-to-in-place", extractedAxes: ["x", "x"] } }
+        }
+      ]
+    }),
+    [
+      "conflicting-root-motion-policy-alias has conflicting source.rootMotionPolicy preserved for source.rootMotion.policy stripped-to-in-place",
+      "invalid-root-motion-carrier has invalid source.rootMotion.carrier Infinity",
+      "duplicate-root-motion-axes has duplicate source.rootMotion.extractedAxes metadata"
+    ],
+    "root-motion manifest validation should reject contradictory aliases and malformed carrier/axis declarations deterministically"
+  );
+  assert.deepEqual(
     validateManifest({ version: 1, clips: [convertedStrippedRootMotionEntry] }),
     [],
     "valid root-motion provenance metadata should pass manifest validation"

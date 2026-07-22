@@ -2,8 +2,10 @@ import { type AnimationClip, type ClipValidationIssue, validateClip } from "./cl
 import { WAIFU_ANIMATION_BINARY_FORMAT } from "./binary.js";
 import {
   duplicatedManifestIds,
+  isRootCarrierRotationTrack,
   isRootCarrierTranslationTrack,
   resolveManifestPlaybackWindow,
+  rootCarrierRotationTrackHasYawMotion,
   rootCarrierTranslationTrackHasMotion
 } from "./manifest-clip-helpers.js";
 import { type HumanoidBoneName, isHumanoidBoneName } from "./skeleton.js";
@@ -63,6 +65,8 @@ export type RootMotionProvenance =
 export type RootMotionMetadata = {
   policy: RootMotionPolicy;
   provenance: RootMotionProvenance;
+  translationPolicy?: RootMotionPolicy;
+  yawPolicy?: RootMotionPolicy;
 };
 export type RequiredAnimationCoverage = {
   requiredHumanBones: HumanoidBoneName[];
@@ -156,12 +160,19 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
     issues.push({ message: `${entry.id || "<unknown>"} has unsupported format ${String(entry.format)}` });
   }
   const rootMotionPolicy = readRootMotionPolicy(entry, clip);
+  const translationPolicy = readRootMotionChannelPolicy(entry, clip, "translation");
+  const yawPolicy = readRootMotionChannelPolicy(entry, clip, "yaw");
   const hasRootCarrierTranslationTrack = clip.tracks.some(isRootCarrierTranslationTrack);
+  const hasRootCarrierRotationTrack = clip.tracks.some(isRootCarrierRotationTrack);
   const playbackWindow = resolveManifestPlaybackWindow(entry, clip);
-  const movingRootCarrierTrack = playbackWindow
+  const movingRootCarrierTranslationTrack = playbackWindow
     ? clip.tracks.find((track) => rootCarrierTranslationTrackHasMotion(track, playbackWindow))
     : undefined;
-  const rootMotionPolicyIssue = manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip);
+  const movingRootCarrierYawTrack = playbackWindow
+    ? clip.tracks.find((track) => rootCarrierRotationTrackHasYawMotion(track, playbackWindow))
+    : undefined;
+  const rootMotionPolicyIssue =
+    manifestRootMotionPolicyIssue(entry) ?? clipRootMotionPolicyIssue(clip) ?? clipRootMotionConflictIssue(entry, clip);
   if (rootMotionPolicyIssue) {
     issues.push({ message: rootMotionPolicyIssue });
   }
@@ -170,31 +181,52 @@ export function inspectClipAsset(entry: AnimationManifestEntry, clip: AnimationC
       issues.push({ message: "root-motion clip must declare source.rootMotion.policy" });
     }
   }
-  if (rootMotionPolicy === "preserved" && !hasRootCarrierTranslationTrack) {
+  if (rootMotionPolicy === "preserved" && !hasRootCarrierTranslationTrack && !hasRootCarrierRotationTrack) {
     issues.push({ message: "root-motion policy is preserved but clip has no root carrier translation track" });
   }
-  if (!rootMotionPolicy && movingRootCarrierTrack) {
+  if (!rootMotionPolicy && movingRootCarrierTranslationTrack) {
     issues.push({
-      joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
-      property: movingRootCarrierTrack.property,
+      joint: String(movingRootCarrierTranslationTrack.joint ?? movingRootCarrierTranslationTrack.humanBone ?? ""),
+      property: movingRootCarrierTranslationTrack.property,
       message: "moving root carrier translation requires source.rootMotion.policy"
     });
   }
-  if (rootMotionPolicy === "none" && movingRootCarrierTrack) {
+  if (!rootMotionPolicy && movingRootCarrierYawTrack) {
     issues.push({
-      joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
-      property: movingRootCarrierTrack.property,
+      joint: String(movingRootCarrierYawTrack.joint ?? movingRootCarrierYawTrack.humanBone ?? ""),
+      property: movingRootCarrierYawTrack.property,
+      message: "moving root carrier yaw requires source.rootMotion.policy"
+    });
+  }
+  if (translationPolicy === "none" && movingRootCarrierTranslationTrack) {
+    issues.push({
+      joint: String(movingRootCarrierTranslationTrack.joint ?? movingRootCarrierTranslationTrack.humanBone ?? ""),
+      property: movingRootCarrierTranslationTrack.property,
       message: "root-motion policy is none but root carrier translation moves"
     });
   }
-  if (rootMotionPolicy === "stripped-to-in-place") {
-    if (movingRootCarrierTrack && !isIntentionalResidualRootCarrier(entry)) {
+  if (yawPolicy === "none" && movingRootCarrierYawTrack) {
+    issues.push({
+      joint: String(movingRootCarrierYawTrack.joint ?? movingRootCarrierYawTrack.humanBone ?? ""),
+      property: movingRootCarrierYawTrack.property,
+      message: "root-motion policy is none but root carrier yaw moves"
+    });
+  }
+  if (translationPolicy === "stripped-to-in-place") {
+    if (movingRootCarrierTranslationTrack && !isIntentionalResidualRootCarrier(entry)) {
       issues.push({
-        joint: String(movingRootCarrierTrack.joint ?? movingRootCarrierTrack.humanBone ?? ""),
-        property: movingRootCarrierTrack.property,
+        joint: String(movingRootCarrierTranslationTrack.joint ?? movingRootCarrierTranslationTrack.humanBone ?? ""),
+        property: movingRootCarrierTranslationTrack.property,
         message: "root-motion policy is stripped-to-in-place but root carrier translation still moves"
       });
     }
+  }
+  if (yawPolicy === "stripped-to-in-place" && movingRootCarrierYawTrack) {
+    issues.push({
+      joint: String(movingRootCarrierYawTrack.joint ?? movingRootCarrierYawTrack.humanBone ?? ""),
+      property: movingRootCarrierYawTrack.property,
+      message: "root-motion policy is stripped-to-in-place but root carrier yaw still moves"
+    });
   }
   if (entry.playback) {
     const start = entry.playback.start ?? 0;
@@ -236,16 +268,27 @@ export function manifestValidationStatusIssue(entry: AnimationManifestEntry): st
 export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): string | null {
   const entrySource = entry.source ?? {};
   const sourceRootMotion = entrySource.rootMotion;
+  let declaredPolicy: RootMotionPolicy | null = null;
   if (sourceRootMotion !== undefined) {
     if (typeof sourceRootMotion === "string") {
       if (!isRootMotionPolicy(sourceRootMotion))
         return `has invalid source.rootMotion policy ${String(sourceRootMotion)}`;
+      declaredPolicy = sourceRootMotion;
     } else if (isRecord(sourceRootMotion) && "policy" in sourceRootMotion) {
       const policy = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).policy;
       const provenance = (sourceRootMotion as { policy?: unknown; provenance?: unknown }).provenance;
+      const translationPolicy = (sourceRootMotion as { translationPolicy?: unknown }).translationPolicy;
+      const yawPolicy = (sourceRootMotion as { yawPolicy?: unknown }).yawPolicy;
       if (!isRootMotionPolicy(policy)) return `has invalid source.rootMotion.policy ${String(policy)}`;
       if (provenance !== undefined && !isRootMotionProvenance(provenance))
         return `has invalid source.rootMotion.provenance ${formatUnknownValue(provenance)}`;
+      if (translationPolicy !== undefined && !isRootMotionPolicy(translationPolicy))
+        return `has invalid source.rootMotion.translationPolicy ${formatUnknownValue(translationPolicy)}`;
+      if (yawPolicy !== undefined && !isRootMotionPolicy(yawPolicy))
+        return `has invalid source.rootMotion.yawPolicy ${formatUnknownValue(yawPolicy)}`;
+      const metadataIssue = rootMotionMetadataFieldIssue(sourceRootMotion);
+      if (metadataIssue) return metadataIssue;
+      declaredPolicy = policy;
     } else {
       return "has invalid source.rootMotion metadata";
     }
@@ -253,6 +296,9 @@ export function manifestRootMotionPolicyIssue(entry: AnimationManifestEntry): st
   const sourcePolicy = entrySource.rootMotionPolicy;
   if (sourcePolicy !== undefined && !isRootMotionPolicy(sourcePolicy))
     return `has invalid source.rootMotionPolicy ${formatUnknownValue(sourcePolicy)}`;
+  if (declaredPolicy && isRootMotionPolicy(sourcePolicy) && sourcePolicy !== declaredPolicy) {
+    return `has conflicting source.rootMotionPolicy ${sourcePolicy} for source.rootMotion.policy ${declaredPolicy}`;
+  }
   return null;
 }
 
@@ -274,6 +320,48 @@ export function manifestRequiredCoverageIssue(entry: AnimationManifestEntry): st
     }
   }
   return null;
+}
+
+function rootMotionMetadataFieldIssue(metadata: Record<string, unknown>): string | null {
+  const carrierIssue = rootMotionCarrierIssue(metadata.carrier);
+  if (carrierIssue) return `has invalid source.rootMotion.carrier ${carrierIssue}`;
+  const extractedAxesIssue = optionalRootMotionAxesIssue(metadata.extractedAxes, "source.rootMotion.extractedAxes");
+  if (extractedAxesIssue) return extractedAxesIssue;
+  const preservedAxesIssue = optionalRootMotionAxesIssue(metadata.preservedAxes, "source.rootMotion.preservedAxes");
+  if (preservedAxesIssue) return preservedAxesIssue;
+  const ownerIssue = optionalNonEmptyStringIssue(metadata.owner, "source.rootMotion.owner");
+  if (ownerIssue) return ownerIssue;
+  const unitsIssue = optionalNonEmptyStringIssue(metadata.units, "source.rootMotion.units");
+  if (unitsIssue) return unitsIssue;
+  const supportIssue = optionalNonEmptyStringIssue(metadata.support, "source.rootMotion.support");
+  if (supportIssue) return supportIssue;
+  const bakeModeIssue = optionalNonEmptyStringIssue(metadata.bakeMode, "source.rootMotion.bakeMode");
+  if (bakeModeIssue) return bakeModeIssue;
+  return null;
+}
+
+function rootMotionCarrierIssue(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value === "string") return value.length > 0 ? null : "metadata";
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? null : formatUnknownValue(value);
+  if (!isRecord(value)) return formatUnknownValue(value);
+  const jointIndex = value.jointIndex ?? value.joint_index ?? value.index;
+  if (jointIndex !== undefined && (!Number.isInteger(jointIndex) || (jointIndex as number) < 0)) {
+    return formatUnknownValue(jointIndex);
+  }
+  const joint = value.joint ?? value.name ?? value.jointName ?? value.joint_name;
+  if (joint !== undefined && !isNonEmptyString(joint)) return formatUnknownValue(joint);
+  const humanBone = value.humanBone ?? value.human_bone ?? value.humanoid;
+  if (humanBone !== undefined && !isNonEmptyString(humanBone)) return formatUnknownValue(humanBone);
+  return jointIndex !== undefined || joint !== undefined || humanBone !== undefined ? null : "metadata";
+}
+
+function optionalRootMotionAxesIssue(value: unknown, label: string): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.some((axis) => axis !== "x" && axis !== "y" && axis !== "z")) {
+    return `has invalid ${label} metadata`;
+  }
+  return new Set(value).size === value.length ? null : `has duplicate ${label} metadata`;
 }
 
 export function manifestEntryMetadataIssue(entry: AnimationManifestEntry): string | null {
@@ -371,9 +459,34 @@ function clipRootMotionPolicyIssue(clip: AnimationClip): string | null {
   const clipPolicy = clip.metadata?.rootMotionPolicy;
   if (clipPolicy !== undefined && !isRootMotionPolicy(clipPolicy))
     return `has invalid clip rootMotionPolicy ${formatUnknownValue(clipPolicy)}`;
+  const clipTranslationPolicy = clip.metadata?.rootMotionTranslationPolicy;
+  if (clipTranslationPolicy !== undefined && !isRootMotionPolicy(clipTranslationPolicy))
+    return `has invalid clip rootMotionTranslationPolicy ${formatUnknownValue(clipTranslationPolicy)}`;
+  const clipYawPolicy = clip.metadata?.rootMotionYawPolicy;
+  if (clipYawPolicy !== undefined && !isRootMotionPolicy(clipYawPolicy))
+    return `has invalid clip rootMotionYawPolicy ${formatUnknownValue(clipYawPolicy)}`;
   const clipProvenance = clip.metadata?.rootMotionProvenance;
   if (clipProvenance !== undefined && !isRootMotionProvenance(clipProvenance))
     return `has invalid clip rootMotionProvenance ${formatUnknownValue(clipProvenance)}`;
+  return null;
+}
+
+function clipRootMotionConflictIssue(entry: AnimationManifestEntry, clip: AnimationClip): string | null {
+  const entryMetadata = readRootMotionMetadata(entry);
+  if (!entryMetadata) return null;
+  const clipPolicy = clip.metadata?.rootMotionPolicy;
+  if (isRootMotionPolicy(clipPolicy) && clipPolicy !== entryMetadata.policy) {
+    return `clip rootMotionPolicy ${clipPolicy} conflicts with source.rootMotion.policy ${entryMetadata.policy}`;
+  }
+  const clipProvenance = clip.metadata?.rootMotionProvenance;
+  if (
+    isRootMotionProvenance(clipProvenance) &&
+    clipProvenance !== "unknown" &&
+    entryMetadata.provenance !== "unknown" &&
+    clipProvenance !== entryMetadata.provenance
+  ) {
+    return `clip rootMotionProvenance ${clipProvenance} conflicts with source.rootMotion.provenance ${entryMetadata.provenance}`;
+  }
   return null;
 }
 
@@ -383,6 +496,25 @@ function isRootMotionNamed(entry: AnimationManifestEntry, clip: AnimationClip): 
 
 export function readRootMotionPolicy(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionPolicy | null {
   return readRootMotionMetadata(entry, clip)?.policy ?? null;
+}
+
+export function readRootMotionChannelPolicy(
+  entry: AnimationManifestEntry,
+  clip: AnimationClip | undefined,
+  channel: "translation" | "yaw"
+): RootMotionPolicy | null {
+  if (entry.source !== undefined && !isRecord(entry.source)) return null;
+  const entrySource = entry.source ?? {};
+  const sourceRootMotion = entrySource.rootMotion;
+  const sourceChannelPolicy = isRecord(sourceRootMotion)
+    ? readRootMotionChannelPolicyValue(sourceRootMotion, channel)
+    : null;
+  if (sourceChannelPolicy) return sourceChannelPolicy;
+  const clipChannelPolicy = readRootMotionChannelPolicyValue(clip?.metadata, channel, "rootMotion");
+  if (clipChannelPolicy && sourceRootMotion === undefined && entrySource.rootMotionPolicy === undefined) {
+    return clipChannelPolicy;
+  }
+  return readRootMotionPolicy(entry, clip);
 }
 
 export function readRootMotionProvenance(entry: AnimationManifestEntry, clip?: AnimationClip): RootMotionProvenance {
@@ -398,12 +530,19 @@ export function readRootMotionMetadata(entry: AnimationManifestEntry, clip?: Ani
     if (typeof sourceRootMotion === "string")
       return isRootMotionPolicy(sourceRootMotion) ? { policy: sourceRootMotion, provenance: "unknown" } : null;
     if (!isRecord(sourceRootMotion) || !("policy" in sourceRootMotion)) return null;
-    const metadata = sourceRootMotion as { policy?: unknown; provenance?: unknown };
+    const metadata = sourceRootMotion as {
+      policy?: unknown;
+      provenance?: unknown;
+      translationPolicy?: unknown;
+      yawPolicy?: unknown;
+    };
     if (!isRootMotionPolicy(metadata.policy)) return null;
     if (metadata.provenance !== undefined && !isRootMotionProvenance(metadata.provenance)) return null;
     return {
       policy: metadata.policy,
-      provenance: isRootMotionProvenance(metadata.provenance) ? metadata.provenance : "unknown"
+      provenance: isRootMotionProvenance(metadata.provenance) ? metadata.provenance : "unknown",
+      ...(isRootMotionPolicy(metadata.translationPolicy) ? { translationPolicy: metadata.translationPolicy } : {}),
+      ...(isRootMotionPolicy(metadata.yawPolicy) ? { yawPolicy: metadata.yawPolicy } : {})
     };
   }
   const sourcePolicy = entrySource.rootMotionPolicy;
@@ -433,6 +572,18 @@ function isRootMotionProvenance(value: unknown): value is RootMotionProvenance {
     value === "requires-runtime-stripping" ||
     value === "stationary-residual"
   );
+}
+
+function readRootMotionChannelPolicyValue(
+  metadata: unknown,
+  channel: "translation" | "yaw",
+  prefix = ""
+): RootMotionPolicy | null {
+  if (!isRecord(metadata)) return null;
+  const key = `${prefix}${channel === "translation" ? "Translation" : "Yaw"}Policy`;
+  const compactKey = channel === "translation" ? "translationPolicy" : "yawPolicy";
+  const value = metadata[compactKey] ?? metadata[key];
+  return isRootMotionPolicy(value) ? value : null;
 }
 
 function formatUnknownValue(value: unknown): string {

@@ -249,7 +249,8 @@ export function binaryFloatByteOffsetForTest(buffer: ArrayBuffer): number {
   const trackBytes = view.getUint32(12, true);
   const trackCount = view.getUint32(24, true);
   const stringBytes = view.getUint32(28, true);
-  return headerBytes + trackCount * trackBytes + align4ForTest(stringBytes);
+  const metadataBytes = view.getUint32(4, true) >= 4 ? view.getUint32(32, true) : 0;
+  return headerBytes + trackCount * trackBytes + align4ForTest(stringBytes) + align4ForTest(metadataBytes);
 }
 
 export function attachArmChain(

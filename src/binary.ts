@@ -11,9 +11,11 @@ import {
 export const WAIFU_ANIMATION_BINARY_FORMAT = "waifu-animation-bin";
 
 const MAGIC = "WANI";
-const VERSION = 3;
-const HEADER_BYTES = 32;
+const VERSION = 4;
+const HEADER_BYTES = 40;
+const LEGACY_HEADER_BYTES = 32;
 const TRACK_BYTES = 48;
+const V3_TRACK_BYTES = 48;
 const V2_TRACK_BYTES = 44;
 const LEGACY_TRACK_BYTES = 36;
 const NO_OFFSET = 0xffffffff;
@@ -39,6 +41,7 @@ const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
 export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
   assertValidClipForBinaryEncoding(clip);
+  const metadataBytes = encodeClipMetadata(clip);
 
   const trackRecords = clip.tracks.map((track) => {
     const targetName = track.humanBone ?? track.joint;
@@ -67,6 +70,7 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
   const encodedNames = trackRecords.map((record) => textEncoder.encode(record.targetName));
   const stringBytes = encodedNames.reduce((sum, encoded) => sum + encoded.byteLength, 0);
   const stringPaddedBytes = align4(stringBytes);
+  const metadataPaddedBytes = align4(metadataBytes.byteLength);
 
   const floatCount = trackRecords.reduce((sum, record) => {
     return (
@@ -78,7 +82,8 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
     );
   }, 0);
 
-  const floatByteOffset = HEADER_BYTES + trackRecords.length * TRACK_BYTES + stringPaddedBytes;
+  const metadataByteOffset = HEADER_BYTES + trackRecords.length * TRACK_BYTES + stringPaddedBytes;
+  const floatByteOffset = metadataByteOffset + metadataPaddedBytes;
   const byteLength = floatByteOffset + floatCount * Float32Array.BYTES_PER_ELEMENT;
   const buffer = new ArrayBuffer(byteLength);
   const bytes = new Uint8Array(buffer);
@@ -92,6 +97,8 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
   view.setUint32(20, clip.loop ? 1 : 0, true);
   view.setUint32(24, trackRecords.length, true);
   view.setUint32(28, stringBytes, true);
+  view.setUint32(32, metadataBytes.byteLength, true);
+  view.setUint32(36, 0, true);
 
   let stringOffset = 0;
   let floatOffset = 0;
@@ -139,6 +146,8 @@ export function encodeAnimationBinary(clip: AnimationClip): ArrayBuffer {
     stringOffset += encodedName.byteLength;
   }
 
+  bytes.set(metadataBytes, metadataByteOffset);
+
   return buffer;
 }
 
@@ -157,43 +166,123 @@ function formatClipValidationIssue(issue: ClipValidationIssue): string {
   return context.length > 0 ? `${context.join(" ")} ${issue.message}` : issue.message;
 }
 
+type BinaryMetadataValue =
+  | null
+  | string
+  | number
+  | boolean
+  | BinaryMetadataValue[]
+  | { [key: string]: BinaryMetadataValue };
+
+function encodeClipMetadata(clip: AnimationClip): Uint8Array {
+  if (clip.metadata === undefined) return new Uint8Array(0);
+  const metadata = cloneBinaryMetadataRecord(clip.id || "<unknown>", clip.metadata);
+  return textEncoder.encode(JSON.stringify(metadata));
+}
+
+function cloneBinaryMetadataRecord(clipId: string, metadata: unknown): Record<string, BinaryMetadataValue> {
+  if (!isPlainRecord(metadata)) throw new Error(`animation clip ${clipId} metadata must be a plain object`);
+  return cloneBinaryMetadataObject(clipId, metadata, "metadata", new Set<object>());
+}
+
+function cloneBinaryMetadataObject(
+  clipId: string,
+  metadata: Record<string, unknown>,
+  path: string,
+  seen: Set<object>
+): Record<string, BinaryMetadataValue> {
+  if (seen.has(metadata)) throw new Error(`animation clip ${clipId} ${path} must not be cyclic`);
+  seen.add(metadata);
+  const output: Record<string, BinaryMetadataValue> = {};
+  for (const key of Object.keys(metadata).sort()) {
+    output[key] = cloneBinaryMetadataValue(clipId, metadata[key], `${path}.${key}`, seen);
+  }
+  seen.delete(metadata);
+  return output;
+}
+
+function cloneBinaryMetadataValue(
+  clipId: string,
+  value: unknown,
+  path: string,
+  seen: Set<object>
+): BinaryMetadataValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) return value;
+    throw new Error(`animation clip ${clipId} ${path} must be finite`);
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) throw new Error(`animation clip ${clipId} ${path} must not be cyclic`);
+    seen.add(value);
+    const output = value.map((item, index) => cloneBinaryMetadataValue(clipId, item, `${path}[${index}]`, seen));
+    seen.delete(value);
+    return output;
+  }
+  if (isPlainRecord(value)) return cloneBinaryMetadataObject(clipId, value, path, seen);
+  throw new Error(`animation clip ${clipId} ${path} must be JSON-compatible`);
+}
+
+function decodeClipMetadata(bytes: Uint8Array): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fatalTextDecoder.decode(bytes));
+  } catch {
+    throw new Error("animation binary metadata is invalid JSON");
+  }
+  if (!isPlainRecord(parsed)) throw new Error("animation binary metadata must be an object");
+  return parsed;
+}
+
 export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id = "animation"): AnimationClip {
   const buffer = normalizeArrayBuffer(input);
   const bytes = new Uint8Array(buffer);
-  if (bytes.byteLength < HEADER_BYTES) throw new Error("animation binary is too small");
+  if (bytes.byteLength < LEGACY_HEADER_BYTES) throw new Error("animation binary is too small");
   if (textDecoder.decode(bytes.subarray(0, 4)) !== MAGIC) throw new Error("animation binary magic is invalid");
 
   const view = new DataView(buffer);
   const version = view.getUint32(4, true);
-  const expectedTrackBytes = trackBytesForVersion(version);
-  if (expectedTrackBytes === null) throw new Error(`unsupported animation binary version ${version}`);
+  const layout = binaryLayoutForVersion(version);
+  if (layout === null) throw new Error(`unsupported animation binary version ${version}`);
   const headerBytes = view.getUint32(8, true);
   const trackBytes = view.getUint32(12, true);
-  if (headerBytes !== HEADER_BYTES || trackBytes !== expectedTrackBytes)
+  if (headerBytes !== layout.headerBytes || trackBytes !== layout.trackBytes)
     throw new Error("animation binary layout is unsupported");
 
   const duration = view.getFloat32(16, true);
   const flags = view.getUint32(20, true);
   const trackCount = view.getUint32(24, true);
   const stringBytes = view.getUint32(28, true);
+  const metadataBytes = layout.metadata ? view.getUint32(32, true) : 0;
+  const metadataFlags = layout.metadata ? view.getUint32(36, true) : 0;
   if (!Number.isFinite(duration) || duration <= 0)
     throw new Error("animation binary duration must be positive and finite");
   if ((flags & ~1) !== 0) throw new Error("animation binary flags are invalid");
-  const stringByteOffset = HEADER_BYTES + trackCount * trackBytes;
-  const floatByteOffset = stringByteOffset + align4(stringBytes);
-  if (stringByteOffset + stringBytes > bytes.byteLength || floatByteOffset > bytes.byteLength) {
+  if (metadataFlags !== 0) throw new Error("animation binary metadata flags are invalid");
+  const stringByteOffset = headerBytes + trackCount * trackBytes;
+  const metadataByteOffset = stringByteOffset + align4(stringBytes);
+  const floatByteOffset = metadataByteOffset + align4(metadataBytes);
+  if (
+    stringByteOffset + stringBytes > bytes.byteLength ||
+    metadataByteOffset + metadataBytes > bytes.byteLength ||
+    floatByteOffset > bytes.byteLength
+  ) {
     throw new Error("animation binary table bounds are invalid");
   }
   if ((bytes.byteLength - floatByteOffset) % Float32Array.BYTES_PER_ELEMENT !== 0) {
     throw new Error("animation binary float data is misaligned");
   }
+  const metadata =
+    metadataBytes > 0
+      ? decodeClipMetadata(bytes.subarray(metadataByteOffset, metadataByteOffset + metadataBytes))
+      : undefined;
   const floatData = new Float32Array(buffer, floatByteOffset);
   const tracks: AnimationTrack[] = [];
   const floatRanges: FloatRange[] = [];
   const channels = new Set<string>();
 
   for (let index = 0; index < trackCount; index += 1) {
-    const trackOffset = HEADER_BYTES + index * trackBytes;
+    const trackOffset = headerBytes + index * trackBytes;
     const targetKind = view.getUint32(trackOffset, true);
     const propertyCode = view.getUint32(trackOffset + 4, true);
     const nameByteOffset = view.getUint32(trackOffset + 8, true);
@@ -286,7 +375,8 @@ export function decodeAnimationBinary(input: ArrayBuffer | ArrayBufferView, id =
     id,
     duration,
     loop: Boolean(flags & 1),
-    tracks
+    tracks,
+    ...(metadata !== undefined ? { metadata } : {})
   };
   const decodedIssue = version >= 2 ? validateClip(clip)[0] : undefined;
   if (decodedIssue)
@@ -302,10 +392,17 @@ type FloatRange = {
   end: number;
 };
 
-function trackBytesForVersion(version: number): number | null {
-  if (version === VERSION) return TRACK_BYTES;
-  if (version === 2) return V2_TRACK_BYTES;
-  if (version === 1) return LEGACY_TRACK_BYTES;
+type BinaryLayout = {
+  headerBytes: number;
+  trackBytes: number;
+  metadata: boolean;
+};
+
+function binaryLayoutForVersion(version: number): BinaryLayout | null {
+  if (version === VERSION) return { headerBytes: HEADER_BYTES, trackBytes: TRACK_BYTES, metadata: true };
+  if (version === 3) return { headerBytes: LEGACY_HEADER_BYTES, trackBytes: V3_TRACK_BYTES, metadata: false };
+  if (version === 2) return { headerBytes: LEGACY_HEADER_BYTES, trackBytes: V2_TRACK_BYTES, metadata: false };
+  if (version === 1) return { headerBytes: LEGACY_HEADER_BYTES, trackBytes: LEGACY_TRACK_BYTES, metadata: false };
   return null;
 }
 
@@ -437,4 +534,10 @@ function normalizeArrayBuffer(input: ArrayBuffer | ArrayBufferView): ArrayBuffer
   const copy = new Uint8Array(input.byteLength);
   copy.set(new Uint8Array(input.buffer, input.byteOffset, input.byteLength));
   return copy.buffer;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

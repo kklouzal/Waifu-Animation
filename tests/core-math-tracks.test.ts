@@ -372,6 +372,35 @@ export async function runCoreMathTrackTests(): Promise<void> {
   assert.equal(motionImport.plan.rotation?.mode, "yaw", "yaw-only rotation axes should map to yaw extraction");
   assert.equal(motionImport.plan.nonMutatingBake, true, "baked motion config should expose non-mutating bake intent");
   assert.deepEqual(motionImport.plan.source, { take: "walk" }, "motion config should preserve source metadata");
+  const absentMotionImport = normalizeOzzOfflineImportConfig({});
+  assert.equal(
+    absentMotionImport.plan.motion.enabled,
+    false,
+    "combined importer plans should not strip or extract root motion unless motion config is explicitly present"
+  );
+  assert.equal(absentMotionImport.plan.motion.translation, null);
+  assert.equal(absentMotionImport.plan.motion.rotation, null);
+  assert.equal(absentMotionImport.plan.motion.nonMutatingBake, false);
+  assert.deepEqual(absentMotionImport.plan.motion.options, { translation: false, rotation: false });
+  const disabledMotionImport = normalizeRawMotionExtractionImportConfig(false);
+  assert.equal(disabledMotionImport.plan.enabled, false, "boolean false should explicitly disable motion extraction");
+  assert.deepEqual(disabledMotionImport.plan.options, { translation: false, rotation: false });
+  const emptyAxisMotionImport = normalizeRawMotionExtractionImportConfig({
+    translation: { axes: "none" },
+    rotation: { axes: "none" }
+  });
+  assert.equal(
+    emptyAxisMotionImport.plan.translation,
+    null,
+    "translation axes=none should disable the translation channel instead of emitting an empty baked track"
+  );
+  assert.equal(
+    emptyAxisMotionImport.plan.rotation,
+    null,
+    "rotation axes=none should disable yaw extraction instead of falling back to yaw"
+  );
+  assert.deepEqual(emptyAxisMotionImport.plan.options, { translation: false, rotation: false });
+  assert.equal(emptyAxisMotionImport.plan.nonMutatingBake, false);
   const invalidMotionImport = normalizeRawMotionExtractionImportConfig({
     translation: { axes: ["x", "w"], reference: "bad" },
     rotation: { axes: 123, mode: "pitch" }

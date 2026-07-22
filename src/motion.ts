@@ -388,6 +388,9 @@ export function extractRawRootMotion(
     }
   }
 
+  const bakedMetadata = rootMotionBakeMetadata(output.metadata, translationSettings, rotationSettings);
+  if (bakedMetadata) output.metadata = bakedMetadata;
+
   return { motion, rawAnimation: output };
 }
 
@@ -1072,6 +1075,7 @@ function bakeExtractedRootMotionClip(
   motionRotation: UserTrack<"quaternion"> | undefined,
   bakedClipId: string | undefined
 ): AnimationClip {
+  const metadata = rootMotionBakeMetadata(clip.metadata, translation, rotation);
   return {
     ...clip,
     id: bakedClipId ?? `${clip.id}:baked-root-motion`,
@@ -1088,7 +1092,24 @@ function bakeExtractedRootMotionClip(
         clip.duration
       )
     ),
-    ...(clip.metadata ? { metadata: { ...clip.metadata } } : {})
+    ...(metadata ? { metadata } : {})
+  };
+}
+
+function rootMotionBakeMetadata(
+  metadata: Record<string, unknown> | undefined,
+  translation: ResolvedTranslationExtraction | null,
+  rotation: ResolvedRotationExtraction | null
+): Record<string, unknown> | undefined {
+  const translationBaked = translation?.bake === true;
+  const rotationBaked = rotation?.bake === true;
+  if (!translationBaked && !rotationBaked) return metadata ? { ...metadata } : undefined;
+  return {
+    ...(metadata ?? {}),
+    rootMotionPolicy: "stripped-to-in-place",
+    rootMotionProvenance: "stripped-during-conversion",
+    rootMotionTranslationPolicy: translationBaked ? "stripped-to-in-place" : "preserved",
+    rootMotionYawPolicy: rotationBaked ? "stripped-to-in-place" : "preserved"
   };
 }
 

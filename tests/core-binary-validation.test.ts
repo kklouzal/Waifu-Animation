@@ -1,5 +1,5 @@
 import type { AnimationClip } from "./test-api.js";
-import { assert, decodeAnimationBinary, encodeAnimationBinary, toFloat32Array } from "./test-api.js";
+import { assert, decodeAnimationBinary, encodeAnimationBinary, quatFromAxisAngle, toFloat32Array } from "./test-api.js";
 import {
   align4ForTest,
   binaryFloatByteOffsetForTest,
@@ -65,7 +65,41 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     decodeAnimationBinary(encodeAnimationBinary(normalizedDeltaClip), "binary-normalized-delta").tracks[0]!
       .rotationSpace,
     "normalized-humanoid-delta",
-    "v3 binary roundtrips should preserve normalized humanoid delta rotation-space metadata"
+    "current binary roundtrips should preserve normalized humanoid delta rotation-space metadata"
+  );
+  const rootMotionPolicyMetadataClip: AnimationClip = {
+    id: "binary-root-motion-policy-metadata",
+    duration: 1,
+    loop: true,
+    metadata: {
+      rootMotionPolicy: "preserved",
+      rootMotionProvenance: "preserved-in-clip",
+      rootMotion: {
+        carrier: { joint: "root" },
+        translationOwner: "animation",
+        yawOwner: "animation"
+      }
+    },
+    tracks: [
+      {
+        joint: "root",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 1, 0, 0])
+      },
+      {
+        joint: "root",
+        property: "rotation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)])
+      }
+    ]
+  };
+  assert.deepEqual(
+    decodeAnimationBinary(encodeAnimationBinary(rootMotionPolicyMetadataClip), "binary-root-motion-policy-metadata")
+      .metadata,
+    rootMotionPolicyMetadataClip.metadata,
+    "current binary roundtrips should preserve root-motion policy/provenance and carrier authority metadata"
   );
   const mixedTargetKindClip: AnimationClip = {
     id: "binary-mixed-target-kinds",
@@ -122,15 +156,27 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     "decodeAnimationBinary should read v2 source-rest child-direction payloads from 44-byte track records"
   );
   const absentSourceRestFlagBinary = encodeAnimationBinary(nodClip);
-  new DataView(absentSourceRestFlagBinary).setUint32(32 + 28, 0, true);
-  new DataView(absentSourceRestFlagBinary).setUint32(32 + 32, 0, true);
+  new DataView(absentSourceRestFlagBinary).setUint32(
+    binaryTrackByteOffsetForTest(absentSourceRestFlagBinary) + 28,
+    0,
+    true
+  );
+  new DataView(absentSourceRestFlagBinary).setUint32(
+    binaryTrackByteOffsetForTest(absentSourceRestFlagBinary) + 32,
+    0,
+    true
+  );
   assert.equal(
     decodeAnimationBinary(absentSourceRestFlagBinary, "absent-source-rest-flag").tracks[0]!.sourceRestQuaternion,
     undefined,
     "decodeAnimationBinary should honor a false source-rest presence flag even when legacy offset bytes are non-empty"
   );
   const invalidSourceRestFlagBinary = encodeAnimationBinary(nodClip);
-  new DataView(invalidSourceRestFlagBinary).setUint32(32 + 32, 2, true);
+  new DataView(invalidSourceRestFlagBinary).setUint32(
+    binaryTrackByteOffsetForTest(invalidSourceRestFlagBinary) + 32,
+    2,
+    true
+  );
   assert.throws(
     () => decodeAnimationBinary(invalidSourceRestFlagBinary, "invalid-source-rest-flag"),
     /animation track 0 source-rest presence flag is invalid/,
@@ -144,14 +190,18 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     "decodeAnimationBinary should reject version/layout hybrids instead of guessing record semantics"
   );
   const unknownPropertyBinary = encodeAnimationBinary(nodClip);
-  new DataView(unknownPropertyBinary).setUint32(32 + 4, 99, true);
+  new DataView(unknownPropertyBinary).setUint32(binaryTrackByteOffsetForTest(unknownPropertyBinary) + 4, 99, true);
   assert.throws(
     () => decodeAnimationBinary(unknownPropertyBinary, "unknown-property"),
     /unknown animation binary property 99/,
     "decodeAnimationBinary should reject unknown binary property codes"
   );
   const invalidUtf8NameBinary = encodeAnimationBinary(nodClip);
-  new Uint8Array(invalidUtf8NameBinary).fill(0xff, binaryStringByteOffsetForTest(invalidUtf8NameBinary), 84);
+  new Uint8Array(invalidUtf8NameBinary).fill(
+    0xff,
+    binaryStringByteOffsetForTest(invalidUtf8NameBinary),
+    binaryStringByteOffsetForTest(invalidUtf8NameBinary) + new DataView(invalidUtf8NameBinary).getUint32(28, true)
+  );
   assert.throws(
     () => decodeAnimationBinary(invalidUtf8NameBinary, "invalid-utf8-name"),
     /animation track 0 target name is not valid utf-8/,
@@ -172,8 +222,16 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     ]
   };
   const absentChildDirectionFlagBinary = encodeAnimationBinary(childDirectionBinaryClip);
-  new DataView(absentChildDirectionFlagBinary).setUint32(32 + 36, 0, true);
-  new DataView(absentChildDirectionFlagBinary).setUint32(32 + 40, 0, true);
+  new DataView(absentChildDirectionFlagBinary).setUint32(
+    binaryTrackByteOffsetForTest(absentChildDirectionFlagBinary) + 36,
+    0,
+    true
+  );
+  new DataView(absentChildDirectionFlagBinary).setUint32(
+    binaryTrackByteOffsetForTest(absentChildDirectionFlagBinary) + 40,
+    0,
+    true
+  );
   assert.equal(
     decodeAnimationBinary(absentChildDirectionFlagBinary, "absent-child-direction-flag").tracks[0]!
       .sourceRestChildDirection,
@@ -187,7 +245,11 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
       { humanBone: "head", property: "translation", times: toFloat32Array([0]), values: toFloat32Array([0, 0, 0]) }
     ]
   });
-  new DataView(invalidRotationSpacePropertyBinary).setUint32(32 + 44, 2, true);
+  new DataView(invalidRotationSpacePropertyBinary).setUint32(
+    binaryTrackByteOffsetForTest(invalidRotationSpacePropertyBinary) + 44,
+    2,
+    true
+  );
   assert.throws(
     () => decodeAnimationBinary(invalidRotationSpacePropertyBinary, "invalid-rotation-space-property"),
     /animation binary decoded invalid clip: track 0 head\.translation rotationSpace is only valid on rotation tracks/,
@@ -244,7 +306,7 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     "binary encoding should reject duplicate target channels without a skeleton"
   );
   const invalidTargetKindBinary = encodeAnimationBinary(nodClip);
-  new DataView(invalidTargetKindBinary).setUint32(32, 99, true);
+  new DataView(invalidTargetKindBinary).setUint32(binaryTrackByteOffsetForTest(invalidTargetKindBinary), 99, true);
   assert.throws(
     () => decodeAnimationBinary(invalidTargetKindBinary, "invalid-target-kind"),
     /animation track 0 target kind is invalid/,
@@ -288,7 +350,8 @@ export async function runCoreBinaryValidationTests(): Promise<void> {
     "decodeAnimationBinary should reject non-finite binary value samples"
   );
   const overlappingBinaryPayload = encodeAnimationBinary(endpointTrackTimeClip);
-  new DataView(overlappingBinaryPayload).setUint32(32 + 20, 0, true);
+  const overlappingBinaryView = new DataView(overlappingBinaryPayload);
+  overlappingBinaryView.setUint32(overlappingBinaryView.getUint32(8, true) + 20, 0, true);
   assert.throws(
     () => decodeAnimationBinary(overlappingBinaryPayload, "overlapping-binary-payload"),
     /animation track 0 value overlaps another float payload/,
@@ -336,4 +399,8 @@ function createV2SourceRestChildDirectionBinary(): ArrayBuffer {
 function binaryStringByteOffsetForTest(buffer: ArrayBuffer): number {
   const view = new DataView(buffer);
   return view.getUint32(8, true) + view.getUint32(24, true) * view.getUint32(12, true);
+}
+
+function binaryTrackByteOffsetForTest(buffer: ArrayBuffer): number {
+  return new DataView(buffer).getUint32(8, true);
 }

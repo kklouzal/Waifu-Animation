@@ -4,6 +4,7 @@ import {
   assert,
   inspectAnimationAsset,
   inspectClipAsset,
+  quatFromAxisAngle,
   sanitizeQuaternionTrackValues,
   toFloat32Array
 } from "./test-api.js";
@@ -140,6 +141,33 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
     ),
     "moving root translation should require an explicit root-motion policy from manifest or clip metadata"
   );
+  const noPolicyMovingRootRotationInspection = inspectClipAsset(
+    {
+      id: "walk-turn-root",
+      label: "Walk Turn Root",
+      url: "/walk-turn-root.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT
+    },
+    {
+      id: "walk-turn-root",
+      duration: 1,
+      tracks: [
+        {
+          joint: "root",
+          property: "rotation",
+          times: toFloat32Array([0, 1]),
+          values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)])
+        }
+      ]
+    }
+  );
+  assert.equal(noPolicyMovingRootRotationInspection.accepted, false);
+  assert.ok(
+    noPolicyMovingRootRotationInspection.issues.some(
+      (issue) => issue.message === "moving root carrier yaw requires source.rootMotion.policy"
+    ),
+    "moving root yaw should require an explicit root-motion policy even when root translation is stationary"
+  );
   const nonePolicyMovingRootInspection = inspectClipAsset(
     {
       id: "walk-none-moving-root",
@@ -167,6 +195,87 @@ export async function runCoreRootMotionValidationTests(): Promise<void> {
       (issue) => issue.message === "root-motion policy is none but root carrier translation moves"
     ),
     "policy none should reject moving root carrier translation"
+  );
+  const nonePolicyMovingRootYawInspection = inspectClipAsset(
+    {
+      id: "walk-none-moving-root-yaw",
+      label: "Walk None Moving Root Yaw",
+      url: "/walk-none-moving-root-yaw.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "none" } }
+    },
+    {
+      id: "walk-none-moving-root-yaw",
+      duration: 1,
+      tracks: [
+        {
+          joint: "root",
+          property: "rotation",
+          times: toFloat32Array([0, 1]),
+          values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 3)])
+        }
+      ]
+    }
+  );
+  assert.equal(nonePolicyMovingRootYawInspection.accepted, false);
+  assert.ok(
+    nonePolicyMovingRootYawInspection.issues.some(
+      (issue) => issue.message === "root-motion policy is none but root carrier yaw moves"
+    ),
+    "policy none should reject moving root carrier yaw"
+  );
+  const strippedPolicyMovingRootYawInspection = inspectClipAsset(
+    {
+      id: "walk-stripped-moving-root-yaw",
+      label: "Walk Stripped Moving Root Yaw",
+      url: "/walk-stripped-moving-root-yaw.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      source: { rootMotion: { policy: "stripped-to-in-place" } }
+    },
+    {
+      id: "walk-stripped-moving-root-yaw",
+      duration: 1,
+      tracks: [
+        {
+          joint: "root",
+          property: "rotation",
+          times: toFloat32Array([0, 1]),
+          values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 3)])
+        }
+      ]
+    }
+  );
+  assert.equal(strippedPolicyMovingRootYawInspection.accepted, false);
+  assert.ok(
+    strippedPolicyMovingRootYawInspection.issues.some(
+      (issue) => issue.message === "root-motion policy is stripped-to-in-place but root carrier yaw still moves"
+    ),
+    "stripped-to-in-place policy should reject retained root carrier yaw"
+  );
+  assert.equal(
+    inspectClipAsset(
+      {
+        id: "turn-preserved-root-yaw",
+        label: "Turn Preserved Root Yaw",
+        url: "/turn-preserved-root-yaw.waifuanim.bin",
+        format: WAIFU_ANIMATION_BINARY_FORMAT,
+        source: { rootMotion: { policy: "preserved" } }
+      },
+      {
+        id: "turn-preserved-root-yaw",
+        duration: 1,
+        tracks: [
+          {
+            joint: "root",
+            property: "rotation",
+            times: toFloat32Array([0, 1]),
+            values: sanitizeQuaternionTrackValues([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 3)])
+          }
+        ]
+      }
+    ).accepted,
+    true,
+    "preserved root-motion policy should accept yaw-only carrier motion"
   );
   const playbackWindowInPlaceRootCarrierInspection = inspectClipAsset(
     {

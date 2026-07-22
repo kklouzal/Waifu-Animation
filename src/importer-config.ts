@@ -158,9 +158,14 @@ export function normalizeOzzOfflineImportConfig(
   const additive = normalizeAdditiveReferenceImportConfig(
     readFirstDefined(record, ["additive", "additiveReference", "additive_reference"])
   );
-  const motion = normalizeRawMotionExtractionImportConfig(
-    readFirstDefined(record, ["motion", "motionExtraction", "motion_extraction", "rootMotion", "root_motion"])
-  );
+  const motionInput = readFirstDefined(record, [
+    "motion",
+    "motionExtraction",
+    "motion_extraction",
+    "rootMotion",
+    "root_motion"
+  ]);
+  const motion = normalizeRawMotionExtractionImportConfig(motionInput ?? false);
   const optimization = normalizeAnimationOptimizationImportConfig(
     readFirstDefined(record, ["optimization", "optimizationSettings", "optimization_settings"]) ??
       readFirstDefined(firstAnimation, ["optimization", "optimizationSettings", "optimization_settings"])
@@ -252,6 +257,12 @@ export function normalizeRawMotionExtractionImportConfig(
   input: unknown
 ): ImporterConfigNormalizationResult<RawMotionExtractionImportPlan> {
   const issues: ImporterConfigIssue[] = [];
+  if (input === false || input === null) {
+    return {
+      plan: disabledRawMotionExtractionImportPlan(),
+      issues
+    };
+  }
   const record = asRecord(input);
   const source = cloneRecord(readFirstDefined(record, ["source", "metadata"]));
   const enabled = readBoolean(readFirstDefined(record, ["enable", "enabled"]), true, issues, "motion.enabled");
@@ -288,24 +299,26 @@ export function normalizeRawMotionExtractionImportConfig(
       )
     : null;
 
-  const options: ExtractRawRootMotionOptions = {
-    translation: translation
-      ? {
-          axes: translation.axes,
-          reference: translation.reference,
-          bake: translation.bake,
-          loop: translation.loop
-        }
-      : false,
-    rotation: rotation
-      ? {
-          mode: rotation.mode,
-          reference: rotation.reference,
-          bake: rotation.bake,
-          loop: rotation.loop
-        }
-      : false
-  };
+  const options: ExtractRawRootMotionOptions = enabled
+    ? {
+        translation: translation
+          ? {
+              axes: translation.axes,
+              reference: translation.reference,
+              bake: translation.bake,
+              loop: translation.loop
+            }
+          : false,
+        rotation: rotation
+          ? {
+              mode: rotation.mode,
+              reference: rotation.reference,
+              bake: rotation.bake,
+              loop: rotation.loop
+            }
+          : false
+      }
+    : { translation: false, rotation: false };
   if (carrier) options.carrier = carrier;
   const rawAnimationId = readString(readFirstDefined(record, ["rawAnimationId", "raw_animation_id"]));
   if (rawAnimationId) options.rawAnimationId = rawAnimationId;
@@ -556,6 +569,7 @@ function normalizeMotionTranslationChannel(
     issues,
     "motion.translation.axes"
   );
+  if (!axisMaskHasAnyAxis(axes)) return null;
   return {
     axes,
     reference: readMotionReference(
@@ -584,6 +598,7 @@ function normalizeMotionRotationChannel(
     issues,
     "motion.rotation.axes"
   );
+  if (!axisMaskHasAnyAxis(axes)) return null;
   const mode = normalizeRotationMode(readFirstDefined(record, ["mode"]), axes, issues, "motion.rotation.mode");
   return {
     mode,
@@ -661,6 +676,20 @@ function normalizeAxisMask(
 
 function isAxisName(value: unknown): value is "x" | "y" | "z" {
   return value === "x" || value === "y" || value === "z";
+}
+
+function axisMaskHasAnyAxis(axes: Required<MotionExtractionAxisMask>): boolean {
+  return axes.x || axes.y || axes.z;
+}
+
+function disabledRawMotionExtractionImportPlan(): RawMotionExtractionImportPlan {
+  return {
+    enabled: false,
+    options: { translation: false, rotation: false },
+    translation: null,
+    rotation: null,
+    nonMutatingBake: false
+  };
 }
 
 function normalizeMotionCarrier(

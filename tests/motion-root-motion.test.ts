@@ -972,7 +972,16 @@ export async function runMotionRootMotionTests(): Promise<void> {
       label: "Stripped Extracted Root Motion",
       url: "/stripped-extracted-root-motion.waifuanim.bin",
       format: WAIFU_ANIMATION_BINARY_FORMAT,
-      source: { rootMotion: { policy: "stripped-to-in-place" } }
+      source: {
+        rootMotion: {
+          policy: "stripped-to-in-place",
+          yawPolicy: "preserved",
+          owner: "director-xz",
+          carrier: "hips",
+          units: "meters-target-rest-offset",
+          bakeMode: "remove-linear-trajectory"
+        }
+      }
     },
     strippedExtraction.bakedClip!
   );

@@ -17,11 +17,18 @@ export type ManifestPlaybackWindow = {
 };
 
 const STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE = 1e-4;
+const STRIPPED_ROOT_CARRIER_YAW_TOLERANCE = 1e-4;
 
 export function isRootCarrierTranslationTrack(track: AnimationTrack): boolean {
   if (!isRecord(track)) return false;
   const property = typeof track.property === "string" ? normalizedTrackProperty(track.property) : null;
   return property === "translation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
+}
+
+export function isRootCarrierRotationTrack(track: AnimationTrack): boolean {
+  if (!isRecord(track)) return false;
+  const property = typeof track.property === "string" ? normalizedTrackProperty(track.property) : null;
+  return property === "rotation" && (track.humanBone === "hips" || isRootCarrierJointName(track.joint));
 }
 
 export function rootCarrierTranslationTrackHasMotion(track: AnimationTrack, window: ManifestPlaybackWindow): boolean {
@@ -39,11 +46,52 @@ export function rootCarrierTranslationTrackHasMotion(track: AnimationTrack, wind
   return false;
 }
 
+export function rootCarrierRotationTrackHasYawMotion(track: AnimationTrack, window: ManifestPlaybackWindow): boolean {
+  if (!isRootCarrierRotationTrack(track)) return false;
+  if (!(track.times instanceof Float32Array) || !(track.values instanceof Float32Array)) return false;
+  if (track.times.length < 2 || track.values.length !== track.times.length * 4) return false;
+  const base = sampleTrack(track, window.start);
+  const sampleTimes = [window.end];
+  for (const time of track.times) {
+    if (time > window.start && time < window.end) sampleTimes.push(time);
+  }
+  for (const time of sampleTimes) {
+    if (yawSamplesDiffer(base, sampleTrack(track, time))) return true;
+  }
+  return false;
+}
+
 function translationSamplesDiffer(base: ArrayLike<number>, sample: ArrayLike<number>): boolean {
   for (let axis = 0; axis < 3; axis += 1) {
     if (Math.abs((sample[axis] ?? 0) - (base[axis] ?? 0)) > STRIPPED_ROOT_CARRIER_TRANSLATION_TOLERANCE) return true;
   }
   return false;
+}
+
+function yawSamplesDiffer(base: ArrayLike<number>, sample: ArrayLike<number>): boolean {
+  return (
+    Math.abs(wrapRadians(yawFromQuaternion(sample) - yawFromQuaternion(base))) > STRIPPED_ROOT_CARRIER_YAW_TOLERANCE
+  );
+}
+
+function yawFromQuaternion(sample: ArrayLike<number>): number {
+  const x = finiteQuaternionComponent(sample[0]);
+  const y = finiteQuaternionComponent(sample[1]);
+  const z = finiteQuaternionComponent(sample[2]);
+  const w = finiteQuaternionComponent(sample[3], 1);
+  const forwardX = 2 * (x * z + w * y);
+  const forwardZ = 1 - 2 * (x * x + y * y);
+  const yaw = Math.atan2(forwardX, forwardZ);
+  return Number.isFinite(yaw) ? yaw : 0;
+}
+
+function finiteQuaternionComponent(value: number | undefined, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function wrapRadians(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.atan2(Math.sin(value), Math.cos(value));
 }
 
 export function resolveManifestPlaybackWindow(
