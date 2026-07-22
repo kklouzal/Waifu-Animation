@@ -711,6 +711,91 @@ export async function runThreeRuntimeTests(): Promise<void> {
     "stripped-to-in-place runtime clips should remove root and pelvis position tracks after UUID binding"
   );
 
+  const channelPolicyRuntimeRoot = new Object3D();
+  const channelPolicyRootBone = new Object3D();
+  channelPolicyRootBone.name = "root";
+  channelPolicyRuntimeRoot.add(channelPolicyRootBone);
+  const channelPolicySourceClip: AnimationClip = {
+    id: "channel-policy-root-motion-source",
+    duration: 1,
+    loop: true,
+    metadata: {
+      rootMotionPolicy: "stripped-to-in-place",
+      rootMotionTranslationPolicy: "preserved",
+      rootMotionYawPolicy: "stripped-to-in-place"
+    },
+    tracks: [
+      {
+        joint: "root",
+        property: "translation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 1, 0, 0])
+      },
+      {
+        joint: "root",
+        property: "rotation",
+        times: toFloat32Array([0, 1]),
+        values: toFloat32Array([0, 0, 0, 1, ...quatFromAxisAngle([0, 1, 0], Math.PI / 2)])
+      }
+    ]
+  };
+  const metadataChannelPolicyClip = createThreeAnimationClip(channelPolicySourceClip, {
+    resolveBone: (bone) => (bone === "root" ? channelPolicyRootBone : null)
+  });
+  createThreeRuntimeClipsForEntry(
+    {
+      id: "metadata-channel-policy-root-motion",
+      label: "Metadata Channel Policy Root Motion",
+      url: "/metadata-channel-policy-root-motion.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      loop: true
+    },
+    new AnimationMixer(channelPolicyRuntimeRoot),
+    metadataChannelPolicyClip
+  );
+  assert.equal(
+    metadataChannelPolicyClip.tracks.some((track) => track.name === `${channelPolicyRootBone.uuid}.position`),
+    true,
+    "clip metadata rootMotionTranslationPolicy=preserved should keep root carrier position despite a stripped overall policy"
+  );
+  assert.equal(
+    metadataChannelPolicyClip.tracks.some((track) => track.name === `${channelPolicyRootBone.uuid}.quaternion`),
+    false,
+    "clip metadata rootMotionYawPolicy=stripped-to-in-place should remove root carrier yaw tracks for the Three mixer"
+  );
+
+  const manifestChannelPolicyClip = createThreeAnimationClip(channelPolicySourceClip, {
+    resolveBone: (bone) => (bone === "root" ? channelPolicyRootBone : null)
+  });
+  createThreeRuntimeClipsForEntry(
+    {
+      id: "manifest-channel-policy-root-motion",
+      label: "Manifest Channel Policy Root Motion",
+      url: "/manifest-channel-policy-root-motion.waifuanim.bin",
+      format: WAIFU_ANIMATION_BINARY_FORMAT,
+      loop: true,
+      source: {
+        rootMotion: {
+          policy: "stripped-to-in-place",
+          translationPolicy: "stripped-to-in-place",
+          yawPolicy: "preserved"
+        }
+      }
+    },
+    new AnimationMixer(channelPolicyRuntimeRoot),
+    manifestChannelPolicyClip
+  );
+  assert.equal(
+    manifestChannelPolicyClip.tracks.some((track) => track.name === `${channelPolicyRootBone.uuid}.position`),
+    false,
+    "manifest source.rootMotion.translationPolicy should override clip metadata and strip root carrier position"
+  );
+  assert.equal(
+    manifestChannelPolicyClip.tracks.some((track) => track.name === `${channelPolicyRootBone.uuid}.quaternion`),
+    true,
+    "manifest source.rootMotion.yawPolicy=preserved should keep root carrier yaw even when clip metadata says stripped"
+  );
+
   assert.equal(calculateThreeRuntimeStartTime(-1, { startTime: 4 }), 0);
   assert.equal(calculateThreeRuntimeStartTime(2, { startTime: -0.25 }), 0);
   assert.equal(calculateThreeRuntimeStartTime(2, { startTime: 2.25 }), 0.25);

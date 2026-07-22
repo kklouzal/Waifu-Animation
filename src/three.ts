@@ -43,11 +43,17 @@ import {
   smoothStep,
   subVec3
 } from "./math.js";
-import { type AnimationManifestEntry, type RootMotionPolicy, readRootMotionPolicy } from "./manifest.js";
+import {
+  type AnimationManifestEntry,
+  type RootMotionPolicy,
+  readRootMotionChannelPolicy,
+  readRootMotionPolicy
+} from "./manifest.js";
 import {
   AUTHORED_BASE_TRACK_POLICY,
   OVERLAY_UPPER_BODY_TRACK_POLICY,
   ROOT_TRANSLATION_EXCLUDE_POLICY,
+  ROOT_YAW_EXCLUDE_POLICY,
   type TrackMaskPolicy,
   trackNameMatchesRule
 } from "./masks.js";
@@ -330,6 +336,8 @@ const tmpEuler = new Euler(0, 0, 0, "XYZ");
 const tmpWorldDirection = new Vector3();
 const tmpLocalDirection = new Vector3();
 const THREE_ROOT_MOTION_POLICY_USER_DATA = "waifuAnimationRootMotionPolicy";
+const THREE_ROOT_MOTION_TRANSLATION_POLICY_USER_DATA = "waifuAnimationRootMotionTranslationPolicy";
+const THREE_ROOT_MOTION_YAW_POLICY_USER_DATA = "waifuAnimationRootMotionYawPolicy";
 const THREE_TRACK_SOURCE_NAMES_USER_DATA = "waifuAnimationTrackSourceNames";
 
 export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnimationClipOptions): ThreeAnimationClip {
@@ -420,9 +428,17 @@ export function createThreeAnimationClip(clip: AnimationClip, options: ThreeAnim
   }
   const threeClip = new ThreeAnimationClip(options.id ?? clip.id, runtimeDuration, tracks);
   threeClip.userData[THREE_TRACK_SOURCE_NAMES_USER_DATA] = trackSourceNames;
+  writeThreeClipRootMotionPolicyUserData(threeClip, clip);
+  return threeClip;
+}
+
+function writeThreeClipRootMotionPolicyUserData(threeClip: ThreeAnimationClip, clip: AnimationClip): void {
   const rootMotionPolicy = readAnimationClipRootMotionPolicy(clip);
   if (rootMotionPolicy) threeClip.userData[THREE_ROOT_MOTION_POLICY_USER_DATA] = rootMotionPolicy;
-  return threeClip;
+  const translationPolicy = readAnimationClipRootMotionChannelPolicy(clip, "translation");
+  if (translationPolicy) threeClip.userData[THREE_ROOT_MOTION_TRANSLATION_POLICY_USER_DATA] = translationPolicy;
+  const yawPolicy = readAnimationClipRootMotionChannelPolicy(clip, "yaw");
+  if (yawPolicy) threeClip.userData[THREE_ROOT_MOTION_YAW_POLICY_USER_DATA] = yawPolicy;
 }
 
 function resolveThreeRotationSpace(
@@ -579,11 +595,11 @@ export function createThreeRuntimeClipsForEntry<TEntry extends AnimationManifest
   animationClip: ThreeAnimationClip
 ): ThreeRuntimeClip<TEntry>[] {
   const preservesResidualPelvisCarrier = entryHasResidualPelvisCarrier(entry);
-  if (
-    readThreeRuntimeRootMotionPolicy(entry, animationClip) === "stripped-to-in-place" &&
-    !preservesResidualPelvisCarrier
-  )
+  const translationPolicy = readThreeRuntimeRootMotionChannelPolicy(entry, animationClip, "translation");
+  const yawPolicy = readThreeRuntimeRootMotionChannelPolicy(entry, animationClip, "yaw");
+  if (translationPolicy === "stripped-to-in-place" && !preservesResidualPelvisCarrier)
     applyThreeTrackPolicy(animationClip, ROOT_TRANSLATION_EXCLUDE_POLICY);
+  if (yawPolicy === "stripped-to-in-place") applyThreeTrackPolicy(animationClip, ROOT_YAW_EXCLUDE_POLICY);
   if (entry.loop === false) {
     if (!entryHasVerticalTransitionPelvisCarrier(entry))
       applyThreeTrackPolicy(animationClip, OVERLAY_UPPER_BODY_TRACK_POLICY);
@@ -606,6 +622,18 @@ function readAnimationClipRootMotionPolicy(clip: AnimationClip): RootMotionPolic
   return isRootMotionPolicy(policy) ? policy : null;
 }
 
+function readAnimationClipRootMotionChannelPolicy(
+  clip: AnimationClip,
+  channel: "translation" | "yaw"
+): RootMotionPolicy | null {
+  const metadata = clip.metadata;
+  if (!metadata) return null;
+  const compactKey = channel === "translation" ? "translationPolicy" : "yawPolicy";
+  const prefixedKey = channel === "translation" ? "rootMotionTranslationPolicy" : "rootMotionYawPolicy";
+  const policy = metadata[compactKey] ?? metadata[prefixedKey];
+  return isRootMotionPolicy(policy) ? policy : null;
+}
+
 function readThreeRuntimeRootMotionPolicy(
   entry: AnimationManifestEntry,
   animationClip: ThreeAnimationClip
@@ -614,6 +642,24 @@ function readThreeRuntimeRootMotionPolicy(
   if (entryPolicy) return entryPolicy;
   const clipPolicy = animationClip.userData[THREE_ROOT_MOTION_POLICY_USER_DATA];
   return isRootMotionPolicy(clipPolicy) ? clipPolicy : null;
+}
+
+function readThreeRuntimeRootMotionChannelPolicy(
+  entry: AnimationManifestEntry,
+  animationClip: ThreeAnimationClip,
+  channel: "translation" | "yaw"
+): RootMotionPolicy | null {
+  const entryPolicy = readRootMotionChannelPolicy(entry, undefined, channel);
+  if (entryPolicy) return entryPolicy;
+  const clipPolicy = animationClip.userData[rootMotionChannelPolicyUserDataKey(channel)];
+  if (isRootMotionPolicy(clipPolicy)) return clipPolicy;
+  return readThreeRuntimeRootMotionPolicy(entry, animationClip);
+}
+
+function rootMotionChannelPolicyUserDataKey(channel: "translation" | "yaw"): string {
+  return channel === "translation"
+    ? THREE_ROOT_MOTION_TRANSLATION_POLICY_USER_DATA
+    : THREE_ROOT_MOTION_YAW_POLICY_USER_DATA;
 }
 
 function exactRootMotionAxes(value: unknown, expected: readonly string[]): boolean {

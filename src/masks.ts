@@ -20,6 +20,7 @@ export type SourceTrackMaskPolicy = {
 const FINGER_TRACK_RULE = /(thumb|index|middle|ring|little)/i;
 const FINGER_SOURCE_TRACK_RULE = /^(left|right)(Thumb|Index|Middle|Ring|Little)/;
 const ROOT_CARRIER_POSITION_RULE = /^(?:hips|root|pelvis)\.position$/i;
+const ROOT_CARRIER_ROTATION_RULE = /^(?:hips|root|pelvis)\.quaternion$/i;
 const AUTHORED_BASE_TRACK_EXCLUDE_RULES: TrackNameRule[] = [FINGER_TRACK_RULE];
 const AUTHORED_BASE_SOURCE_TRACK_EXCLUDE_RULES: SourceTrackRule[] = [FINGER_SOURCE_TRACK_RULE];
 
@@ -95,6 +96,10 @@ export function applySourceTrackPolicy(clip: AnimationClip, policy: SourceTrackM
 
 export const ROOT_TRANSLATION_EXCLUDE_POLICY: TrackMaskPolicy = {
   exclude: [ROOT_CARRIER_POSITION_RULE]
+};
+
+export const ROOT_YAW_EXCLUDE_POLICY: TrackMaskPolicy = {
+  exclude: [ROOT_CARRIER_ROTATION_RULE]
 };
 
 export const ROOT_TRANSLATION_SOURCE_EXCLUDE_POLICY: SourceTrackMaskPolicy = {
