@@ -9,6 +9,7 @@ import { runNavigationWorldCoordinatorTests } from "./navigation-world-coordinat
 import { runRootMotionAuthorityTests } from "./root-motion-authority.test.js";
 import { runRetargetingIkFacialTests } from "./retargeting-ik-facial.test.js";
 import { runThreeRuntimeTests } from "./three-runtime.test.js";
+import { runWasmKernelContractTests } from "./wasm-kernel-contract.test.js";
 
 runCharacterControllerTests();
 runCharacterAnimationGraphTests();
@@ -17,6 +18,7 @@ runCharacterAnimationRuntimeApplierTests();
 runInteractionCoordinatorTests();
 runNavigationWorldCoordinatorTests();
 runRootMotionAuthorityTests();
+runWasmKernelContractTests();
 await runCoreDataTests();
 await runMotionRuntimeTests();
 await runRetargetingIkFacialTests();

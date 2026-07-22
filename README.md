@@ -15,6 +15,7 @@ This project does not embed Ozz C++ source. It mirrors Ozz concepts and math bou
 See also:
 
 - `docs/architecture.md` for module boundaries, frame order, and the Waifu integration contract.
+- `docs/wasm-kernel-architecture.md` for the Rust/WASM hot-path migration contract, ABI, memory layout, fallback policy, benchmark harness, and phased gates.
 - `docs/character-controller.md` for Character Controller conventions, current API, usage, and roadmap boundaries.
 - `docs/validation.md` for package gates, Waifu visual gates, artifact examples, and current limitations.
 - `docs/ozz-reference.md` for Ozz attribution and intentional differences.
