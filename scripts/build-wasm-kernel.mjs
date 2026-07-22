@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,37 +6,60 @@ import { spawnSync } from "node:child_process";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = join(repoRoot, "crates", "waifu-animation-kernel", "Cargo.toml");
-const wasmOut = join(repoRoot, "target", "wasm32-unknown-unknown", "release", "waifu_animation_kernel.wasm");
 const distDir = join(repoRoot, "dist", "wasm-kernel");
-const distWasm = join(distDir, "waifu_animation_kernel.wasm");
+const scalarTarget = join(repoRoot, "target", "wasm-scalar");
+const simdTarget = join(repoRoot, "target", "wasm-simd");
+const variants = [
+  { name: "scalar", target: scalarTarget, rustflags: "", features: [] },
+  { name: "simd", target: simdTarget, rustflags: "-C target-feature=+simd128", features: ["--features", "simd"] }
+];
 const distReadme = join(distDir, "README.md");
 
 const cargo = findCargo();
-const cargoResult = spawnSync(
-  cargo,
-  ["build", "--manifest-path", manifestPath, "--release", "--target", "wasm32-unknown-unknown", "--locked"],
-  { cwd: repoRoot, stdio: "inherit" }
-);
-if (cargoResult.status !== 0) process.exit(cargoResult.status ?? 1);
-if (!existsSync(wasmOut)) throw new Error(`Rust build did not produce ${wasmOut}`);
-
 mkdirSync(distDir, { recursive: true });
-copyFileSync(wasmOut, distWasm);
+rmSync(join(distDir, "waifu_animation_kernel.wasm"), { force: true });
+for (const variant of variants) {
+  const cargoResult = spawnSync(
+    cargo,
+    [
+      "build",
+      "--manifest-path",
+      manifestPath,
+      "--release",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--locked",
+      ...variant.features
+    ],
+    {
+      cwd: repoRoot,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        CARGO_TARGET_DIR: variant.target,
+        ...(variant.rustflags ? { RUSTFLAGS: variant.rustflags } : {})
+      }
+    }
+  );
+  if (cargoResult.status !== 0) process.exit(cargoResult.status ?? 1);
+  const wasmOut = join(variant.target, "wasm32-unknown-unknown", "release", "waifu_animation_kernel.wasm");
+  if (!existsSync(wasmOut)) throw new Error(`Rust build did not produce ${wasmOut}`);
+  const distWasm = join(distDir, `waifu_animation_kernel.${variant.name}.wasm`);
+  copyFileSync(wasmOut, distWasm);
+  console.log(`waifu-animation WASM kernel: copied ${distWasm} (${statSync(distWasm).size} bytes)`);
+}
 writeFileSync(
   distReadme,
   [
     "# waifu-animation WASM kernel asset",
     "",
-    "This scalar WASM binary is generated from `crates/waifu-animation-kernel` by `npm run build:wasm`.",
-    "It is intentionally packed under `dist/wasm-kernel/` so applications can opt in with an explicit URL, bytes, or precompiled module strategy.",
-    "ABI v1.4 feature-gates retained packed sampling, pose composition, local-to-model, model × inverse-bind palettes, optional CPU skinning, and retained procedural correction descriptors.",
-    "The TypeScript public APIs remain scalar-safe when this asset is not loaded or initialization fails.",
+    "The mandatory kernel is generated from `crates/waifu-animation-kernel` by `npm run build:wasm`.",
+    "`waifu_animation_kernel.simd.wasm` uses SIMD128 matrix lanes; `waifu_animation_kernel.scalar.wasm` is the non-SIMD browser compatibility artifact.",
+    "The loader feature-detects SIMD, prefers it, and fails closed if neither selected asset initializes. There is no TypeScript numeric fallback.",
+    "ABI v1.5 reports its actual execution mode and exposes a SIMD execution counter for artifact/dispatch verification.",
     ""
   ].join("\n")
 );
-
-const size = statSync(distWasm).size;
-console.log(`waifu-animation WASM kernel: copied ${distWasm} (${size} bytes)`);
 
 function findCargo() {
   const candidates = [

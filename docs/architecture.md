@@ -1,5 +1,9 @@
 # Architecture
 
+## Mandatory numeric kernel boundary
+
+The retained animation execution chain is initialized asynchronously through the ABI v1.5 Rust/WASM kernel and then used synchronously through per-avatar contexts. SIMD-capable browsers select the SIMD128 artifact; other browsers select scalar-WASM. Asset, instantiate, ABI, feature, memory, and job failures are explicit and never route the retained runtime through TypeScript numeric code. TypeScript remains responsible for scheduling, root-motion policy, contact acquisition, import/config/debug data, renderer adaptation, lifecycle, and final public object materialization. See `wasm-kernel-architecture.md` for the exact migrated/debt inventory and memory/epoch contract.
+
 `Waifu-Animation` is the reusable animation core for humanoid avatars. The package keeps the core pose pipeline renderer-agnostic: it does not load VRM files, own a Three.js scene, connect to websocket state, or play audio. Consumers provide skeletons, clips, masks, targets, and facial inputs; the package returns deterministic pose, facial, debug, and validation data. A dedicated `three` module bridges that core data into the current Waifu Three.js renderer without putting conversion logic back in the app.
 
 ## Module Boundaries

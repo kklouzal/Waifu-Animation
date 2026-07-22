@@ -541,31 +541,22 @@ const output = {
     cpuModel: os.cpus()[0]?.model ?? "unknown",
     totalMemoryBytes: os.totalmem()
   },
-  wasmKernel:
-    wasmKernel.kind === "wasm-scalar"
-      ? {
-          status: "ready",
-          mode: wasmKernel.kind,
-          startupMs: wasmKernel.startupMs,
-          simdSupported: wasmKernel.simdSupported,
-          featureFlags: wasmKernel.kernel.featureFlags,
-          retainedPackedSetupMs,
-          retainedMemoryBytesAfterSetup: retainedPackedMemoryBytesAfterSetup,
-          runtimeFacadeSetupMs: wasmRuntimeSetupMs,
-          runtimeFacadeMemoryBytesAfterSetup: wasmRuntimeMemoryBytesAfterSetup,
-          retainedSkinningSetupMs,
-          retainedSkinningMemoryBytesAfterSetup,
-          retainedProceduralSetupMs,
-          runtimeFacadeAllocationContract:
-            "WASM bump allocations occur during backend/layer setup and are not reclaimed; steady-state update/evaluate performs no WASM memory growth, but final Transform[]/Mat4[] materialization remains JS-owned"
-        }
-      : {
-          status: "fallback",
-          mode: "typescript",
-          startupMs: wasmKernel.startupMs,
-          simdSupported: wasmKernel.simdSupported,
-          reason: wasmKernel.reason
-        },
+  wasmKernel: {
+    status: "ready",
+    mode: wasmKernel.kind,
+    startupMs: wasmKernel.startupMs,
+    simdSupported: wasmKernel.simdSupported,
+    featureFlags: wasmKernel.kernel.featureFlags,
+    retainedPackedSetupMs,
+    retainedMemoryBytesAfterSetup: retainedPackedMemoryBytesAfterSetup,
+    runtimeFacadeSetupMs: wasmRuntimeSetupMs,
+    runtimeFacadeMemoryBytesAfterSetup: wasmRuntimeMemoryBytesAfterSetup,
+    retainedSkinningSetupMs,
+    retainedSkinningMemoryBytesAfterSetup,
+    retainedProceduralSetupMs,
+    runtimeFacadeAllocationContract:
+      "WASM bump allocations occur during backend/layer setup and are not reclaimed; steady-state update/evaluate performs no WASM memory growth, but final Transform[]/Mat4[] materialization remains JS-owned"
+  },
   results,
   hotPathRank: rankHotPaths(results),
   notes: [
@@ -579,7 +570,7 @@ const output = {
     "The retained full-chain rows exclude runtime layer scheduling, Three/VRM adaptation, skinning, IK, diagnostics, and final JS Transform[] materialization; no production speedup claim is made.",
     "Retained skinning setup copies inverse binds, remaps, indices, weights, and metadata once; setup and memory are reported separately and excluded from steady-state rows.",
     "CPU skinning is optional: production GPU-skinned avatars may consume only the palette row through a TypeScript-owned upload adapter and may not use the CPU rows.",
-    "The animation_runtime_wasm rows include TypeScript scheduling/orchestration and final public JS pose/matrix materialization, but exclude async loader and layer/backend setup. Unsupported callbacks/tracks can retain scalar sampling or trigger scalar frame fallback.",
+    "The animation_runtime_wasm rows include TypeScript scheduling/orchestration and final public JS pose/matrix materialization, but exclude async loader and layer/backend setup. Unsupported callbacks/tracks fail explicitly; no TypeScript numeric fallback is timed.",
     "Smoke timings are directional only and must not be presented as a production speedup claim.",
     "Use --smoke for a fast gate and default arguments for a steadier local baseline. Override with --iterations, --warmup, --joints, --avatars, or --runtime-avatars."
   ]
@@ -612,14 +603,17 @@ function readPositiveIntegerArg(args: readonly string[], name: string, fallback:
 
 async function loadBenchmarkKernel(): Promise<WaKernelLoadResult> {
   const bytes = readBenchmarkKernelBytes();
-  if (!bytes) return await loadWaifuAnimationWasmKernel();
-  return await loadWaifuAnimationWasmKernel({ source: { bytes } });
+  if (!bytes) throw new Error("scalar WASM benchmark artifact is missing; run npm run build:wasm");
+  return await loadWaifuAnimationWasmKernel({
+    source: { bytes },
+    webAssembly: { instantiate: WebAssembly.instantiate.bind(WebAssembly), validate: () => false }
+  });
 }
 
 function readBenchmarkKernelBytes(): ArrayBuffer | undefined {
   const candidates = [
-    new URL("../dist/wasm-kernel/waifu_animation_kernel.wasm", import.meta.url),
-    new URL("../target/wasm32-unknown-unknown/release/waifu_animation_kernel.wasm", import.meta.url)
+    new URL("../dist/wasm-kernel/waifu_animation_kernel.scalar.wasm", import.meta.url),
+    new URL("../target/wasm-scalar/wasm32-unknown-unknown/release/waifu_animation_kernel.wasm", import.meta.url)
   ];
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue;
@@ -1145,7 +1139,7 @@ function frameTime(frame: number, offset: number): number {
 function createProceduralDescriptors(jointCount: number): WasmProceduralCorrection[] {
   const root = 0,
     mid = Math.min(1, jointCount - 1),
-    end = Math.min(2, jointCount - 1);
+    end = Math.min(3, jointCount - 1);
   const aimA = Math.min(3, jointCount - 1),
     aimB = Math.min(4, jointCount - 1);
   return [

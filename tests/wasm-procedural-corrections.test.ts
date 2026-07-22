@@ -18,6 +18,7 @@ import {
 import { quaternionNearlyEqual } from "./test-helpers.js";
 
 export function runWasmProceduralCorrectionTests(kernel: WaifuAnimationWasmKernel): void {
+  const expectedKind = kernel.executionMode === "simd" ? "wasm-simd" : "wasm-scalar";
   assert.ok(
     kernel.featureFlags & WA_KERNEL_FEATURE_RETAINED_PROCEDURAL_CORRECTIONS,
     "ABI v1.4 procedural feature should be advertised"
@@ -96,7 +97,7 @@ export function runWasmProceduralCorrectionTests(kernel: WaifuAnimationWasmKerne
     const expected = applyReference(skeleton, pose, corrections);
     const beforeBytes = kernel.memory.buffer.byteLength;
     const first = retained.run(1, corrections);
-    assert.equal(first.kind, "wasm-scalar", `case ${caseIndex}: retained correction status`);
+    assert.equal(first.kind, expectedKind, `case ${caseIndex}: retained correction status`);
     const actual = arena.copyPoseToTransforms(1);
     for (let joint = 0; joint < actual.length; joint += 1) {
       assert.ok(
@@ -107,22 +108,12 @@ export function runWasmProceduralCorrectionTests(kernel: WaifuAnimationWasmKerne
     for (let repeat = 0; repeat < 10; repeat += 1) {
       arena.writePose(1, pose);
       arena.localToModel(1);
-      assert.equal(retained.run(1, corrections).kind, "wasm-scalar");
+      assert.equal(retained.run(1, corrections).kind, expectedKind);
     }
     assert.equal(kernel.memory.buffer.byteLength, beforeBytes, `case ${caseIndex}: no steady growth`);
     assert.equal(retained.invokeRawForTests({ count: 1, capacityBytes: 1 }), WaKernelStatus.Capacity);
     arena.destroy();
   }
-
-  const fallbackArena = kernel.createPoseArenaContext(skeleton);
-  const fallbackContext = kernel.createProceduralCorrectionContext(fallbackArena, { capacity: 1 });
-  fallbackArena.writePose(1, createRestPose(skeleton));
-  fallbackArena.localToModel(1);
-  kernel.forceDisableForTests("procedural-fallback-test");
-  const fallback = fallbackContext.run(1, cases[0]!);
-  assert.equal(fallback.kind, "typescript", "disabled kernel should apply scalar fallback");
-  kernel.clearForcedDisableForTests();
-  fallbackArena.destroy();
 
   const independentA = kernel.createPoseArenaContext(skeleton);
   const independentB = kernel.createPoseArenaContext(skeleton);
@@ -132,7 +123,7 @@ export function runWasmProceduralCorrectionTests(kernel: WaifuAnimationWasmKerne
   independentA.localToModel(1);
   independentB.writePose(1, createRestPose(skeleton));
   independentB.localToModel(1);
-  assert.equal(contextA.run(1, cases[0]!).kind, "wasm-scalar");
+  assert.equal(contextA.run(1, cases[0]!).kind, expectedKind);
   assert.notDeepEqual(
     Array.from(independentA.poseView(1)),
     Array.from(independentB.poseView(1)),

@@ -82,7 +82,7 @@ export type CrossfadeOptions = AnimationLayerOptions & {
 export type AnimationRuntimeOptions = {
   /** Ozz-style rest-pose fallback threshold for override blending. */
   blendThreshold?: number;
-  /** Optional evaluation backend. Omitted by default, preserving the scalar TypeScript path. */
+  /** Retained evaluation backend. Mandatory-runtime factories always supply one; omission preserves the legacy direct API. */
   backend?: AnimationRuntimeBackend;
 };
 
@@ -99,16 +99,13 @@ export type AnimationRuntimeBackendSnapshot = {
   memoryBytes?: number;
 };
 
-/** Advanced opt-in seam for retained numeric evaluation backends. Scheduling remains owned by AnimationRuntime. */
+/** Retained numeric evaluation boundary. Scheduling remains owned by AnimationRuntime. */
 export interface AnimationRuntimeBackend {
   readonly skeleton: Skeleton;
   setLayer(layer: AnimationLayer, previous?: AnimationLayer): void;
   removeLayer(id: string): void;
   clear(): void;
-  evaluate(
-    activeLayers: readonly AnimationLayer[],
-    blendThreshold: number
-  ): AnimationRuntimeBackendEvaluation | undefined;
+  evaluate(activeLayers: readonly AnimationLayer[], blendThreshold: number): AnimationRuntimeBackendEvaluation;
   snapshot(): AnimationRuntimeBackendSnapshot;
   reset?(): void;
   dispose(): void;
@@ -283,8 +280,13 @@ export class AnimationRuntime {
       ...(options.mask ? { mask: options.mask } : {}),
       ...(options.sourceBasisQuaternion ? { sourceBasisQuaternion: options.sourceBasisQuaternion } : {})
     };
+    try {
+      this.backend?.setLayer(layer, previous);
+    } catch (error) {
+      if (previous) this.backend?.setLayer(previous);
+      throw error;
+    }
     this.layers.set(id, layer);
-    this.backend?.setLayer(layer, previous);
     return layer;
   }
 
@@ -332,8 +334,13 @@ export class AnimationRuntime {
             ? { sourceBasisQuaternion: existing.sourceBasisQuaternion }
             : {})
     };
+    try {
+      this.backend?.setLayer(layer, existing);
+    } catch (error) {
+      if (existing) this.backend?.setLayer(existing);
+      throw error;
+    }
     this.layers.set(id, layer);
-    this.backend?.setLayer(layer, existing);
 
     if (blendMode === "override" && options.fadeOutExisting !== false) {
       const fromIds = options.fromIds ? new Set(options.fromIds) : undefined;
@@ -448,21 +455,20 @@ export class AnimationRuntime {
       .filter((layer) => isLayerActive(layer))
       .sort(compareLayerOrder);
 
-    if (!diagnostics) {
-      const accelerated = this.backend?.evaluate(active, sanitizeBlendThreshold(this.blendThreshold));
-      if (accelerated) {
-        return {
-          ...accelerated,
-          activeLayers: active.map((layer) => ({
-            id: layer.id,
-            time: layer.time,
-            weight: layer.weight,
-            targetWeight: layer.targetWeight,
-            priority: layer.priority,
-            blendMode: layer.blendMode
-          }))
-        };
-      }
+    if (this.backend) {
+      if (diagnostics) throw new Error("runtime diagnostics require an explicit offline/reference evaluation path");
+      const accelerated = this.backend.evaluate(active, sanitizeBlendThreshold(this.blendThreshold));
+      return {
+        ...accelerated,
+        activeLayers: active.map((layer) => ({
+          id: layer.id,
+          time: layer.time,
+          weight: layer.weight,
+          targetWeight: layer.targetWeight,
+          priority: layer.priority,
+          blendMode: layer.blendMode
+        }))
+      };
     }
 
     const overrideLayers: Array<{ priority: number; pose: Pose; weight: number; mask?: JointMask }> = [];

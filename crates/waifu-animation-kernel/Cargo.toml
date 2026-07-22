@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
+simd = []
 
 [dependencies]
 libm = "0.2"

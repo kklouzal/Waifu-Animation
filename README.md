@@ -1,6 +1,6 @@
 # Waifu-Animation
 
-`Waifu-Animation` is a standalone TypeScript animation runtime for humanoid and VRM avatar projects. It is a reusable animation foundation for Waifu-style avatar applications. The core pose pipeline is browser-agnostic and renderer-agnostic, with a small optional Three.js adapter for browser renderers.
+`Waifu-Animation` is a browser- and renderer-agnostic humanoid/VRM animation library. Its migrated numeric runtime is a mandatory Rust/WASM kernel behind TypeScript lifecycle and renderer adapters.
 
 The architecture follows the Ozz Animation runtime model where it is useful for a TypeScript/VRM runtime:
 
@@ -10,12 +10,12 @@ The architecture follows the Ozz Animation runtime model where it is useful for 
 - local poses are converted to model-space matrices at a clear pipeline boundary;
 - IK, look-at, facial, viseme, scheduler, debug, and validation helpers are optional reusable systems layered around the core pose pipeline.
 
-This project does not embed Ozz C++ source. It mirrors Ozz concepts and math boundaries in TypeScript. Ozz Animation is MIT licensed; see `docs/ozz-reference.md` for attribution and design notes.
+This project does not embed Ozz C++ source. It mirrors Ozz job, SoA, hierarchy, and lifecycle boundaries in Rust/WASM and TypeScript orchestration. Ozz Animation is MIT licensed; see `docs/ozz-reference.md` for attribution and design notes.
 
 See also:
 
 - `docs/architecture.md` for module boundaries, frame order, and the Waifu integration contract.
-- `docs/wasm-kernel-architecture.md` for the Rust/WASM hot-path migration contract, ABI, memory layout, fallback policy, benchmark harness, and phased gates.
+- `docs/wasm-kernel-architecture.md` for the mandatory Rust/WASM contract, ABI, memory layout, inventory, benchmark harness, and gates.
 - `docs/character-controller.md` for Character Controller conventions, current API, usage, and roadmap boundaries.
 - `docs/validation.md` for package gates, Waifu visual gates, artifact examples, and current limitations.
 - `docs/ozz-reference.md` for Ozz attribution and intentional differences.
@@ -36,17 +36,17 @@ npm run build
 npm test
 ```
 
-`npm run build` also runs `npm run build:wasm`, compiling the internal scalar Rust/WASM kernel into `dist/wasm-kernel/waifu_animation_kernel.wasm` for explicit opt-in loading. The kernel supports packed-clip sampling, blend/additive/masks, local-to-model, model × inverse-bind palette generation, and optional CPU skinning over retained typed buffers. If WASM is unavailable, disabled, or fails ABI/feature/export validation, the existing synchronous object APIs remain scalar TypeScript.
+`npm run build` also builds `dist/wasm-kernel/waifu_animation_kernel.scalar.wasm` and `waifu_animation_kernel.simd.wasm`. Initialization feature-detects SIMD128, selects SIMD when supported, and otherwise uses scalar-WASM compatibility. Missing assets, instantiate errors, ABI mismatches, missing features, and execution-mode mismatches reject with `WaKernelInitializationError`; the migrated runtime never executes a TypeScript numeric fallback.
 
-`kernel.createSkinningContext(options)` (or the safe `createWasmSkinningContext` factory) copies immutable inverse binds, remaps, indices, weights, and layouts once. Callers then update its model/position/normal/tangent views and call `runRetained()` without per-vertex JS objects or steady-state memory growth. `runOrFallback()` and `runWasmSkinningOrFallback()` preserve scalar behavior on status errors. Three.js geometry/upload/material ownership remains outside WASM; GPU-skinned production paths may consume only `buildPalette()` and skip CPU skinning. Destroy contexts at mesh/avatar lifecycle boundaries; the WASM allocator is bump-only and does not reclaim bytes.
+`kernel.createSkinningContext(options)` copies immutable inverse binds, remaps, indices, weights, and layouts once. Callers update retained views and call `run()` or the raw `runRetained()` status seam without per-vertex JS objects or steady-state memory growth. Non-success statuses throw or remain explicit; they never invoke `skinVertices`. Three.js geometry/upload/material ownership remains outside WASM. Destroy contexts at mesh/avatar lifecycle boundaries; the allocator is bump-only and does not reclaim bytes.
 
-`AnimationRuntime` remains scalar and synchronous by default. Callers that want retained WASM composition can use `await createWasmAnimationRuntime(skeleton)`, or inject `createWasmAnimationRuntimeBackend(kernel, skeleton)` through the existing constructor's additive `backend` option. Scheduling, fades, root-motion reports, and diagnostics remain TypeScript-owned; unsupported sampling paths fall back explicitly, and final public poses/matrices are still materialized as JavaScript objects. Retained handles must be released with `runtime.dispose()` at the avatar lifecycle boundary. See `docs/wasm-kernel-architecture.md` for capacity, fallback, and bump-allocation limitations.
+Use `await createWasmAnimationRuntime(skeleton, kernelOptions)` or inject `createWasmAnimationRuntimeBackend(initializedKernel, skeleton)` after required async initialization. The resulting synchronous evaluation facade is valid only while its context is alive. Scheduling, fades, root-motion reports, and final object materialization remain TypeScript-owned; unsupported callbacks, malformed jobs, and capacity failures are explicit errors. Retained handles must be released with `runtime.dispose()`. The legacy direct TypeScript numeric APIs remain temporarily package-reachable for compatibility and test oracles, but are not reachable from this retained runtime; see the exact debt inventory in `docs/wasm-kernel-architecture.md`.
 
 ## Public Modules
 
 - `math`: deterministic random helpers, transform math, quaternion interpolation, matrix composition.
 - `skeleton`: Ozz-style skeleton representation, humanoid mapping, local-to-model conversion.
-- `wasm-kernel`: optional explicit bytes/module/URL loader, immutable retained packed-clip assets, per-avatar sampling caches, reusable SoA pose arenas, blend/additive/mask jobs, and direct local-to-model composition. Existing object APIs remain scalar TypeScript by default; retained sampling is explicit opt-in and has an explicit scalar fallback adapter.
+- `wasm-kernel`: required scalar/SIMD asset loader, typed initialization/job failures, immutable packed assets, per-avatar sampling caches, reusable SoA pose arenas, composition, local-to-model, skinning, and procedural jobs.
 - `attachments`: renderer-agnostic Ozz-style joint attachment transform helpers.
 - `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
 - `tracks`: generic user-channel tracks, sampling, optimization, and bounded edge triggering.

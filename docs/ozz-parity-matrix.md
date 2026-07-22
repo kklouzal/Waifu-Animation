@@ -6,7 +6,7 @@ Ozz is MIT licensed. `Waifu-Animation` may reimplement compatible concepts and p
 
 ## Status And Priority
 
-- `implemented`: the current TypeScript library covers the capability at the reusable runtime/API level.
+- `implemented`: the current library covers the capability at the reusable runtime/API level.
 - `partial`: a useful subset exists, but material Ozz behavior or sample coverage is missing.
 - `missing`: no source-level equivalent was found.
 - `intentionally different`: the capability belongs at a different boundary for a TypeScript/browser/VRM library.
@@ -21,8 +21,9 @@ Priority:
 
 ## Intentional Non-1:1 Differences
 
-- `Waifu-Animation` is TypeScript and stores transforms as AoS objects/typed arrays. Ozz stores runtime skeleton and animation data in C++ SoA/SIMD-friendly layouts.
-- Ozz jobs validate raw pointer/span inputs and operate on caller-owned buffers. Waifu exposes safer TypeScript functions/classes that allocate ordinary arrays unless an output parameter already exists.
+- `Waifu-Animation` ABI v1.5 stores retained transforms as padded four-joint SoA and model/palette matrices as contiguous caller-owned spans. TypeScript object materialization stays outside retained hot loops.
+- Like Ozz jobs, kernel jobs validate handles, generations, alignment, bounds, capacities, hierarchy/ranges, and outputs before execution. TypeScript owns lifecycle, scheduling, import, and renderer adaptation.
+- Scalar-WASM is the non-SIMD compatibility implementation. SIMD-WASM uses v128 matrix lanes for local-to-model and skinning palettes behind the same ABI; jobs without a proven SIMD lane retain exact scalar-WASM dispatch inside the SIMD artifact.
 - Three.js and VRM concerns stay in `src/three.ts` and app adapters. Core pose math should stay renderer-agnostic.
 - Rendering, visual capture, audio, websocket state, WebGL scenes, and final avatar presentation remain app-owned.
 - Waifu uses `.waifuanim.bin` for browser-ready animation payloads. It does not read or write Ozz `.ozz` archives.

@@ -211,7 +211,7 @@ export type LocalToModelPoseRangeOptions = {
   to?: number;
   /** When true, keeps the `from` joint model matrix as-is and updates only its descendants. */
   fromExcluded?: boolean;
-  /** Optional retained accelerated local-to-model context. Falls back to scalar TypeScript when unavailable. */
+  /** Optional retained local-to-model context. If supplied, failure is explicit; this never falls back to TypeScript. */
   kernel?: LocalToModelPoseKernel;
 };
 
@@ -857,8 +857,11 @@ export function updateLocalToModelPoseRange(
   if (to < 0) return out;
 
   const kernelOptions = createKernelRangeOptions(options, from, to);
-  const accelerated = options.kernel?.tryUpdateLocalToModelPoseRange(skeleton, localPose, out, kernelOptions);
-  if (accelerated) return accelerated;
+  if (options.kernel) {
+    const retained = options.kernel.tryUpdateLocalToModelPoseRange(skeleton, localPose, out, kernelOptions);
+    if (!retained) throw new Error("retained local-to-model job rejected the supplied skeleton or pose");
+    return retained;
+  }
 
   const selected = new Uint8Array(jointCount);
   for (let index = 0; index < jointCount; index += 1) {

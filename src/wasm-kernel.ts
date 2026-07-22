@@ -1,24 +1,11 @@
 import { type Mat4, type Transform, normalizeQuat } from "./math.js";
-import {
-  applyAimIkModelCorrection,
-  applyTwoBoneIkLocalCorrections,
-  solveAimIk,
-  solveTwoBoneIkModel
-} from "./ik-core.js";
 import { NO_PARENT, type LocalToModelPoseRangeOptions, type Skeleton } from "./skeleton.js";
 import {
-  samplePackedRuntimeAnimationToPose,
   validatePackedRuntimeAnimation,
   type PackedRuntimeAnimation,
   type PackedRuntimeAnimationKeyController
 } from "./packed-runtime.js";
-import {
-  skinVertices,
-  type SkinningJob,
-  type SkinningNumericArray,
-  type SkinningResult,
-  type SkinningWeightMode
-} from "./skinning.js";
+import { type SkinningJob, type SkinningNumericArray, type SkinningWeightMode } from "./skinning.js";
 
 export const WA_KERNEL_ABI_MAJOR = 1;
 /** Oldest ABI v1 minor accepted by the scalar local-to-model facade. */
@@ -27,6 +14,7 @@ export const WA_KERNEL_POSE_JOBS_ABI_MINOR = 1;
 export const WA_KERNEL_PACKED_SAMPLING_ABI_MINOR = 2;
 export const WA_KERNEL_SKINNING_ABI_MINOR = 3;
 export const WA_KERNEL_PROCEDURAL_CORRECTIONS_ABI_MINOR = 4;
+export const WA_KERNEL_EXECUTION_MODE_ABI_MINOR = 5;
 
 export const WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL = 1 << 0;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_BLEND = 1 << 1;
@@ -37,7 +25,7 @@ export const WA_KERNEL_FEATURE_RETAINED_SKINNING = 1 << 5;
 export const WA_KERNEL_FEATURE_RETAINED_PROCEDURAL_CORRECTIONS = 1 << 6;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_JOBS =
   WA_KERNEL_FEATURE_SCALAR_POSE_BLEND | WA_KERNEL_FEATURE_SCALAR_ADDITIVE | WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS;
-export const WA_KERNEL_FEATURE_SIMD_LOCAL_TO_MODEL = 1 << 16;
+export const WA_KERNEL_FEATURE_SIMD_MATRIX_JOBS = 1 << 16;
 export const WA_KERNEL_FEATURE_DEBUG_SELF_TEST = 0x80000000;
 
 export enum WaKernelStatus {
@@ -59,27 +47,54 @@ export type WaKernelLoadSource =
 export type WaKernelFetch = (input: string | URL, init?: RequestInit) => Promise<unknown>;
 
 export type WaKernelLoadOptions = {
-  disabled?: boolean;
+  /** Compatibility scalar asset. Defaults to the packaged scalar URL. */
   source?: WaKernelLoadSource;
+  /** SIMD128 asset. Defaults to the packaged SIMD URL. */
+  simdSource?: WaKernelLoadSource;
   requiredFeatures?: number;
   webAssembly?: Pick<typeof WebAssembly, "instantiate" | "validate"> | undefined;
 };
 
-export type WaKernelLoadResult =
-  | {
-      kind: "wasm-scalar";
-      kernel: WaifuAnimationWasmKernel;
-      startupMs: number;
-      simdSupported: boolean;
-    }
-  | {
-      kind: "typescript";
-      kernel: null;
-      reason: string;
-      startupMs: number;
-      simdSupported: boolean;
-      error?: unknown;
-    };
+export type WaKernelExecutionMode = "scalar" | "simd";
+export type WaKernelLoadResult = {
+  kind: "wasm-scalar" | "wasm-simd";
+  mode: WaKernelExecutionMode;
+  kernel: WaifuAnimationWasmKernel;
+  startupMs: number;
+  simdSupported: boolean;
+};
+
+export type WaKernelInitializationErrorCode =
+  | "webassembly-unavailable"
+  | "missing-asset"
+  | "asset-load-failed"
+  | "instantiate-failed"
+  | "abi-mismatch"
+  | "required-feature-missing"
+  | "malformed-exports"
+  | "memory-initialization-failed";
+
+export class WaKernelInitializationError extends Error {
+  readonly name = "WaKernelInitializationError";
+  constructor(
+    readonly code: WaKernelInitializationErrorCode,
+    message: string,
+    readonly cause?: unknown
+  ) {
+    super(message);
+  }
+}
+
+export class WaKernelJobError extends Error {
+  readonly name = "WaKernelJobError";
+  constructor(
+    readonly job: string,
+    readonly status: WaKernelStatus,
+    message = `${job} failed: ${statusName(status)}`
+  ) {
+    super(message);
+  }
+}
 
 export type WaKernelExportValidation =
   | {
@@ -101,6 +116,8 @@ export type WaKernelRawExports = {
   wa_version_major: () => number;
   wa_version_minor: () => number;
   wa_feature_flags: () => number;
+  wa_execution_mode: () => number;
+  wa_simd_execution_count: () => number;
   wa_memory_epoch: () => number;
   wa_refresh_views_required: (observedEpoch: number) => number;
   wa_heap_base: () => number;
@@ -289,9 +306,7 @@ export type WasmPackedSamplingOptions = {
   resetCache?: boolean;
 };
 
-export type WasmPackedSamplingFallbackResult =
-  | { kind: "wasm-scalar"; status: WaKernelStatus }
-  | { kind: "typescript"; status: WaKernelStatus.Unsupported; reason: string };
+export type WasmPackedSamplingResult = { kind: "wasm-scalar" | "wasm-simd"; status: WaKernelStatus };
 
 export type WasmSkinningContextOptions = SkinningJob & {
   /** Required fixed vertex count for the retained job. */
@@ -304,20 +319,13 @@ export type WasmSkinningContextOptions = SkinningJob & {
   vectorPalette?: boolean;
 };
 
-export type WasmSkinningRunResult =
-  | {
-      kind: "wasm-scalar";
-      status: WaKernelStatus.Ok;
-      positions: Float32Array;
-      normals?: Float32Array;
-      tangents?: Float32Array;
-    }
-  | {
-      kind: "typescript";
-      status: WaKernelStatus;
-      reason: string;
-      result: SkinningResult;
-    };
+export type WasmSkinningRunResult = {
+  kind: "wasm-scalar" | "wasm-simd";
+  status: WaKernelStatus.Ok;
+  positions: Float32Array;
+  normals?: Float32Array;
+  tangents?: Float32Array;
+};
 
 export type WasmRawBlendInvocation = {
   avatarHandle: number;
@@ -392,8 +400,8 @@ const SKINNING_FLAG_HAS_REMAPS = 1 << 0;
 const SKINNING_DESCRIPTOR_NORMALS = 1 << 0;
 const SKINNING_DESCRIPTOR_TANGENTS = 1 << 1;
 
-// Minimal module using one SIMD instruction. This is a capability seam only;
-// Phase 1 always selects scalar-WASM when WASM is enabled.
+// Minimal SIMD128 module used only for engine feature detection. The selected
+// SIMD artifact independently reports and proves actual SIMD job execution.
 const WASM_SIMD_PROBE = new Uint8Array([
   0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b, 0x03, 0x02, 0x01, 0x00,
   0x0a, 0x16, 0x01, 0x14, 0x00, 0xfd, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -404,46 +412,48 @@ export async function loadWaifuAnimationWasmKernel(options: WaKernelLoadOptions 
   const start = nowMs();
   const webAssembly = options.webAssembly ?? globalThis.WebAssembly;
   const simdSupported = detectWaKernelSimdSupport(webAssembly);
-  if (options.disabled === true || isKernelDisabledByEnvironment()) {
-    return { kind: "typescript", kernel: null, reason: "disabled", startupMs: elapsedMs(start), simdSupported };
-  }
   if (!webAssembly || typeof webAssembly.instantiate !== "function") {
+    throw new WaKernelInitializationError("webassembly-unavailable", "WebAssembly is required by waifu-animation");
+  }
+  const mode: WaKernelExecutionMode = simdSupported ? "simd" : "scalar";
+  const source =
+    mode === "simd"
+      ? (options.simdSource ?? packagedKernelSource("simd"))
+      : (options.source ?? packagedKernelSource("scalar"));
+  try {
+    const instance = await instantiateKernel(source, webAssembly);
+    const requiredFeatures =
+      (options.requiredFeatures ?? WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL) |
+      (mode === "simd" ? WA_KERNEL_FEATURE_SIMD_MATRIX_JOBS : 0);
+    const validation = validateWaifuAnimationKernelExports(instance.exports, requiredFeatures);
+    if (!validation.ok) {
+      const code = validation.reason.includes("feature")
+        ? "required-feature-missing"
+        : validation.reason.includes("abi")
+          ? "abi-mismatch"
+          : "malformed-exports";
+      throw new WaKernelInitializationError(code, `invalid ${mode} WASM kernel: ${validation.reason}`);
+    }
+    const kernel = WaifuAnimationWasmKernel.fromExports(instance.exports, elapsedMs(start), mode);
     return {
-      kind: "typescript",
-      kernel: null,
-      reason: "webassembly-unavailable",
+      kind: mode === "simd" ? "wasm-simd" : "wasm-scalar",
+      mode,
+      kernel,
       startupMs: elapsedMs(start),
       simdSupported
     };
-  }
-  if (!options.source) {
-    return { kind: "typescript", kernel: null, reason: "no-source", startupMs: elapsedMs(start), simdSupported };
-  }
-
-  try {
-    const instance = await instantiateKernel(options.source, webAssembly);
-    const validation = validateWaifuAnimationKernelExports(instance.exports, options.requiredFeatures);
-    if (!validation.ok) {
-      return {
-        kind: "typescript",
-        kernel: null,
-        reason: validation.reason,
-        startupMs: elapsedMs(start),
-        simdSupported
-      };
-    }
-    const kernel = WaifuAnimationWasmKernel.fromExports(instance.exports, elapsedMs(start));
-    return { kind: "wasm-scalar", kernel, startupMs: elapsedMs(start), simdSupported };
   } catch (error) {
-    return {
-      kind: "typescript",
-      kernel: null,
-      reason: "instantiate-failed",
-      startupMs: elapsedMs(start),
-      simdSupported,
+    if (error instanceof WaKernelInitializationError) throw error;
+    throw new WaKernelInitializationError(
+      "instantiate-failed",
+      `failed to initialize required ${mode} WASM kernel`,
       error
-    };
+    );
   }
+}
+
+function packagedKernelSource(mode: WaKernelExecutionMode): WaKernelLoadSource {
+  return { url: new URL(`../dist/wasm-kernel/waifu_animation_kernel.${mode}.wasm`, import.meta.url) };
 }
 
 export function validateWaifuAnimationKernelExports(
@@ -455,6 +465,8 @@ export function validateWaifuAnimationKernelExports(
     "wa_version_major",
     "wa_version_minor",
     "wa_feature_flags",
+    "wa_execution_mode",
+    "wa_simd_execution_count",
     "wa_memory_epoch",
     "wa_refresh_views_required",
     "wa_heap_base",
@@ -473,6 +485,8 @@ export function validateWaifuAnimationKernelExports(
   const featureFlags = (exports.wa_feature_flags as () => number)() >>> 0;
   if (major !== WA_KERNEL_ABI_MAJOR) return { ok: false, reason: "abi-major-mismatch", major, minor, featureFlags };
   if (minor < WA_KERNEL_ABI_MINOR) return { ok: false, reason: "abi-minor-too-old", major, minor, featureFlags };
+  if (minor < WA_KERNEL_EXECUTION_MODE_ABI_MINOR)
+    return { ok: false, reason: "execution-mode-abi-minor-too-old", major, minor, featureFlags };
   if ((featureFlags & requiredFeatures) >>> 0 !== requiredFeatures >>> 0) {
     return { ok: false, reason: "missing-required-feature", major, minor, featureFlags };
   }
@@ -559,34 +573,54 @@ export function statusName(status: number): string {
 export class WaifuAnimationWasmKernel {
   readonly startupMs: number;
   readonly featureFlags: number;
+  readonly executionMode: WaKernelExecutionMode;
   private readonly exports: WaKernelRawExports;
   private readonly scratchOffset: number;
   private cachedBuffer: ArrayBuffer;
   private cachedEpoch: number;
   private dataView: DataView;
-  private forcedDisableReason: string | undefined;
-  private quarantinedReason: string | undefined;
 
-  private constructor(exports: WaKernelRawExports, startupMs: number, scratchOffset: number) {
+  private constructor(
+    exports: WaKernelRawExports,
+    startupMs: number,
+    scratchOffset: number,
+    executionMode: WaKernelExecutionMode
+  ) {
     this.exports = exports;
     this.startupMs = startupMs;
     this.featureFlags = exports.wa_feature_flags() >>> 0;
+    this.executionMode = executionMode;
     this.scratchOffset = scratchOffset;
     this.cachedBuffer = exports.memory.buffer;
     this.cachedEpoch = exports.wa_memory_epoch();
     this.dataView = new DataView(this.cachedBuffer);
   }
 
-  static fromExports(exportsObject: WebAssembly.Exports, startupMs = 0): WaifuAnimationWasmKernel {
+  static fromExports(
+    exportsObject: WebAssembly.Exports,
+    startupMs = 0,
+    expectedMode?: WaKernelExecutionMode
+  ): WaifuAnimationWasmKernel {
     const validation = validateWaifuAnimationKernelExports(exportsObject);
     if (!validation.ok) throw new Error(`invalid waifu-animation WASM kernel: ${validation.reason}`);
     const exports = exportsObject as unknown as WaKernelRawExports;
+    const actualMode: WaKernelExecutionMode = exports.wa_execution_mode() === 1 ? "simd" : "scalar";
+    if (expectedMode !== undefined && actualMode !== expectedMode) {
+      throw new WaKernelInitializationError(
+        "required-feature-missing",
+        `selected ${expectedMode} kernel reported ${actualMode} execution mode`
+      );
+    }
     const heapBase = exports.wa_heap_base();
     const status = exports.wa_alloc(SCRATCH_BYTES, DEFAULT_ALIGNMENT, heapBase);
-    if (status !== 0) throw new Error(`failed to allocate WASM kernel scratch: ${statusName(status)}`);
+    if (status !== 0)
+      throw new WaKernelInitializationError(
+        "memory-initialization-failed",
+        `failed to allocate WASM kernel scratch: ${statusName(status)}`
+      );
     const dataView = new DataView(exports.memory.buffer);
     const scratchOffset = dataView.getUint32(heapBase, true);
-    return new WaifuAnimationWasmKernel(exports, startupMs, scratchOffset);
+    return new WaifuAnimationWasmKernel(exports, startupMs, scratchOffset, actualMode);
   }
 
   get memory(): WebAssembly.Memory {
@@ -598,12 +632,12 @@ export class WaifuAnimationWasmKernel {
     return this.cachedEpoch;
   }
 
-  get disabledReason(): string | undefined {
-    return this.forcedDisableReason ?? this.quarantinedReason;
+  get available(): boolean {
+    return true;
   }
 
-  get available(): boolean {
-    return this.disabledReason === undefined;
+  get simdExecutionCount(): number {
+    return this.exports.wa_simd_execution_count() >>> 0;
   }
 
   createLocalToModelContext(skeleton: Skeleton): WasmLocalToModelContext {
@@ -643,21 +677,9 @@ export class WaifuAnimationWasmKernel {
     return new WasmProceduralCorrectionContext(this, arena, options);
   }
 
-  forceDisableForTests(reason = "forced-disable"): void {
-    this.forcedDisableReason = reason;
-  }
-
-  clearForcedDisableForTests(): void {
-    this.forcedDisableReason = undefined;
-  }
-
   resetForTests(): WaKernelStatus {
     const status = this.exports.wa_reset_for_test?.() ?? WaKernelStatus.Unsupported;
     this.refreshViewsIfNeeded();
-    if (status === 0) {
-      this.forcedDisableReason = undefined;
-      this.quarantinedReason = undefined;
-    }
     return status;
   }
 
@@ -668,7 +690,6 @@ export class WaifuAnimationWasmKernel {
   }
 
   allocateBytes(sizeBytes: number, alignment = DEFAULT_ALIGNMENT): number {
-    if (!this.available) throw new Error(`WASM kernel is disabled: ${this.disabledReason}`);
     const status = this.exports.wa_alloc(sizeBytes, alignment, this.scratchOffset);
     this.refreshViewsIfNeeded();
     if (status !== 0) throw new Error(`WASM kernel allocation failed: ${statusName(status)}`);
@@ -676,7 +697,6 @@ export class WaifuAnimationWasmKernel {
   }
 
   createSkeleton(parentIndicesOffset: number, jointCount: number, parentIndicesCapacityBytes: number): number {
-    if (!this.available) throw new Error(`WASM kernel is disabled: ${this.disabledReason}`);
     const status = this.exports.wa_create_skeleton(
       parentIndicesOffset,
       jointCount,
@@ -689,7 +709,6 @@ export class WaifuAnimationWasmKernel {
   }
 
   createAvatar(skeletonHandle: number, jointCount: number): number {
-    if (!this.available) throw new Error(`WASM kernel is disabled: ${this.disabledReason}`);
     const status = this.exports.wa_create_avatar(skeletonHandle, jointCount, 0, this.scratchOffset);
     this.refreshViewsIfNeeded();
     if (status !== 0) throw new Error(`WASM kernel avatar creation failed: ${statusName(status)}`);
@@ -705,8 +724,8 @@ export class WaifuAnimationWasmKernel {
     valuesCount: number,
     duration: number
   ): number {
-    if (!this.available || !this.exports.wa_create_packed_clip) {
-      throw new Error(`WASM retained packed sampling is disabled: ${this.disabledReason ?? "missing export"}`);
+    if (!this.exports.wa_create_packed_clip) {
+      throw new Error("WASM retained packed sampling export is missing");
     }
     const status = this.exports.wa_create_packed_clip(
       tracksOffset,
@@ -728,8 +747,8 @@ export class WaifuAnimationWasmKernel {
   }
 
   createSamplingContext(clipHandle: number, lowerKeysOffset: number, trackCount: number): number {
-    if (!this.available || !this.exports.wa_create_sampling_context) {
-      throw new Error(`WASM retained packed sampling is disabled: ${this.disabledReason ?? "missing export"}`);
+    if (!this.exports.wa_create_sampling_context) {
+      throw new Error("WASM retained packed sampling export is missing");
     }
     const status = this.exports.wa_create_sampling_context(
       clipHandle,
@@ -757,7 +776,7 @@ export class WaifuAnimationWasmKernel {
     weightMode: SkinningWeightMode;
   }): number {
     const create = this.exports.wa_create_skinning_job;
-    if (!this.available || !create) throw new Error("WASM retained skinning is unavailable");
+    if (!create) throw new Error("WASM retained skinning is unavailable");
     const status = create(
       input.inverseBindOffset,
       input.paletteCount,
@@ -790,7 +809,7 @@ export class WaifuAnimationWasmKernel {
     paletteCapacityBytes: number;
   }): WaKernelStatus {
     const invoke = this.exports.wa_build_skinning_palette;
-    if (!this.available || !invoke) return WaKernelStatus.Unsupported;
+    if (!invoke) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(
       invoke(
         input.handle,
@@ -805,12 +824,12 @@ export class WaifuAnimationWasmKernel {
 
   invokeSkinning(handle: number, descriptorOffset: number): WaKernelStatus {
     const invoke = this.exports.wa_skin_vertices;
-    if (!this.available || !invoke) return WaKernelStatus.Unsupported;
+    if (!invoke) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(invoke(handle, descriptorOffset));
   }
 
   resetSamplingContext(contextHandle: number): WaKernelStatus {
-    if (!this.available || !this.exports.wa_reset_sampling_context) return WaKernelStatus.Unsupported;
+    if (!this.exports.wa_reset_sampling_context) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(this.exports.wa_reset_sampling_context(contextHandle));
   }
 
@@ -827,7 +846,6 @@ export class WaifuAnimationWasmKernel {
     flags: number;
     ratio: boolean;
   }): WaKernelStatus {
-    if (!this.available) return WaKernelStatus.Unsupported;
     const invoke = input.ratio ? this.exports.wa_sample_packed_clip_ratio : this.exports.wa_sample_packed_clip;
     if (!invoke) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(
@@ -859,7 +877,6 @@ export class WaifuAnimationWasmKernel {
     jointCount: number,
     optionsOffset: number
   ): WaKernelStatus {
-    if (!this.available) return WaKernelStatus.Unsupported;
     const status = this.exports.wa_local_to_model(
       avatarHandle,
       localPoseOffset,
@@ -868,14 +885,11 @@ export class WaifuAnimationWasmKernel {
       optionsOffset
     );
     this.refreshViewsIfNeeded();
-    if (status === 7 || status === 6) {
-      this.quarantinedReason = statusName(status);
-    }
     return status;
   }
 
   invokeBlendPoses(input: WasmRawBlendInvocation): WaKernelStatus {
-    if (!this.available || !this.exports.wa_blend_poses) return WaKernelStatus.Unsupported;
+    if (!this.exports.wa_blend_poses) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(
       this.exports.wa_blend_poses(
         input.avatarHandle,
@@ -895,7 +909,7 @@ export class WaifuAnimationWasmKernel {
   }
 
   invokeAdditiveDelta(input: WasmRawAdditiveDeltaInvocation): WaKernelStatus {
-    if (!this.available || !this.exports.wa_additive_delta) return WaKernelStatus.Unsupported;
+    if (!this.exports.wa_additive_delta) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(
       this.exports.wa_additive_delta(
         input.avatarHandle,
@@ -911,7 +925,7 @@ export class WaifuAnimationWasmKernel {
   }
 
   invokeApplyAdditive(input: WasmRawApplyAdditiveInvocation): WaKernelStatus {
-    if (!this.available || !this.exports.wa_apply_additive) return WaKernelStatus.Unsupported;
+    if (!this.exports.wa_apply_additive) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(
       this.exports.wa_apply_additive(
         input.avatarHandle,
@@ -931,7 +945,7 @@ export class WaifuAnimationWasmKernel {
   }
 
   invokeNormalizePose(input: WasmRawNormalizePoseInvocation): WaKernelStatus {
-    if (!this.available || !this.exports.wa_normalize_pose) return WaKernelStatus.Unsupported;
+    if (!this.exports.wa_normalize_pose) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(
       this.exports.wa_normalize_pose(
         input.avatarHandle,
@@ -956,7 +970,7 @@ export class WaifuAnimationWasmKernel {
     descriptorsCapacityBytes: number,
     optionsOffset: number
   ): WaKernelStatus {
-    if (!this.available || !this.exports.wa_apply_procedural_corrections) return WaKernelStatus.Unsupported;
+    if (!this.exports.wa_apply_procedural_corrections) return WaKernelStatus.Unsupported;
     return this.finishPoseJobStatus(
       this.exports.wa_apply_procedural_corrections(
         avatarHandle,
@@ -993,7 +1007,6 @@ export class WaifuAnimationWasmKernel {
 
   private finishPoseJobStatus(status: number): WaKernelStatus {
     this.refreshViewsIfNeeded();
-    if (status === 7 || status === 6) this.quarantinedReason = statusName(status);
     return status;
   }
 }
@@ -1167,7 +1180,7 @@ export class WasmSkinningContext {
   }
 
   get available(): boolean {
-    return !this.destroyed && this.kernel.available;
+    return !this.destroyed;
   }
 
   get modelMatrices(): Float32Array {
@@ -1261,28 +1274,17 @@ export class WasmSkinningContext {
     return paletteStatus === WaKernelStatus.Ok ? this.skin() : paletteStatus;
   }
 
-  runOrFallback(fallbackJob?: SkinningJob): WasmSkinningRunResult {
+  run(): WasmSkinningRunResult {
     const status = this.runRetained();
-    if (status === WaKernelStatus.Ok) {
-      const result: WasmSkinningRunResult = {
-        kind: "wasm-scalar",
-        status: WaKernelStatus.Ok,
-        positions: this.outPositions
-      };
-      if (this.outNormals) result.normals = this.outNormals;
-      if (this.outTangents) result.tangents = this.outTangents;
-      return result;
-    }
-    const result = skinVertices(fallbackJob ?? this.createFallbackJob());
-    this.outPositions.set(result.positions);
-    if (this.outNormals && result.normals) this.outNormals.set(result.normals);
-    if (this.outTangents && result.tangents) this.outTangents.set(result.tangents);
-    return {
-      kind: "typescript",
-      status,
-      reason: this.kernel.disabledReason ?? statusName(status),
-      result
+    if (status !== WaKernelStatus.Ok) throw new WaKernelJobError("skinning", status);
+    const result: WasmSkinningRunResult = {
+      kind: this.kernel.executionMode === "simd" ? "wasm-simd" : "wasm-scalar",
+      status: WaKernelStatus.Ok,
+      positions: this.outPositions
     };
+    if (this.outNormals) result.normals = this.outNormals;
+    if (this.outTangents) result.tangents = this.outTangents;
+    return result;
   }
 
   invokeRawPaletteForTests(
@@ -1399,82 +1401,18 @@ export class WasmSkinningContext {
       target[index] = source[index] ?? Number.NaN;
     }
   }
-
-  private createFallbackJob(): SkinningJob {
-    const models = materializeMat4View(this.modelMatrices, this.modelMatrixCount);
-    const inverse = materializeMat4View(this.inverseBindMatricesSnapshot, this.paletteCount);
-    const indices = new Uint32Array(this.cachedBuffer, this.indicesOffset, this.vertexCount * this.influences);
-    const storedWeightCount = this.weightMode === "explicit" ? this.influences : this.influences - 1;
-    const weights = new Float32Array(this.cachedBuffer, this.weightsOffset, this.vertexCount * storedWeightCount);
-    const job: SkinningJob = {
-      vertexCount: this.vertexCount,
-      influences: this.influences,
-      modelMatrices: models,
-      inverseBindMatrices: inverse,
-      jointIndices: indices,
-      jointWeights: weights,
-      jointIndexStride: this.influences,
-      jointWeightStride: storedWeightCount,
-      weightMode: this.weightMode,
-      positions: { data: this.positions, offset: this.layouts.positions.offset, stride: this.layouts.positions.stride },
-      outPositions: {
-        data: this.outPositions,
-        offset: this.layouts.outPositions.offset,
-        stride: this.layouts.outPositions.stride
-      }
-    };
-    if (this.remapOffset !== 0)
-      job.jointRemaps = new Float32Array(this.cachedBuffer, this.remapOffset, this.paletteCount);
-    if (this.normals && this.layouts.normals && this.outNormals && this.layouts.outNormals) {
-      job.normals = { data: this.normals, offset: this.layouts.normals.offset, stride: this.layouts.normals.stride };
-      job.outNormals = {
-        data: this.outNormals,
-        offset: this.layouts.outNormals.offset,
-        stride: this.layouts.outNormals.stride
-      };
-    }
-    if (this.tangents && this.layouts.tangents && this.outTangents && this.layouts.outTangents) {
-      job.tangents = {
-        data: this.tangents,
-        offset: this.layouts.tangents.offset,
-        stride: this.layouts.tangents.stride
-      };
-      job.outTangents = {
-        data: this.outTangents,
-        offset: this.layouts.outTangents.offset,
-        stride: this.layouts.outTangents.stride
-      };
-    }
-    if (this.vectorPalette)
-      job.jointInverseTransposeMatrices = materializeMat4View(this.vectorPalette, this.paletteCount);
-    return job;
-  }
 }
 
 export function createWasmSkinningContext(
   kernelOrLoadResult: WaifuAnimationWasmKernel | WaKernelLoadResult,
   options: WasmSkinningContextOptions
-): WasmSkinningContext | undefined {
+): WasmSkinningContext {
   const kernel = "kind" in kernelOrLoadResult ? kernelOrLoadResult.kernel : kernelOrLoadResult;
-  if (!kernel) return undefined;
-  try {
-    return kernel.createSkinningContext(options);
-  } catch {
-    return undefined;
-  }
+  return kernel.createSkinningContext(options);
 }
 
-export function runWasmSkinningOrFallback(
-  context: WasmSkinningContext | undefined,
-  fallbackJob: SkinningJob
-): WasmSkinningRunResult {
-  if (context) return context.runOrFallback(fallbackJob);
-  return {
-    kind: "typescript",
-    status: WaKernelStatus.Unsupported,
-    reason: "WASM retained skinning unavailable",
-    result: skinVertices(fallbackJob)
-  };
+export function runWasmSkinning(context: WasmSkinningContext): WasmSkinningRunResult {
+  return context.run();
 }
 
 /** Immutable packed animation copied once into retained WASM memory. */
@@ -1549,7 +1487,7 @@ export class WasmPackedClipAsset {
   }
 
   get available(): boolean {
-    return !this.destroyed && this.kernel.available;
+    return !this.destroyed;
   }
 
   destroy(): WaKernelStatus {
@@ -1629,25 +1567,14 @@ export class WasmPackedClipSamplingContext {
     return this.sample(ratio, outputPose, true, options);
   }
 
-  sampleTimeOrFallback(
+  sampleTimeChecked(
     time: number,
     outputPose: number,
     options: WasmPackedSamplingOptions = {}
-  ): WasmPackedSamplingFallbackResult {
+  ): WasmPackedSamplingResult {
     const status = this.sampleTime(time, outputPose, options);
-    if (status !== WaKernelStatus.Unsupported) return { kind: "wasm-scalar", status };
-    this.arena.writePose(
-      outputPose,
-      samplePackedRuntimeAnimationToPose(this.arena.skeleton, this.asset.animation, time, {
-        loop: options.loop ?? this.asset.animation.loop,
-        restPose: this.arena.skeleton.restPose
-      })
-    );
-    return {
-      kind: "typescript",
-      status: WaKernelStatus.Unsupported,
-      reason: this.kernel.disabledReason ?? "unsupported"
-    };
+    if (status !== WaKernelStatus.Ok) throw new WaKernelJobError("packed-sampling", status);
+    return { kind: this.kernel.executionMode === "simd" ? "wasm-simd" : "wasm-scalar", status };
   }
 
   invokeRawForTests(
@@ -1681,7 +1608,7 @@ export class WasmPackedClipSamplingContext {
     ratio: boolean,
     options: WasmPackedSamplingOptions | Omit<WasmPackedSamplingOptions, "loop">
   ): WaKernelStatus {
-    if (this.destroyed || !this.asset.available || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (this.destroyed || !this.asset.available) return WaKernelStatus.Unsupported;
     if (outputPose === 0) return WaKernelStatus.InvalidArgument;
     const requestedLoop = "loop" in options ? options.loop : undefined;
     const loop = !ratio && (requestedLoop ?? this.asset.animation.loop);
@@ -1866,7 +1793,7 @@ export class WasmPoseArenaContext {
   }
 
   blend(layers: readonly WasmPoseBlendLayer[], options: WasmPoseBlendOptions): WaKernelStatus {
-    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (this.destroyed) return WaKernelStatus.BadHandle;
     if (layers.length > this.layerCapacity) return WaKernelStatus.Capacity;
     this.refreshViews();
     const dataView = this.kernel.dataViewForCurrentMemory();
@@ -1913,7 +1840,7 @@ export class WasmPoseArenaContext {
   }
 
   additiveDelta(restPose: number, samplePose: number, outputPose: number): WaKernelStatus {
-    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (this.destroyed) return WaKernelStatus.BadHandle;
     return this.kernel.invokeAdditiveDelta({
       avatarHandle: this.avatarHandle,
       restPoseOffset: this.poseOffset(restPose),
@@ -1934,7 +1861,7 @@ export class WasmPoseArenaContext {
     mask?: number,
     maskCount?: number
   ): WaKernelStatus {
-    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (this.destroyed) return WaKernelStatus.BadHandle;
     let resolvedMaskOffset = 0;
     let resolvedMaskCount = 0;
     let resolvedMaskCapacity = 0;
@@ -1964,7 +1891,7 @@ export class WasmPoseArenaContext {
   }
 
   normalize(inputPose: number, outputPose = inputPose): WaKernelStatus {
-    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (this.destroyed) return WaKernelStatus.BadHandle;
     return this.kernel.invokeNormalizePose({
       avatarHandle: this.avatarHandle,
       inputPoseOffset: this.poseOffset(inputPose),
@@ -1976,7 +1903,7 @@ export class WasmPoseArenaContext {
   }
 
   localToModel(pose: number, options: WasmLocalToModelUpdateOptions = {}): WaKernelStatus {
-    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (this.destroyed) return WaKernelStatus.BadHandle;
     const resolved = resolveUpdateRange(this.jointCount, options);
     const view = this.kernel.dataViewForCurrentMemory();
     let flags = resolved.fromExcluded ? OPTION_FLAG_FROM_EXCLUDED : 0;
@@ -2136,9 +2063,10 @@ export type WasmFootCorrection = {
 
 export type WasmProceduralCorrection = WasmTwoBoneCorrection | WasmAimCorrection | WasmFootCorrection;
 export type WasmProceduralCorrectionContextOptions = { capacity?: number };
-export type WasmProceduralCorrectionRunResult =
-  | { kind: "wasm-scalar"; status: WaKernelStatus.Ok }
-  | { kind: "typescript"; status: WaKernelStatus; reason: string };
+export type WasmProceduralCorrectionRunResult = {
+  kind: "wasm-scalar" | "wasm-simd";
+  status: WaKernelStatus.Ok;
+};
 
 const PROCEDURAL_DESCRIPTOR_BYTES = 192;
 const PROCEDURAL_FLAG_POLE = 1 << 0;
@@ -2172,142 +2100,39 @@ export class WasmProceduralCorrectionContext {
     corrections: readonly WasmProceduralCorrection[],
     updateTo = this.arena.jointCount - 1
   ): WasmProceduralCorrectionRunResult {
-    if (!this.kernel.available) {
-      this.runTypeScriptFallback(pose, corrections, updateTo);
-      return {
-        kind: "typescript",
-        status: WaKernelStatus.Unsupported,
-        reason: this.kernel.disabledReason ?? "kernel-disabled"
-      };
-    }
-    if (corrections.length > this.capacity) {
-      this.runTypeScriptFallback(pose, corrections, updateTo);
-      return { kind: "typescript", status: WaKernelStatus.Capacity, reason: "descriptor-capacity" };
-    }
+    if (corrections.length > this.capacity)
+      throw new WaKernelJobError("procedural-corrections", WaKernelStatus.Capacity);
     if (!Number.isInteger(updateTo) || updateTo < 0 || updateTo >= this.arena.jointCount)
-      return { kind: "typescript", status: WaKernelStatus.InvalidArgument, reason: "update-range" };
-    try {
-      this.arena.poseOffset(pose);
-      const view = this.kernel.dataViewForCurrentMemory();
-      for (let index = 0; index < corrections.length; index += 1)
-        this.writeDescriptor(view, index, corrections[index]!);
-      view.setUint32(this.optionsOffset, this.arena.parentIndicesOffset, true);
-      view.setUint32(this.optionsOffset + 4, this.arena.jointCount, true);
-      view.setUint32(this.optionsOffset + 8, this.arena.jointCount * PARENT_BYTES, true);
-      view.setInt32(this.optionsOffset + 12, NO_PARENT, true);
-      view.setInt32(this.optionsOffset + 16, updateTo, true);
-      view.setUint32(this.optionsOffset + 20, 0, true);
-      view.setUint32(this.optionsOffset + 24, 0, true);
-      view.setUint32(this.optionsOffset + 28, 0, true);
-      const status = this.kernel.invokeProceduralCorrections(
-        this.arena.avatarHandle,
-        this.arena.poseOffset(pose),
-        this.arena.poseStrideBytes,
-        this.arena.modelPoseOffset,
-        this.arena.jointCount * MAT4_BYTES,
-        this.arena.jointCount,
-        this.descriptorsOffset,
-        corrections.length,
-        this.capacity * PROCEDURAL_DESCRIPTOR_BYTES,
-        this.optionsOffset
+      throw new WaKernelJobError(
+        "procedural-corrections",
+        WaKernelStatus.InvalidArgument,
+        "invalid correction update range"
       );
-      if (status === WaKernelStatus.Ok) return { kind: "wasm-scalar", status };
-      this.runTypeScriptFallback(pose, corrections, updateTo);
-      return { kind: "typescript", status, reason: `kernel-status:${statusName(status)}` };
-    } catch (error) {
-      try {
-        this.runTypeScriptFallback(pose, corrections, updateTo);
-      } catch (_fallbackError) {
-        // Preserve the original descriptor error; malformed input cannot be safely applied by either backend.
-      }
-      return {
-        kind: "typescript",
-        status: WaKernelStatus.InvalidArgument,
-        reason: error instanceof Error ? error.message : "invalid-descriptor"
-      };
-    }
-  }
-
-  private runTypeScriptFallback(
-    pose: number,
-    corrections: readonly WasmProceduralCorrection[],
-    updateTo: number
-  ): void {
-    const localPose = this.arena.copyPoseToTransforms(pose);
-    const modelPose = copyModelPoseViewToMat4Array(this.arena.modelPoseView);
-    for (const correction of corrections) {
-      if (correction.kind === "aim") {
-        const model = modelPose[correction.joint];
-        if (!model) throw new Error(`modelPose is missing joint ${correction.joint}`);
-        const solved = solveAimIk({
-          joint: model,
-          target: [...correction.target],
-          ...(correction.forward ? { forward: [...correction.forward] } : {}),
-          ...(correction.up ? { up: [...correction.up] } : {}),
-          ...(correction.pole ? { pole: [...correction.pole] } : {}),
-          ...(correction.offset ? { offset: [...correction.offset] } : {}),
-          ...(correction.twistAngle === undefined ? {} : { twistAngle: correction.twistAngle }),
-          ...(correction.weight === undefined ? {} : { weight: correction.weight })
-        });
-        applyAimIkModelCorrection({
-          skeleton: this.arena.skeleton,
-          localPose,
-          modelPose,
-          joint: correction.joint,
-          jointCorrection: solved.jointCorrection,
-          updateTo
-        });
-        continue;
-      }
-      const rootJoint = correction.kind === "two-bone" ? correction.rootJoint : correction.hipJoint;
-      const midJoint = correction.kind === "two-bone" ? correction.midJoint : correction.kneeJoint;
-      const endJoint = correction.kind === "two-bone" ? correction.endJoint : correction.ankleJoint;
-      const target = correction.kind === "two-bone" ? correction.target : correction.targetAnkle;
-      const solved = solveTwoBoneIkModel({
-        root: modelPose[rootJoint]!,
-        mid: modelPose[midJoint]!,
-        end: modelPose[endJoint]!,
-        target: [...target],
-        ...(correction.pole ? { pole: [...correction.pole] } : {}),
-        ...(correction.kind === "two-bone" && correction.midAxis ? { midAxis: [...correction.midAxis] } : {}),
-        ...(correction.kind === "two-bone" && correction.twistAngle !== undefined
-          ? { twistAngle: correction.twistAngle }
-          : {}),
-        ...(correction.kind === "two-bone" && correction.soften !== undefined ? { soften: correction.soften } : {}),
-        ...((correction.kind === "two-bone" ? correction.weight : correction.influence) === undefined
-          ? {}
-          : { weight: correction.kind === "two-bone" ? correction.weight : correction.influence }),
-        ...(correction.maxStretch === undefined ? {} : { maxStretch: correction.maxStretch })
-      });
-      applyTwoBoneIkLocalCorrections({
-        skeleton: this.arena.skeleton,
-        localPose,
-        modelPose,
-        rootJoint,
-        midJoint,
-        corrections: solved,
-        updateTo
-      });
-      if (correction.kind === "foot" && correction.orientationTarget) {
-        const aim = solveAimIk({
-          joint: modelPose[endJoint]!,
-          target: [...correction.orientationTarget],
-          forward: [...(correction.ankleUp ?? [0, 1, 0])],
-          up: [...(correction.footForward ?? [0, 0, 1])],
-          pole: [...(correction.footForward ?? [0, 0, 1])],
-          weight: correction.orientationWeight ?? correction.influence ?? 1
-        });
-        applyAimIkModelCorrection({
-          skeleton: this.arena.skeleton,
-          localPose,
-          modelPose,
-          joint: endJoint,
-          jointCorrection: aim.jointCorrection,
-          updateTo
-        });
-      }
-    }
-    this.arena.writePose(pose, localPose);
+    this.arena.poseOffset(pose);
+    const view = this.kernel.dataViewForCurrentMemory();
+    for (let index = 0; index < corrections.length; index += 1) this.writeDescriptor(view, index, corrections[index]!);
+    view.setUint32(this.optionsOffset, this.arena.parentIndicesOffset, true);
+    view.setUint32(this.optionsOffset + 4, this.arena.jointCount, true);
+    view.setUint32(this.optionsOffset + 8, this.arena.jointCount * PARENT_BYTES, true);
+    view.setInt32(this.optionsOffset + 12, NO_PARENT, true);
+    view.setInt32(this.optionsOffset + 16, updateTo, true);
+    view.setUint32(this.optionsOffset + 20, 0, true);
+    view.setUint32(this.optionsOffset + 24, 0, true);
+    view.setUint32(this.optionsOffset + 28, 0, true);
+    const status = this.kernel.invokeProceduralCorrections(
+      this.arena.avatarHandle,
+      this.arena.poseOffset(pose),
+      this.arena.poseStrideBytes,
+      this.arena.modelPoseOffset,
+      this.arena.jointCount * MAT4_BYTES,
+      this.arena.jointCount,
+      this.descriptorsOffset,
+      corrections.length,
+      this.capacity * PROCEDURAL_DESCRIPTOR_BYTES,
+      this.optionsOffset
+    );
+    if (status !== WaKernelStatus.Ok) throw new WaKernelJobError("procedural-corrections", status);
+    return { kind: this.kernel.executionMode === "simd" ? "wasm-simd" : "wasm-scalar", status };
   }
 
   invokeRawForTests(
@@ -2466,7 +2291,7 @@ export class WasmLocalToModelContext {
   }
 
   updateModelPoseFromSoa(options: WasmLocalToModelUpdateOptions = {}): WaKernelStatus {
-    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (this.destroyed) return WaKernelStatus.BadHandle;
     this.refreshViews();
     const resolved = resolveUpdateRange(this.jointCount, options);
     this.writeOptions(resolved);
@@ -2883,13 +2708,6 @@ function finiteMat4OrIdentity(value: SkinningNumericArray | undefined): Float32A
   return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 }
 
-function materializeMat4View(view: Float32Array, count: number): Mat4[] {
-  return Array.from(
-    { length: count },
-    (_value, index) => new Float32Array(view.slice(index * MAT4_FLOATS, (index + 1) * MAT4_FLOATS)) as Mat4
-  );
-}
-
 function readSkeletonParent(skeleton: Skeleton, index: number): number {
   return skeleton.parents[index] ?? skeleton.joints[index]?.parentIndex ?? NO_PARENT;
 }
@@ -2927,15 +2745,35 @@ async function instantiateKernel(
 
 async function fetchKernelBytes(url: string | URL, fetcher: WaKernelFetch | undefined): Promise<BufferSource> {
   const resolvedFetcher = fetcher ?? globalThis.fetch?.bind(globalThis);
-  if (!resolvedFetcher) throw new Error("no fetch implementation available for WASM kernel URL source");
-  const response = await resolvedFetcher(url);
+  if (!resolvedFetcher)
+    throw new WaKernelInitializationError(
+      "missing-asset",
+      `no fetch implementation is available for required WASM asset ${String(url)}`
+    );
+  let response: unknown;
+  try {
+    response = await resolvedFetcher(url);
+  } catch (error) {
+    throw new WaKernelInitializationError(
+      "asset-load-failed",
+      `failed to fetch required WASM asset ${String(url)}`,
+      error
+    );
+  }
   if (isArrayBuffer(response)) return response;
   if (ArrayBuffer.isView(response)) return copyViewToArrayBuffer(response);
   if (isResponseLike(response)) {
-    if (response.ok === false) throw new Error(`failed to fetch WASM kernel: HTTP ${response.status ?? "error"}`);
+    if (response.ok === false)
+      throw new WaKernelInitializationError(
+        "asset-load-failed",
+        `failed to fetch required WASM asset: HTTP ${response.status ?? "error"}`
+      );
     return await response.arrayBuffer();
   }
-  throw new Error("WASM kernel fetch strategy must return a Response, ArrayBuffer, or ArrayBufferView");
+  throw new WaKernelInitializationError(
+    "asset-load-failed",
+    "WASM kernel fetch strategy must return a Response, ArrayBuffer, or ArrayBufferView"
+  );
 }
 
 function isArrayBuffer(value: unknown): value is ArrayBuffer {
@@ -2958,16 +2796,6 @@ function isResponseLike(
     "arrayBuffer" in value &&
     typeof (value as { arrayBuffer?: unknown }).arrayBuffer === "function"
   );
-}
-
-function isKernelDisabledByEnvironment(): boolean {
-  const env = readProcessEnv("WAIFU_ANIMATION_WASM_KERNEL");
-  return env === "0" || env === "false" || env === "disabled";
-}
-
-function readProcessEnv(name: string): string | undefined {
-  const maybeProcess = globalThis as { process?: { env?: Record<string, string | undefined> } };
-  return maybeProcess.process?.env?.[name]?.toLowerCase();
 }
 
 function nowMs(): number {

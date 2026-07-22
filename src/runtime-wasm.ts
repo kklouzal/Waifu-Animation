@@ -1,4 +1,4 @@
-import { type AnimationClip, sampleClipToPose } from "./clip.js";
+import { type AnimationClip } from "./clip.js";
 import { buildPackedRuntimeAnimation } from "./packed-runtime.js";
 import { type JointMask } from "./pose.js";
 import type {
@@ -39,7 +39,6 @@ type LayerBinding = {
   asset?: SharedClipAsset;
   sampler?: WasmPackedClipSamplingContext;
   maskSlot?: number | undefined;
-  fallbackReason?: string;
 };
 
 type SharedClipAsset = {
@@ -69,7 +68,6 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
   private readonly compositionB: number;
   private readonly additiveDeltaSlot: number;
   private disposed = false;
-  private reason: string | undefined;
   private needsSamplerReset = false;
   private wasmSampledLayerCount = 0;
   private scalarSampledLayerCount = 0;
@@ -93,6 +91,9 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
 
   setLayer(layer: AnimationLayer, previous?: AnimationLayer): void {
     if (this.disposed) return;
+    if (layer.sourceBasisQuaternion) {
+      throw new Error("source-basis callbacks must be baked before mandatory WASM runtime sampling");
+    }
     const existing = this.bindings.get(layer.id);
     if (existing && previous?.clip === layer.clip) {
       existing.clip = layer.clip;
@@ -101,23 +102,17 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
     }
     if (existing) this.releaseBinding(layer.id, existing);
     const slot = this.freeSlots.pop();
-    if (slot === undefined) {
-      this.reason = `retained layer capacity ${this.maxLayers} exceeded`;
-      return;
-    }
+    if (slot === undefined) throw new Error(`retained layer capacity ${this.maxLayers} exceeded`);
     const binding: LayerBinding = { slot, clip: layer.clip, maskSlot: undefined };
     this.bindings.set(layer.id, binding);
-    this.syncMask(binding, layer.mask);
-    if (layer.sourceBasisQuaternion) {
-      binding.fallbackReason = "source-basis callback requires TypeScript sampling";
-      return;
-    }
     try {
+      this.syncMask(binding, layer.mask);
       const shared = this.acquireAsset(layer.clip);
       binding.asset = shared;
       binding.sampler = this.arena.createPackedSamplingContext(shared.asset);
     } catch (error) {
-      binding.fallbackReason = errorMessage(error);
+      this.releaseBinding(layer.id, binding);
+      throw error;
     }
   }
 
@@ -128,46 +123,29 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
 
   clear(): void {
     for (const [id, binding] of Array.from(this.bindings)) this.releaseBinding(id, binding);
-    this.reason = undefined;
     this.needsSamplerReset = false;
   }
 
   reset(): void {
-    this.reason = undefined;
     this.needsSamplerReset = true;
   }
 
-  evaluate(
-    activeLayers: readonly AnimationLayer[],
-    blendThreshold: number
-  ): AnimationRuntimeBackendEvaluation | undefined {
-    if (this.disposed) return undefined;
-    if (!this.kernel.available) {
-      this.reason = this.kernel.disabledReason ?? "WASM kernel unavailable";
-      this.needsSamplerReset = true;
-      return undefined;
-    }
+  evaluate(activeLayers: readonly AnimationLayer[], blendThreshold: number): AnimationRuntimeBackendEvaluation {
+    if (this.disposed) throw new Error("WASM animation runtime backend is disposed");
     for (const layer of activeLayers) {
       const binding = this.bindings.get(layer.id);
-      if (
-        binding &&
-        (binding.clip !== layer.clip ||
-          (!layer.sourceBasisQuaternion &&
-            binding.fallbackReason === "source-basis callback requires TypeScript sampling"))
-      ) {
+      if (binding && (binding.clip !== layer.clip || layer.sourceBasisQuaternion)) {
         this.setLayer(layer);
       }
     }
     if (activeLayers.length > this.maxLayers || activeLayers.some((layer) => !this.bindings.has(layer.id))) {
-      this.reason = `retained layer capacity ${this.maxLayers} exceeded`;
-      return undefined;
+      throw new Error(`retained layer capacity ${this.maxLayers} exceeded`);
     }
     if (
       !isF32Compatible(blendThreshold) ||
       activeLayers.some((layer) => !isF32Compatible(layer.time) || !isF32Compatible(layer.weight))
     ) {
-      this.reason = "runtime values exceed scalar-WASM f32 range";
-      return undefined;
+      throw new Error("runtime values exceed WASM f32 range");
     }
 
     this.wasmSampledLayerCount = 0;
@@ -181,42 +159,26 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
       for (const layer of activeLayers) {
         const binding = this.bindings.get(layer.id)!;
         this.syncMask(binding, layer.mask);
-        if (binding.sampler && !layer.sourceBasisQuaternion) {
-          const status = binding.sampler.sampleTime(layer.time, binding.slot, { loop: layer.loop });
-          if (status === WaKernelStatus.Ok) {
-            this.wasmSampledLayerCount += 1;
-            continue;
-          }
-          if (status !== WaKernelStatus.Unsupported) {
-            this.reason = `packed sampling failed with status ${status}`;
-            this.needsSamplerReset = true;
-            return undefined;
-          }
-          binding.fallbackReason = this.kernel.disabledReason ?? "packed sampling unsupported";
-        }
-        this.sampleLayerWithTypescript(layer, binding);
-        this.scalarSampledLayerCount += 1;
+        if (!binding.sampler) throw new Error(`layer ${layer.id} has no retained WASM sampler`);
+        const status = binding.sampler.sampleTime(layer.time, binding.slot, { loop: layer.loop });
+        if (status !== WaKernelStatus.Ok) throw new Error(`packed sampling failed with status ${status}`);
+        this.wasmSampledLayerCount += 1;
       }
 
       const resultSlot = this.compose(activeLayers, blendThreshold);
-      if (resultSlot === undefined) return undefined;
       const localPose = this.arena.copyPoseToTransforms(resultSlot);
       const modelPose = copyModelPoseViewToMat4Array(this.arena.modelPoseView);
-      this.reason = undefined;
       return { localPose, modelPose };
     } catch (error) {
-      this.reason = errorMessage(error);
       this.needsSamplerReset = true;
-      return undefined;
+      throw error;
     }
   }
 
   snapshot(): AnimationRuntimeBackendSnapshot {
-    const reason = this.reason ?? this.kernel.disabledReason;
     return {
-      kind: "wasm-scalar-retained",
-      state: this.disposed ? "disposed" : this.reason || !this.kernel.available ? "fallback" : "ready",
-      ...(reason !== undefined ? { reason } : {}),
+      kind: this.kernel.executionMode === "simd" ? "wasm-simd-retained" : "wasm-scalar-retained",
+      state: this.disposed ? "disposed" : "ready",
       retainedLayerCount: this.bindings.size,
       wasmSampledLayerCount: this.wasmSampledLayerCount,
       scalarSampledLayerCount: this.scalarSampledLayerCount,
@@ -232,7 +194,7 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
     this.arena.destroy();
   }
 
-  private compose(activeLayers: readonly AnimationLayer[], blendThreshold: number): number | undefined {
+  private compose(activeLayers: readonly AnimationLayer[], blendThreshold: number): number {
     let current = 0;
     let output = this.compositionA;
     const overrides = activeLayers.filter((layer) => layer.blendMode === "override");
@@ -255,16 +217,14 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
         index += 1;
       }
       const status = this.arena.blend(group, { fallbackPose: current, outputPose: output, threshold: blendThreshold });
-      if (!this.accept(status, "override blend")) return undefined;
+      this.accept(status, "override blend");
       current = output;
       output = output === this.compositionA ? this.compositionB : this.compositionA;
     }
 
     for (const layer of additives) {
       const binding = this.bindings.get(layer.id)!;
-      if (!this.accept(this.arena.additiveDelta(0, binding.slot, this.additiveDeltaSlot), "additive delta")) {
-        return undefined;
-      }
+      this.accept(this.arena.additiveDelta(0, binding.slot, this.additiveDeltaSlot), "additive delta");
       const status = this.arena.applyAdditive(
         current,
         this.additiveDeltaSlot,
@@ -273,24 +233,14 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
         binding.maskSlot,
         layer.mask ? Math.min(layer.mask.length, this.skeleton.joints.length) : undefined
       );
-      if (!this.accept(status, "additive apply")) return undefined;
+      this.accept(status, "additive apply");
       current = output;
       output = output === this.compositionA ? this.compositionB : this.compositionA;
     }
 
-    if (!this.accept(this.arena.normalize(current), "normalize")) return undefined;
-    if (!this.accept(this.arena.localToModel(current), "local-to-model")) return undefined;
+    this.accept(this.arena.normalize(current), "normalize");
+    this.accept(this.arena.localToModel(current), "local-to-model");
     return current;
-  }
-
-  private sampleLayerWithTypescript(layer: AnimationLayer, binding: LayerBinding): void {
-    const pose = sampleClipToPose(this.skeleton, layer.clip, layer.time, {
-      loop: layer.loop,
-      restPose: this.skeleton.restPose,
-      ...(layer.sourceBasisQuaternion ? { sourceBasisQuaternion: layer.sourceBasisQuaternion } : {}),
-      skipUnsupportedTracks: true
-    });
-    this.arena.writePose(binding.slot, pose);
   }
 
   private syncMask(binding: LayerBinding, mask?: JointMask): void {
@@ -336,11 +286,10 @@ export class WasmAnimationRuntimeBackend implements AnimationRuntimeBackend {
     this.bindings.delete(id);
   }
 
-  private accept(status: WaKernelStatus, job: string): boolean {
-    if (status === WaKernelStatus.Ok) return true;
-    this.reason = `${job} failed with status ${status}`;
+  private accept(status: WaKernelStatus, job: string): void {
+    if (status === WaKernelStatus.Ok) return;
     this.needsSamplerReset = true;
-    return false;
+    throw new Error(`${job} failed with status ${status}`);
   }
 }
 
@@ -348,17 +297,12 @@ export function createWasmAnimationRuntimeBackend(
   kernelOrLoadResult: WaifuAnimationWasmKernel | WaKernelLoadResult,
   skeleton: Skeleton,
   options: WasmAnimationRuntimeBackendOptions = {}
-): WasmAnimationRuntimeBackend | undefined {
+): WasmAnimationRuntimeBackend {
   const kernel = "kind" in kernelOrLoadResult ? kernelOrLoadResult.kernel : kernelOrLoadResult;
-  if (!kernel) return undefined;
-  try {
-    return new WasmAnimationRuntimeBackend(kernel, skeleton, options);
-  } catch {
-    return undefined;
-  }
+  return new WasmAnimationRuntimeBackend(kernel, skeleton, options);
 }
 
-/** Load the packaged kernel and create an opt-in runtime; loader failure returns the normal scalar runtime. */
+/** Initialize the mandatory kernel and create a retained runtime. Initialization rejects on any load/ABI/feature failure. */
 export async function createWasmAnimationRuntime(
   skeleton: Skeleton,
   options: CreateWasmAnimationRuntimeOptions = {}
@@ -367,46 +311,14 @@ export async function createWasmAnimationRuntime(
   const backend = createWasmAnimationRuntimeBackend(loadResult, skeleton, options.backend);
   return new AnimationRuntime(skeleton, {
     ...(options.blendThreshold !== undefined ? { blendThreshold: options.blendThreshold } : {}),
-    backend: backend ?? new WasmAnimationRuntimeFallbackBackend(skeleton, loadResult)
+    backend
   });
-}
-
-class WasmAnimationRuntimeFallbackBackend implements AnimationRuntimeBackend {
-  readonly skeleton: Skeleton;
-  private readonly reason: string;
-  private disposed = false;
-
-  constructor(skeleton: Skeleton, loadResult: WaKernelLoadResult) {
-    this.skeleton = skeleton;
-    this.reason = loadResult.kind === "typescript" ? loadResult.reason : "WASM runtime backend initialization failed";
-  }
-
-  setLayer(): void {}
-  removeLayer(): void {}
-  clear(): void {}
-  evaluate(): undefined {
-    return undefined;
-  }
-  snapshot(): AnimationRuntimeBackendSnapshot {
-    return {
-      kind: "typescript-fallback",
-      state: this.disposed ? "disposed" : "fallback",
-      reason: this.reason
-    };
-  }
-  dispose(): void {
-    this.disposed = true;
-  }
 }
 
 function readCapacity(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   if (!Number.isInteger(value) || value <= 0) throw new Error("maxLayers must be a positive integer");
   return value;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isF32Compatible(value: number): boolean {

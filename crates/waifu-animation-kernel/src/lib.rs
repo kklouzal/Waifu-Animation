@@ -6,7 +6,7 @@ use core::arch::wasm32;
 use core::panic::PanicInfo;
 
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 4;
+pub const ABI_MINOR: u32 = 5;
 pub const FEATURE_SCALAR_LOCAL_TO_MODEL: u32 = 1 << 0;
 pub const FEATURE_SCALAR_POSE_BLEND: u32 = 1 << 1;
 pub const FEATURE_SCALAR_ADDITIVE: u32 = 1 << 2;
@@ -14,6 +14,7 @@ pub const FEATURE_SCALAR_JOINT_MASKS: u32 = 1 << 3;
 pub const FEATURE_RETAINED_PACKED_SAMPLING: u32 = 1 << 4;
 pub const FEATURE_RETAINED_SKINNING: u32 = 1 << 5;
 pub const FEATURE_RETAINED_PROCEDURAL_CORRECTIONS: u32 = 1 << 6;
+pub const FEATURE_SIMD_MATRIX_JOBS: u32 = 1 << 16;
 pub const FEATURE_DEBUG_SELF_TEST: u32 = 1 << 31;
 
 pub const WA_OK: u32 = 0;
@@ -289,6 +290,7 @@ impl LocalToModelOptions {
 }
 
 static mut MEMORY_EPOCH: u32 = 0;
+static mut SIMD_EXECUTION_COUNT: u32 = 0;
 static mut BUMP_PTR: u32 = 0;
 static mut SKELETONS: [SkeletonRecord; MAX_SKELETONS] = [SkeletonRecord::empty(); MAX_SKELETONS];
 static mut AVATARS: [AvatarRecord; MAX_AVATARS] = [AvatarRecord::empty(); MAX_AVATARS];
@@ -310,14 +312,34 @@ pub extern "C" fn wa_version_minor() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn wa_feature_flags() -> u32 {
-    FEATURE_SCALAR_LOCAL_TO_MODEL
+    let features = FEATURE_SCALAR_LOCAL_TO_MODEL
         | FEATURE_SCALAR_POSE_BLEND
         | FEATURE_SCALAR_ADDITIVE
         | FEATURE_SCALAR_JOINT_MASKS
         | FEATURE_RETAINED_PACKED_SAMPLING
         | FEATURE_RETAINED_SKINNING
         | FEATURE_RETAINED_PROCEDURAL_CORRECTIONS
-        | FEATURE_DEBUG_SELF_TEST
+        | FEATURE_DEBUG_SELF_TEST;
+    #[cfg(feature = "simd")]
+    {
+        features | FEATURE_SIMD_MATRIX_JOBS
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        features
+    }
+}
+
+/// 0 = portable scalar-WASM, 1 = wasm32 SIMD128 matrix jobs.
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_execution_mode() -> u32 {
+    if cfg!(feature = "simd") { 1 } else { 0 }
+}
+
+/// Monotonic proof counter incremented only by SIMD matrix implementations.
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_simd_execution_count() -> u32 {
+    unsafe { SIMD_EXECUTION_COUNT }
 }
 
 #[unsafe(no_mangle)]
@@ -3024,14 +3046,43 @@ fn read_mat4_repaired(offset: u32, fallback: Option<&[f32; 16]>) -> [f32; 16] {
 }
 
 fn multiply_mat4_arrays(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
-    let mut out = [0.0; 16];
-    for column in 0..4 {
-        for row in 0..4 {
-            out[column * 4 + row] = a[row] * b[column * 4]
-                + a[4 + row] * b[column * 4 + 1]
-                + a[8 + row] * b[column * 4 + 2]
-                + a[12 + row] * b[column * 4 + 3];
+    #[cfg(all(target_arch = "wasm32", feature = "simd"))]
+    {
+        multiply_mat4_arrays_simd(a, b)
+    }
+    #[cfg(not(all(target_arch = "wasm32", feature = "simd")))]
+    {
+        let mut out = [0.0; 16];
+        for column in 0..4 {
+            for row in 0..4 {
+                out[column * 4 + row] = a[row] * b[column * 4]
+                    + a[4 + row] * b[column * 4 + 1]
+                    + a[8 + row] * b[column * 4 + 2]
+                    + a[12 + row] * b[column * 4 + 3];
+            }
         }
+        out
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "simd"))]
+fn multiply_mat4_arrays_simd(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0; 16];
+    unsafe {
+        let a0 = wasm32::v128_load(a.as_ptr().cast());
+        let a1 = wasm32::v128_load(a.as_ptr().add(4).cast());
+        let a2 = wasm32::v128_load(a.as_ptr().add(8).cast());
+        let a3 = wasm32::v128_load(a.as_ptr().add(12).cast());
+        for column in 0..4usize {
+            let base = column * 4;
+            let c0 = wasm32::f32x4_mul(a0, wasm32::f32x4_splat(b[base]));
+            let c1 = wasm32::f32x4_mul(a1, wasm32::f32x4_splat(b[base + 1]));
+            let c2 = wasm32::f32x4_mul(a2, wasm32::f32x4_splat(b[base + 2]));
+            let c3 = wasm32::f32x4_mul(a3, wasm32::f32x4_splat(b[base + 3]));
+            let sum = wasm32::f32x4_add(wasm32::f32x4_add(c0, c1), wasm32::f32x4_add(c2, c3));
+            wasm32::v128_store(out.as_mut_ptr().add(base).cast(), sum);
+        }
+        SIMD_EXECUTION_COUNT = SIMD_EXECUTION_COUNT.wrapping_add(1);
     }
     out
 }
@@ -3130,18 +3181,40 @@ fn read_soa_f32(base: u32, field: u32, lane: u32, fallback: f32) -> f32 {
 }
 
 fn multiply_to_offset(a_offset: u32, b_ptr: *const f32, out_offset: u32) {
-    for col in 0..4u32 {
-        for row in 0..4u32 {
-            let a0 = unsafe { read_f32(a_offset + row * 4) };
-            let a1 = unsafe { read_f32(a_offset + (4 + row) * 4) };
-            let a2 = unsafe { read_f32(a_offset + (8 + row) * 4) };
-            let a3 = unsafe { read_f32(a_offset + (12 + row) * 4) };
-            let b0 = unsafe { *b_ptr.add((col * 4) as usize) };
-            let b1 = unsafe { *b_ptr.add((col * 4 + 1) as usize) };
-            let b2 = unsafe { *b_ptr.add((col * 4 + 2) as usize) };
-            let b3 = unsafe { *b_ptr.add((col * 4 + 3) as usize) };
-            let value = a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3;
-            unsafe { write_f32(out_offset + (col * 4 + row) * 4, value) };
+    #[cfg(all(target_arch = "wasm32", feature = "simd"))]
+    unsafe {
+        let a = a_offset as *const f32;
+        let out = out_offset as *mut f32;
+        let a0 = wasm32::v128_load(a.cast());
+        let a1 = wasm32::v128_load(a.add(4).cast());
+        let a2 = wasm32::v128_load(a.add(8).cast());
+        let a3 = wasm32::v128_load(a.add(12).cast());
+        for column in 0..4usize {
+            let base = column * 4;
+            let c0 = wasm32::f32x4_mul(a0, wasm32::f32x4_splat(*b_ptr.add(base)));
+            let c1 = wasm32::f32x4_mul(a1, wasm32::f32x4_splat(*b_ptr.add(base + 1)));
+            let c2 = wasm32::f32x4_mul(a2, wasm32::f32x4_splat(*b_ptr.add(base + 2)));
+            let c3 = wasm32::f32x4_mul(a3, wasm32::f32x4_splat(*b_ptr.add(base + 3)));
+            let sum = wasm32::f32x4_add(wasm32::f32x4_add(c0, c1), wasm32::f32x4_add(c2, c3));
+            wasm32::v128_store(out.add(base).cast(), sum);
+        }
+        SIMD_EXECUTION_COUNT = SIMD_EXECUTION_COUNT.wrapping_add(1);
+    }
+    #[cfg(not(all(target_arch = "wasm32", feature = "simd")))]
+    {
+        for col in 0..4u32 {
+            for row in 0..4u32 {
+                let a0 = unsafe { read_f32(a_offset + row * 4) };
+                let a1 = unsafe { read_f32(a_offset + (4 + row) * 4) };
+                let a2 = unsafe { read_f32(a_offset + (8 + row) * 4) };
+                let a3 = unsafe { read_f32(a_offset + (12 + row) * 4) };
+                let b0 = unsafe { *b_ptr.add((col * 4) as usize) };
+                let b1 = unsafe { *b_ptr.add((col * 4 + 1) as usize) };
+                let b2 = unsafe { *b_ptr.add((col * 4 + 2) as usize) };
+                let b3 = unsafe { *b_ptr.add((col * 4 + 3) as usize) };
+                let value = a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3;
+                unsafe { write_f32(out_offset + (col * 4 + row) * 4, value) };
+            }
         }
     }
 }
