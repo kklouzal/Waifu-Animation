@@ -48,6 +48,7 @@ import {
   writeTransformPoseToSoa
 } from "./test-api.js";
 import { assertMat4NearlyEqual, quaternionNearlyEqual, vectorNearlyEqual } from "./test-helpers.js";
+import { runWasmProceduralCorrectionTests } from "./wasm-procedural-corrections.test.js";
 import { createSkinningJobForModelPose, createWasmKernelSyntheticFixture } from "./wasm-kernel-fixtures.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -214,6 +215,7 @@ export async function runWasmKernelContractTests(): Promise<void> {
 
 async function assertWasmLocalToModelParity(): Promise<void> {
   const kernel = await loadRequiredKernel();
+  runWasmProceduralCorrectionTests(kernel);
   assert.equal(
     kernel.featureFlags & WA_KERNEL_FEATURE_SCALAR_POSE_JOBS,
     WA_KERNEL_FEATURE_SCALAR_POSE_JOBS,

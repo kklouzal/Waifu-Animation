@@ -9,8 +9,11 @@ import {
   NO_PARENT,
   additiveDeltaPose,
   applyAdditivePose,
+  applyAimIkModelCorrection,
+  applyTwoBoneIkLocalCorrections,
   blendPoses,
   buildPackedRuntimeAnimation,
+  clonePose,
   createWasmAnimationRuntimeBackend,
   createSkeleton,
   localToModelPose,
@@ -21,6 +24,8 @@ import {
   samplePackedRuntimeAnimationToPose,
   sanitizeQuaternionTrackValues,
   skinVertices,
+  solveAimIk,
+  solveTwoBoneIkModel,
   toFloat32Array,
   type AnimationClip,
   type JointMask,
@@ -35,6 +40,8 @@ import {
   type WaifuAnimationWasmKernel,
   type WasmLocalToModelContext,
   type WasmPoseArenaContext,
+  type WasmProceduralCorrection,
+  type WasmProceduralCorrectionContext,
   type WasmSkinningContext,
   type WasmPackedClipAsset,
   type WasmPackedClipSamplingContext
@@ -130,6 +137,13 @@ const wasmPoseAvatars =
         createBenchmarkPoseArena(wasmKernel.kernel.createPoseArenaContext(fixture.skeleton))
       )
     : [];
+const proceduralSetupStart = performance.now();
+const wasmProcedural =
+  wasmKernel.kind === "wasm-scalar" && wasmPoseArena
+    ? wasmKernel.kernel.createProceduralCorrectionContext(wasmPoseArena, { capacity: 8 })
+    : undefined;
+const retainedProceduralSetupMs = performance.now() - proceduralSetupStart;
+const proceduralDescriptors = createProceduralDescriptors(fixture.skeleton.joints.length);
 const packedSetupStart = performance.now();
 const wasmPackedAssets =
   wasmKernel.kind === "wasm-scalar"
@@ -362,6 +376,61 @@ if (wasmPoseArena) {
 }
 results.push(
   runBenchmark({
+    name: "procedural_two_bone_typescript_1_avatar",
+    description: "TypeScript object-pose two-bone solve/apply with partial model refresh",
+    config,
+    operationCountPerIteration: 1,
+    op: () => proceduralTypescript(fixture, proceduralDescriptors.slice(0, 1))
+  })
+);
+results.push(
+  runBenchmark({
+    name: "procedural_aim_chain_typescript_1_avatar",
+    description: "TypeScript object-pose two-joint aim chain with partial model refresh",
+    config,
+    operationCountPerIteration: 1,
+    op: () => proceduralTypescript(fixture, proceduralDescriptors.slice(1, 3))
+  })
+);
+results.push(
+  runBenchmark({
+    name: "procedural_foot_typescript_1_avatar",
+    description: "TypeScript numeric foot correction after TS-owned contact/pelvis target resolution",
+    config,
+    operationCountPerIteration: 1,
+    op: () => proceduralTypescript(fixture, proceduralDescriptors.slice(3, 4))
+  })
+);
+if (wasmProcedural && wasmPoseArena) {
+  for (const [name, descriptors] of [
+    ["procedural_two_bone_scalar_wasm_1_avatar", proceduralDescriptors.slice(0, 1)],
+    ["procedural_aim_chain_scalar_wasm_1_avatar", proceduralDescriptors.slice(1, 3)],
+    ["procedural_foot_scalar_wasm_1_avatar", proceduralDescriptors.slice(3, 4)],
+    ["procedural_combined_post_process_scalar_wasm_1_avatar", proceduralDescriptors]
+  ] as const) {
+    results.push(
+      runBenchmark({
+        name,
+        description: "retained ABI v1.4 correction descriptors over existing local/model arenas; setup excluded",
+        config,
+        operationCountPerIteration: 1,
+        op: () => proceduralWasm(wasmPoseArena, wasmProcedural, fixture, descriptors)
+      })
+    );
+  }
+}
+results.push(
+  runBenchmark({
+    name: "procedural_combined_post_process_typescript_1_avatar",
+    description: "TypeScript object-pose two-bone + aim chain + resolved foot correction",
+    config,
+    operationCountPerIteration: 1,
+    op: () => proceduralTypescript(fixture, proceduralDescriptors)
+  })
+);
+
+results.push(
+  runBenchmark({
     name: "local_to_model_1_avatar",
     description: "convert one local TRS pose to column-major model matrices with scalar TypeScript",
     config,
@@ -486,6 +555,7 @@ const output = {
           runtimeFacadeMemoryBytesAfterSetup: wasmRuntimeMemoryBytesAfterSetup,
           retainedSkinningSetupMs,
           retainedSkinningMemoryBytesAfterSetup,
+          retainedProceduralSetupMs,
           runtimeFacadeAllocationContract:
             "WASM bump allocations occur during backend/layer setup and are not reclaimed; steady-state update/evaluate performs no WASM memory growth, but final Transform[]/Mat4[] materialization remains JS-owned"
         }
@@ -1070,6 +1140,117 @@ function evaluateRuntime(runtime: AnimationRuntime): number {
 
 function frameTime(frame: number, offset: number): number {
   return frame / 60 + offset;
+}
+
+function createProceduralDescriptors(jointCount: number): WasmProceduralCorrection[] {
+  const root = 0,
+    mid = Math.min(1, jointCount - 1),
+    end = Math.min(2, jointCount - 1);
+  const aimA = Math.min(3, jointCount - 1),
+    aimB = Math.min(4, jointCount - 1);
+  return [
+    {
+      kind: "two-bone",
+      rootJoint: root,
+      midJoint: mid,
+      endJoint: end,
+      target: [0.15, 1.07, 0.08],
+      pole: [0, 0, 1],
+      soften: 0.9,
+      weight: 0.8,
+      maxStretch: 0.98
+    },
+    {
+      kind: "aim",
+      joint: aimA,
+      target: [0.8, 1.4, 0.6],
+      forward: [1, 0, 0],
+      up: [0, 1, 0],
+      pole: [0, 1, 0],
+      weight: 0.45
+    },
+    {
+      kind: "aim",
+      joint: aimB,
+      target: [0.8, 1.4, 0.6],
+      forward: [1, 0, 0],
+      up: [0, 1, 0],
+      pole: [0, 1, 0],
+      weight: 0.65
+    },
+    {
+      kind: "foot",
+      hipJoint: root,
+      kneeJoint: mid,
+      ankleJoint: end,
+      targetAnkle: [0.08, 1.02, 0.04],
+      pole: [0, 0, 1],
+      influence: 0.7,
+      maxStretch: 0.98,
+      orientationTarget: [0.08, 2.02, 0.04],
+      orientationWeight: 0.5
+    }
+  ];
+}
+
+function proceduralTypescript(fixture: BenchmarkFixture, descriptors: readonly WasmProceduralCorrection[]): number {
+  const localPose = clonePose(fixture.preBlendedPose);
+  const modelPose = localToModelPose(fixture.skeleton, localPose);
+  for (const d of descriptors) {
+    if (d.kind === "aim") {
+      const aim = solveAimIk({
+        joint: modelPose[d.joint]!,
+        target: [...d.target],
+        forward: [...(d.forward ?? [1, 0, 0])],
+        up: [...(d.up ?? [0, 1, 0])],
+        pole: [...(d.pole ?? [0, 1, 0])],
+        ...(d.weight === undefined ? {} : { weight: d.weight })
+      });
+      applyAimIkModelCorrection({
+        skeleton: fixture.skeleton,
+        localPose,
+        modelPose,
+        joint: d.joint,
+        jointCorrection: aim.jointCorrection
+      });
+    } else {
+      const rootJoint = d.kind === "two-bone" ? d.rootJoint : d.hipJoint;
+      const midJoint = d.kind === "two-bone" ? d.midJoint : d.kneeJoint;
+      const endJoint = d.kind === "two-bone" ? d.endJoint : d.ankleJoint;
+      const solved = solveTwoBoneIkModel({
+        root: modelPose[rootJoint]!,
+        mid: modelPose[midJoint]!,
+        end: modelPose[endJoint]!,
+        target: [...(d.kind === "two-bone" ? d.target : d.targetAnkle)],
+        ...(d.pole ? { pole: [...d.pole] } : {}),
+        ...((d.kind === "two-bone" ? d.weight : d.influence) === undefined
+          ? {}
+          : { weight: d.kind === "two-bone" ? d.weight : d.influence }),
+        ...(d.maxStretch === undefined ? {} : { maxStretch: d.maxStretch })
+      });
+      applyTwoBoneIkLocalCorrections({
+        skeleton: fixture.skeleton,
+        localPose,
+        modelPose,
+        rootJoint,
+        midJoint,
+        corrections: solved
+      });
+    }
+  }
+  return checksumPose(localPose) + checksumMatrices(modelPose);
+}
+
+function proceduralWasm(
+  arena: WasmPoseArenaContext,
+  context: WasmProceduralCorrectionContext,
+  fixture: BenchmarkFixture,
+  descriptors: readonly WasmProceduralCorrection[]
+): number {
+  arena.writePose(7, fixture.preBlendedPose);
+  arena.localToModel(7);
+  context.run(7, descriptors);
+  return checksumTransformSoa(arena.poseView(7), arena.jointCount) + checksumMatrixBuffer(arena.modelPoseView);
 }
 
 function runBenchmark(input: {

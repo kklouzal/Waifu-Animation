@@ -6,13 +6,14 @@ use core::arch::wasm32;
 use core::panic::PanicInfo;
 
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 3;
+pub const ABI_MINOR: u32 = 4;
 pub const FEATURE_SCALAR_LOCAL_TO_MODEL: u32 = 1 << 0;
 pub const FEATURE_SCALAR_POSE_BLEND: u32 = 1 << 1;
 pub const FEATURE_SCALAR_ADDITIVE: u32 = 1 << 2;
 pub const FEATURE_SCALAR_JOINT_MASKS: u32 = 1 << 3;
 pub const FEATURE_RETAINED_PACKED_SAMPLING: u32 = 1 << 4;
 pub const FEATURE_RETAINED_SKINNING: u32 = 1 << 5;
+pub const FEATURE_RETAINED_PROCEDURAL_CORRECTIONS: u32 = 1 << 6;
 pub const FEATURE_DEBUG_SELF_TEST: u32 = 1 << 31;
 
 pub const WA_OK: u32 = 0;
@@ -65,6 +66,16 @@ const SKIN_WEIGHT_EXPLICIT: u32 = 1;
 const SKIN_DESC_BYTES: u32 = 128;
 const SKIN_DESC_NORMALS: u32 = 1 << 0;
 const SKIN_DESC_TANGENTS: u32 = 1 << 1;
+
+const CORRECTION_DESC_BYTES: u32 = 192;
+const CORRECTION_KIND_TWO_BONE: u32 = 1;
+const CORRECTION_KIND_AIM: u32 = 2;
+const CORRECTION_KIND_FOOT: u32 = 3;
+const CORRECTION_FLAG_HAS_POLE: u32 = 1 << 0;
+const CORRECTION_FLAG_HAS_MID_AXIS: u32 = 1 << 1;
+const CORRECTION_FLAG_HAS_UP: u32 = 1 << 2;
+const CORRECTION_FLAG_HAS_OFFSET: u32 = 1 << 3;
+const CORRECTION_FLAG_APPLY_ORIENTATION: u32 = 1 << 4;
 
 const SAMPLE_FLAG_LOOP: u32 = 1 << 0;
 const SAMPLE_FLAG_RESET_CACHE: u32 = 1 << 1;
@@ -305,6 +316,7 @@ pub extern "C" fn wa_feature_flags() -> u32 {
         | FEATURE_SCALAR_JOINT_MASKS
         | FEATURE_RETAINED_PACKED_SAMPLING
         | FEATURE_RETAINED_SKINNING
+        | FEATURE_RETAINED_PROCEDURAL_CORRECTIONS
         | FEATURE_DEBUG_SELF_TEST
 }
 
@@ -1536,6 +1548,551 @@ pub extern "C" fn wa_local_to_model(
         joint_count,
         &options,
     )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_apply_procedural_corrections(
+    avatar_handle: u32,
+    local_pose_offset: u32,
+    local_pose_capacity_bytes: u32,
+    model_pose_offset: u32,
+    model_pose_capacity_bytes: u32,
+    joint_count: u32,
+    descriptors_offset: u32,
+    descriptor_count: u32,
+    descriptors_capacity_bytes: u32,
+    options_ptr: u32,
+) -> u32 {
+    let Some(record) = avatar_record(avatar_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let pose_bytes = match group_count(joint_count).checked_mul(SOA_TRANSFORM_BYTES) {
+        Some(value) => value,
+        None => return WA_ERR_CAPACITY,
+    };
+    let model_bytes = match joint_count.checked_mul(MAT4_BYTES) {
+        Some(value) => value,
+        None => return WA_ERR_CAPACITY,
+    };
+    if joint_count == 0 || joint_count > record.joint_count || joint_count > MAX_JOINTS {
+        return WA_ERR_INVALID_ARG;
+    }
+    if !is_aligned(local_pose_offset, 16)
+        || !is_aligned(model_pose_offset, 16)
+        || !is_aligned(descriptors_offset, 4)
+    {
+        return WA_ERR_INVALID_ARG;
+    }
+    if local_pose_capacity_bytes < pose_bytes || model_pose_capacity_bytes < model_bytes {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(local_pose_offset, pose_bytes)
+        || !memory_range_valid(model_pose_offset, model_bytes)
+    {
+        return WA_ERR_OOB;
+    }
+    let descriptor_bytes = match descriptor_count.checked_mul(CORRECTION_DESC_BYTES) {
+        Some(value) => value,
+        None => return WA_ERR_CAPACITY,
+    };
+    if descriptor_count > MAX_JOINTS || descriptors_capacity_bytes < descriptor_bytes {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(descriptors_offset, descriptor_bytes) {
+        return WA_ERR_OOB;
+    }
+    if options_ptr == 0
+        || !is_aligned(options_ptr, 4)
+        || !memory_range_valid(options_ptr, OPTIONS_BYTES)
+    {
+        return WA_ERR_OOB;
+    }
+    let mut options = read_options(options_ptr);
+    if options.to < 0 {
+        options.to = joint_count as i32 - 1;
+    }
+    let validation = validate_options(&options, joint_count);
+    if validation != WA_OK {
+        return validation;
+    }
+
+    for index in 0..descriptor_count {
+        let descriptor = descriptors_offset + index * CORRECTION_DESC_BYTES;
+        let kind = unsafe { read_u32(descriptor) };
+        let flags = unsafe { read_u32(descriptor + 4) };
+        let joint0 = unsafe { read_i32(descriptor + 8) };
+        let joint1 = unsafe { read_i32(descriptor + 12) };
+        let joint2 = unsafe { read_i32(descriptor + 16) };
+        if joint0 < 0 || joint0 as u32 >= joint_count {
+            return WA_ERR_INVALID_ARG;
+        }
+        let from = match kind {
+            CORRECTION_KIND_TWO_BONE | CORRECTION_KIND_FOOT => {
+                if joint1 < 0
+                    || joint2 < 0
+                    || joint1 as u32 >= joint_count
+                    || joint2 as u32 >= joint_count
+                {
+                    return WA_ERR_INVALID_ARG;
+                }
+                if !is_descendant(options.parent_indices_offset, joint1 as u32, joint0 as u32)
+                    || !is_descendant(options.parent_indices_offset, joint2 as u32, joint1 as u32)
+                {
+                    return WA_ERR_INVALID_ARG;
+                }
+                apply_two_bone_descriptor(local_pose_offset, model_pose_offset, descriptor, flags);
+                if kind == CORRECTION_KIND_FOOT && flags & CORRECTION_FLAG_APPLY_ORIENTATION != 0 {
+                    // Ankle aim observes the leg-corrected model frame, matching TS two-stage order.
+                    let mut leg_refresh = options;
+                    leg_refresh.from = joint0;
+                    leg_refresh.flags &= !LocalToModelOptions::FLAG_FROM_EXCLUDED;
+                    let status = local_to_model_unchecked(
+                        record,
+                        local_pose_offset,
+                        model_pose_offset,
+                        joint_count,
+                        &leg_refresh,
+                    );
+                    if status != WA_OK {
+                        return status;
+                    }
+                    apply_aim_descriptor(
+                        local_pose_offset,
+                        model_pose_offset,
+                        descriptor,
+                        joint2 as u32,
+                        flags,
+                        104,
+                    );
+                }
+                joint0
+            }
+            CORRECTION_KIND_AIM => {
+                apply_aim_descriptor(
+                    local_pose_offset,
+                    model_pose_offset,
+                    descriptor,
+                    joint0 as u32,
+                    flags,
+                    24,
+                );
+                joint0
+            }
+            _ => return WA_ERR_INVALID_ARG,
+        };
+        let mut refresh = options;
+        refresh.from = from;
+        refresh.flags &= !LocalToModelOptions::FLAG_FROM_EXCLUDED;
+        let status = local_to_model_unchecked(
+            record,
+            local_pose_offset,
+            model_pose_offset,
+            joint_count,
+            &refresh,
+        );
+        if status != WA_OK {
+            return status;
+        }
+    }
+    WA_OK
+}
+
+fn is_descendant(parents_offset: u32, mut joint: u32, ancestor: u32) -> bool {
+    loop {
+        if joint == ancestor {
+            return true;
+        }
+        let parent = unsafe { read_i32(parents_offset + joint * 4) };
+        if parent < 0 {
+            return false;
+        }
+        joint = parent as u32;
+    }
+}
+
+fn descriptor_vec3(descriptor: u32, byte_offset: u32, fallback: [f32; 3]) -> [f32; 3] {
+    let mut value = fallback;
+    for index in 0..3 {
+        let candidate = unsafe { read_f32(descriptor + byte_offset + index * 4) };
+        if candidate.is_finite() {
+            value[index as usize] = candidate;
+        }
+    }
+    value
+}
+
+fn mat_translation(model_pose_offset: u32, joint: u32) -> [f32; 3] {
+    descriptor_vec3(model_pose_offset + joint * MAT4_BYTES, 48, [0.0; 3])
+}
+
+fn vec_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn vec_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn vec_scale(a: [f32; 3], s: f32) -> [f32; 3] {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+fn vec_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn vec_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+fn vec_length(a: [f32; 3]) -> f32 {
+    libm::sqrtf(vec_dot(a, a))
+}
+fn vec_normalize(a: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let length = vec_length(a);
+    if length.is_finite() && length > EPSILON {
+        vec_scale(a, 1.0 / length)
+    } else {
+        fallback
+    }
+}
+fn fallback_perpendicular(direction: [f32; 3]) -> [f32; 3] {
+    let axis = if direction[1].abs() < 0.9 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    vec_normalize(
+        vec_sub(axis, vec_scale(direction, vec_dot(axis, direction))),
+        [0.0, 0.0, 1.0],
+    )
+}
+fn quat_axis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
+    let half = angle * 0.5;
+    let sine = libm::sinf(half);
+    let unit = vec_normalize(axis, [1.0, 0.0, 0.0]);
+    normalize_quat_array([
+        unit[0] * sine,
+        unit[1] * sine,
+        unit[2] * sine,
+        libm::cosf(half),
+    ])
+}
+fn quat_rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let qv = [q[0], q[1], q[2]];
+    let uv = vec_cross(qv, v);
+    let uuv = vec_cross(qv, uv);
+    vec_add(v, vec_scale(vec_add(vec_scale(uv, q[3]), uuv), 2.0))
+}
+fn quat_from_unit_vectors(from: [f32; 3], to: [f32; 3], fallback_axis: [f32; 3]) -> [f32; 4] {
+    let a = vec_normalize(from, [1.0, 0.0, 0.0]);
+    let b = vec_normalize(to, a);
+    let dot = vec_dot(a, b).clamp(-1.0, 1.0);
+    if dot > 0.999999 {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
+    if dot < -0.999999 {
+        return quat_axis_angle(
+            vec_normalize(fallback_axis, fallback_perpendicular(a)),
+            core::f32::consts::PI,
+        );
+    }
+    normalize_quat_array([
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+        1.0 + dot,
+    ])
+}
+fn weighted_quat(mut q: [f32; 4], amount: f32) -> [f32; 4] {
+    let weight = if amount.is_finite() {
+        amount.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    q = normalize_quat_array(q);
+    if q[3] < 0.0 {
+        for value in &mut q {
+            *value = -*value;
+        }
+    }
+    if weight <= EPSILON {
+        [0.0, 0.0, 0.0, 1.0]
+    } else if weight >= 1.0 {
+        q
+    } else {
+        normalize_quat_array([
+            q[0] * weight,
+            q[1] * weight,
+            q[2] * weight,
+            1.0 + (q[3] - 1.0) * weight,
+        ])
+    }
+}
+fn matrix_rotation(model_pose_offset: u32, joint: u32) -> [f32; 4] {
+    let base = model_pose_offset + joint * MAT4_BYTES;
+    let x = vec_normalize(descriptor_vec3(base, 0, [1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+    let yi = vec_normalize(descriptor_vec3(base, 16, [0.0, 1.0, 0.0]), [0.0, 1.0, 0.0]);
+    let z = vec_normalize(vec_cross(x, yi), [0.0, 0.0, 1.0]);
+    let y = vec_normalize(vec_cross(z, x), [0.0, 1.0, 0.0]);
+    let trace = x[0] + y[1] + z[2];
+    if trace > 0.0 {
+        let s = libm::sqrtf(trace + 1.0) * 2.0;
+        normalize_quat_array([
+            (y[2] - z[1]) / s,
+            (z[0] - x[2]) / s,
+            (x[1] - y[0]) / s,
+            0.25 * s,
+        ])
+    } else if x[0] > y[1] && x[0] > z[2] {
+        let s = libm::sqrtf(1.0 + x[0] - y[1] - z[2]) * 2.0;
+        normalize_quat_array([
+            0.25 * s,
+            (x[1] + y[0]) / s,
+            (z[0] + x[2]) / s,
+            (y[2] - z[1]) / s,
+        ])
+    } else if y[1] > z[2] {
+        let s = libm::sqrtf(1.0 + y[1] - x[0] - z[2]) * 2.0;
+        normalize_quat_array([
+            (x[1] + y[0]) / s,
+            0.25 * s,
+            (y[2] + z[1]) / s,
+            (z[0] - x[2]) / s,
+        ])
+    } else {
+        let s = libm::sqrtf(1.0 + z[2] - x[0] - y[1]) * 2.0;
+        normalize_quat_array([
+            (z[0] + x[2]) / s,
+            (y[2] + z[1]) / s,
+            0.25 * s,
+            (x[1] - y[0]) / s,
+        ])
+    }
+}
+fn model_to_local_correction(model_rotation: [f32; 4], correction: [f32; 4]) -> [f32; 4] {
+    multiply_quat(
+        multiply_quat(invert_quat(model_rotation), correction),
+        model_rotation,
+    )
+}
+fn apply_local_rotation(local_pose_offset: u32, joint: u32, correction: [f32; 4]) {
+    let mut transform = read_transform_repaired(local_pose_offset, joint);
+    let rotation = [transform[3], transform[4], transform[5], transform[6]];
+    transform[3..7].copy_from_slice(&multiply_quat(rotation, correction));
+    write_transform(local_pose_offset, joint, transform);
+}
+fn model_linear(model_pose_offset: u32, joint: u32, v: [f32; 3]) -> [f32; 3] {
+    let base = model_pose_offset + joint * MAT4_BYTES;
+    let x = descriptor_vec3(base, 0, [1.0, 0.0, 0.0]);
+    let y = descriptor_vec3(base, 16, [0.0, 1.0, 0.0]);
+    let z = descriptor_vec3(base, 32, [0.0, 0.0, 1.0]);
+    [
+        x[0] * v[0] + y[0] * v[1] + z[0] * v[2],
+        x[1] * v[0] + y[1] * v[1] + z[1] * v[2],
+        x[2] * v[0] + y[2] * v[1] + z[2] * v[2],
+    ]
+}
+fn apply_two_bone_descriptor(local_pose_offset: u32, model_pose_offset: u32, d: u32, flags: u32) {
+    let root_joint = unsafe { read_i32(d + 8) } as u32;
+    let mid_joint = unsafe { read_i32(d + 12) } as u32;
+    let end_joint = unsafe { read_i32(d + 16) } as u32;
+    let root = mat_translation(model_pose_offset, root_joint);
+    let mid = mat_translation(model_pose_offset, mid_joint);
+    let end = mat_translation(model_pose_offset, end_joint);
+    let target = descriptor_vec3(d, 24, end);
+    let upper_v = vec_sub(mid, root);
+    let lower_v = vec_sub(end, mid);
+    let upper_len = vec_length(upper_v).max(1.0e-5);
+    let lower_len = vec_length(lower_v).max(1.0e-5);
+    let upper = vec_normalize(upper_v, [0.0, -1.0, 0.0]);
+    let lower = vec_normalize(lower_v, [0.0, -1.0, 0.0]);
+    let target_v = vec_sub(target, root);
+    let target_len = vec_length(target_v);
+    let min_reach = (upper_len - lower_len).abs();
+    let solve_min = min_reach.max(1.0e-5);
+    let physical_max = upper_len + lower_len;
+    let soften_raw = unsafe { read_f32(d + 76) };
+    let soften = if soften_raw.is_finite() {
+        soften_raw.clamp(0.0, 1.0)
+    } else {
+        0.998
+    };
+    let start = physical_max * soften;
+    let range = physical_max - start;
+    let softened = if target_len > start && target_len > min_reach && range > EPSILON {
+        let a = (target_len - start).max(0.0) / range;
+        start + range - range * 81.0 / ((a + 3.0) * (a + 3.0) * (a + 3.0) * (a + 3.0))
+    } else {
+        target_len
+    };
+    let max_stretch_raw = unsafe { read_f32(d + 84) };
+    let max_stretch = if max_stretch_raw.is_finite() {
+        max_stretch_raw.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let distance = softened.clamp(solve_min, (physical_max * max_stretch).max(solve_min));
+    let direction = vec_normalize(
+        target_v,
+        vec_normalize(vec_sub(end, root), [0.0, -1.0, 0.0]),
+    );
+    let pole_input = if flags & CORRECTION_FLAG_HAS_POLE != 0 {
+        descriptor_vec3(d, 36, vec_sub(mid, root))
+    } else {
+        vec_sub(mid, root)
+    };
+    let mut pole = vec_normalize(
+        vec_sub(
+            vec_normalize(pole_input, [0.0, 0.0, 1.0]),
+            vec_scale(
+                direction,
+                vec_dot(vec_normalize(pole_input, [0.0, 0.0, 1.0]), direction),
+            ),
+        ),
+        fallback_perpendicular(direction),
+    );
+    let twist = unsafe { read_f32(d + 72) };
+    if twist.is_finite() && twist.abs() > EPSILON {
+        pole = vec_normalize(quat_rotate(quat_axis_angle(direction, twist), pole), pole);
+    }
+    let cosine = ((upper_len * upper_len + distance * distance - lower_len * lower_len)
+        / (2.0 * upper_len * distance))
+        .clamp(-1.0, 1.0);
+    let along = cosine * upper_len;
+    let height = libm::sqrtf((upper_len * upper_len - along * along).max(0.0));
+    let solved_mid = vec_add(
+        vec_add(root, vec_scale(direction, along)),
+        vec_scale(pole, height),
+    );
+    let solved_end = vec_add(root, vec_scale(direction, distance));
+    let solved_upper = vec_normalize(vec_sub(solved_mid, root), upper);
+    let solved_lower = vec_normalize(vec_sub(solved_end, solved_mid), lower);
+    let correction_pole = if flags & CORRECTION_FLAG_HAS_POLE != 0 {
+        pole_input
+    } else {
+        [0.0, 0.0, 1.0]
+    };
+    let full_root = quat_from_unit_vectors(upper, solved_upper, correction_pole);
+    let root_corrected_lower = vec_normalize(quat_rotate(full_root, lower), lower);
+    let mid_axis = if flags & CORRECTION_FLAG_HAS_MID_AXIS != 0 {
+        model_linear(
+            model_pose_offset,
+            mid_joint,
+            descriptor_vec3(d, 48, [0.0, 0.0, 1.0]),
+        )
+    } else {
+        correction_pole
+    };
+    let full_mid = quat_from_unit_vectors(
+        root_corrected_lower,
+        solved_lower,
+        quat_rotate(full_root, mid_axis),
+    );
+    let weight = unsafe { read_f32(d + 80) };
+    let root_correction = weighted_quat(full_root, weight);
+    let mid_correction = weighted_quat(full_mid, weight);
+    let root_model = matrix_rotation(model_pose_offset, root_joint);
+    let mid_model = multiply_quat(
+        root_correction,
+        matrix_rotation(model_pose_offset, mid_joint),
+    );
+    apply_local_rotation(
+        local_pose_offset,
+        root_joint,
+        model_to_local_correction(root_model, root_correction),
+    );
+    apply_local_rotation(
+        local_pose_offset,
+        mid_joint,
+        model_to_local_correction(mid_model, mid_correction),
+    );
+}
+fn apply_aim_descriptor(
+    local_pose_offset: u32,
+    model_pose_offset: u32,
+    d: u32,
+    joint: u32,
+    flags: u32,
+    base: u32,
+) {
+    let position = mat_translation(model_pose_offset, joint);
+    let rotation = matrix_rotation(model_pose_offset, joint);
+    let target = descriptor_vec3(d, base, position);
+    let forward_local = vec_normalize(
+        descriptor_vec3(d, base + 12, [1.0, 0.0, 0.0]),
+        [1.0, 0.0, 0.0],
+    );
+    let up_local = vec_normalize(
+        descriptor_vec3(d, base + 24, [0.0, 1.0, 0.0]),
+        fallback_perpendicular(forward_local),
+    );
+    let offset = if flags & CORRECTION_FLAG_HAS_OFFSET != 0 {
+        descriptor_vec3(d, base + 48, [0.0; 3])
+    } else {
+        [0.0; 3]
+    };
+    let pole = if flags & (CORRECTION_FLAG_HAS_UP | CORRECTION_FLAG_HAS_POLE) != 0 {
+        descriptor_vec3(d, base + 36, [0.0, 1.0, 0.0])
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let forward = vec_normalize(
+        model_linear(model_pose_offset, joint, forward_local),
+        quat_rotate(rotation, forward_local),
+    );
+    let up = vec_normalize(
+        model_linear(model_pose_offset, joint, up_local),
+        quat_rotate(rotation, up_local),
+    );
+    let offset_model = model_linear(model_pose_offset, joint, offset);
+    let target_v = vec_sub(target, position);
+    let target_len = vec_length(target_v);
+    if target_len <= 1.0e-5 {
+        return;
+    }
+    let target_dir = vec_normalize(target_v, forward);
+    let projected = vec_dot(forward, offset_model);
+    let perp2 = (vec_dot(offset_model, offset_model) - projected * projected).max(0.0);
+    if perp2 > target_len * target_len + 1.0e-8 {
+        return;
+    }
+    let intersection = libm::sqrtf((target_len * target_len - perp2).max(0.0));
+    let offset_forward = vec_normalize(
+        vec_add(offset_model, vec_scale(forward, intersection - projected)),
+        forward,
+    );
+    let aim = quat_from_unit_vectors(offset_forward, target_dir, up);
+    let aimed_up = quat_rotate(aim, up);
+    let source = vec_normalize(
+        vec_sub(
+            aimed_up,
+            vec_scale(target_dir, vec_dot(aimed_up, target_dir)),
+        ),
+        fallback_perpendicular(target_dir),
+    );
+    let projected_pole = vec_normalize(
+        vec_sub(pole, vec_scale(target_dir, vec_dot(pole, target_dir))),
+        source,
+    );
+    let sin = vec_dot(vec_cross(source, projected_pole), target_dir);
+    let cos = vec_dot(source, projected_pole).clamp(-1.0, 1.0);
+    let pole_correction = if sin.abs() <= EPSILON && cos > 0.999999 {
+        [0.0, 0.0, 0.0, 1.0]
+    } else {
+        quat_axis_angle(target_dir, libm::atan2f(sin, cos))
+    };
+    let twist = unsafe { read_f32(d + base + 60) };
+    let mut correction = multiply_quat(pole_correction, aim);
+    if twist.is_finite() && twist.abs() > EPSILON {
+        correction = multiply_quat(quat_axis_angle(target_dir, twist), correction);
+    }
+    let weight = unsafe { read_f32(d + base + 64) };
+    let correction = weighted_quat(correction, weight);
+    apply_local_rotation(
+        local_pose_offset,
+        joint,
+        model_to_local_correction(rotation, correction),
+    );
 }
 
 #[unsafe(no_mangle)]

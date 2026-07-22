@@ -1,6 +1,6 @@
 # Rust/WASM Kernel Architecture Contract
 
-Status: implemented through Phase 5 retained scalar-WASM model × inverse-bind palette generation and optional CPU positions/normals/tangents skinning, plus the Phase 4 opt-in `AnimationRuntime` composition facade. IK, Three.js/VRM, renderer uploads, materials, and app integration remain outside the kernel.
+Status: implemented through ABI v1.4 retained scalar-WASM two-bone, aim-chain, and TS-resolved foot correction descriptors, following retained sampling/composition/local-to-model/skinning. Three.js/VRM, contact acquisition, renderer uploads, materials, and app integration remain outside the kernel.
 
 ## Bounded kernel boundary
 
@@ -65,6 +65,18 @@ TypeScript remains the source-compatible public API. WASM receives prevalidated 
 - Current shape: TypeScript `Map<string, AnimationLayer>` stores clips, masks, weights, priorities, crossfade state, loop/speed, motion-carrier metadata, and optional diagnostics.
 - Evaluation call graph: active layer sanitize/sort -> sample each clip -> group override layers by priority -> `blendPoses` -> additive delta/apply -> `normalizePose` -> `localToModelPose` -> object-shaped result.
 - Kernel rule: ids, layer ownership, crossfade semantics, diagnostics, root-motion policy, and public result shape stay TypeScript. WASM-backed runtime submits compact numeric layer commands into per-avatar arenas.
+
+## ABI v1.4 retained procedural corrections
+
+Feature bit `WA_KERNEL_FEATURE_RETAINED_PROCEDURAL_CORRECTIONS` (`1 << 6`) and export `wa_apply_procedural_corrections` add a setup-sized, ordered descriptor queue over an existing `WasmPoseArenaContext`. `WasmProceduralCorrectionContext.run()` accepts two-bone, aim, and foot descriptors; there are no per-joint JS objects in the WASM invocation. Descriptors are fixed 192-byte little-endian records and the job reuses the arena local-pose/model-pose slots and a setup-only options block.
+
+- **Spaces:** targets, poles, and foot orientation targets are model-space. Forward/up/mid axes and offsets are joint-local and transformed by the current model matrix, including nonuniform scale, exactly like the scalar TS entry points. Corrections are model-space pre-rotations conjugated to Ozz-style local post-rotations, then quaternion-normalized with positive-hemisphere weighting.
+- **Order/ranges:** descriptors execute in submission order. Two-bone/foot refresh from hip/root through `updateTo`; aim refreshes from its joint. Foot orientation runs only after the leg refresh so it observes the corrected ankle frame. This is the composable post-composition seam; root motion remains upstream and unchanged.
+- **Foot boundary:** TypeScript owns raycasts/contact callbacks, slope/reach rejection policy, temporal lock/stick state, bilateral support selection, pelvis target resolution, skipped reason/status objects, and debug/report strings. Only active, TS-resolved ankle/orientation targets are submitted. Submit bilateral legs in the resolved policy order. Missing/no-contact/skipped sides submit no descriptor.
+- **Lifecycle:** the context allocates descriptor/options capacity only in construction, refreshes DataView/typed views after memory epochs, and does not grow memory during steady-state runs. The owning pose arena owns avatar/skeleton handles and disposal. Independent arenas never share mutable descriptors or poses.
+- **Fallback:** this is explicit opt-in. Loader disable/init/ABI/feature/export failures leave existing scalar APIs unchanged. A created context runs the TS reference correction path on disabled or non-OK job status; malformed descriptors that neither backend can safely apply return an invalid/status result without corrupting unrelated arenas.
+
+The current `AnimationRuntime` backend intentionally has no automatic correction hook. Waifu integration should evaluate composition/root motion first, resolve contacts and support policy in TypeScript, then invoke one retained correction queue before Three/VRM application. This preserves current root-motion ordering and makes visual integration evidence the next gate.
 
 ## Ranked hot paths
 

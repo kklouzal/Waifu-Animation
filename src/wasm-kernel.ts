@@ -1,4 +1,10 @@
 import { type Mat4, type Transform, normalizeQuat } from "./math.js";
+import {
+  applyAimIkModelCorrection,
+  applyTwoBoneIkLocalCorrections,
+  solveAimIk,
+  solveTwoBoneIkModel
+} from "./ik-core.js";
 import { NO_PARENT, type LocalToModelPoseRangeOptions, type Skeleton } from "./skeleton.js";
 import {
   samplePackedRuntimeAnimationToPose,
@@ -20,6 +26,7 @@ export const WA_KERNEL_ABI_MINOR = 0;
 export const WA_KERNEL_POSE_JOBS_ABI_MINOR = 1;
 export const WA_KERNEL_PACKED_SAMPLING_ABI_MINOR = 2;
 export const WA_KERNEL_SKINNING_ABI_MINOR = 3;
+export const WA_KERNEL_PROCEDURAL_CORRECTIONS_ABI_MINOR = 4;
 
 export const WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL = 1 << 0;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_BLEND = 1 << 1;
@@ -27,6 +34,7 @@ export const WA_KERNEL_FEATURE_SCALAR_ADDITIVE = 1 << 2;
 export const WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS = 1 << 3;
 export const WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING = 1 << 4;
 export const WA_KERNEL_FEATURE_RETAINED_SKINNING = 1 << 5;
+export const WA_KERNEL_FEATURE_RETAINED_PROCEDURAL_CORRECTIONS = 1 << 6;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_JOBS =
   WA_KERNEL_FEATURE_SCALAR_POSE_BLEND | WA_KERNEL_FEATURE_SCALAR_ADDITIVE | WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS;
 export const WA_KERNEL_FEATURE_SIMD_LOCAL_TO_MODEL = 1 << 16;
@@ -176,6 +184,18 @@ export type WaKernelRawExports = {
     paletteCapacityBytes: number
   ) => number;
   wa_skin_vertices?: (jobHandle: number, descriptorOffset: number) => number;
+  wa_apply_procedural_corrections?: (
+    avatarHandle: number,
+    localPoseOffset: number,
+    localPoseCapacityBytes: number,
+    modelPoseOffset: number,
+    modelPoseCapacityBytes: number,
+    jointCount: number,
+    descriptorsOffset: number,
+    descriptorCount: number,
+    descriptorsCapacityBytes: number,
+    optionsOffset: number
+  ) => number;
   wa_destroy_handle: (handle: number) => number;
   wa_local_to_model: (
     avatarHandle: number,
@@ -501,6 +521,14 @@ export function validateWaifuAnimationKernelExports(
       }
     }
   }
+  if ((requiredFeatures & WA_KERNEL_FEATURE_RETAINED_PROCEDURAL_CORRECTIONS) !== 0) {
+    if (minor < WA_KERNEL_PROCEDURAL_CORRECTIONS_ABI_MINOR) {
+      return { ok: false, reason: "procedural-corrections-abi-minor-too-old", major, minor, featureFlags };
+    }
+    if (typeof exports.wa_apply_procedural_corrections !== "function") {
+      return { ok: false, reason: "missing-export:wa_apply_procedural_corrections", major, minor, featureFlags };
+    }
+  }
   return { ok: true, major, minor, featureFlags };
 }
 
@@ -601,6 +629,18 @@ export class WaifuAnimationWasmKernel {
     const validation = validateWaifuAnimationKernelExports(this.exports, WA_KERNEL_FEATURE_RETAINED_SKINNING);
     if (!validation.ok) throw new Error(`WASM retained skinning unavailable: ${validation.reason}`);
     return new WasmSkinningContext(this, options);
+  }
+
+  createProceduralCorrectionContext(
+    arena: WasmPoseArenaContext,
+    options: WasmProceduralCorrectionContextOptions = {}
+  ): WasmProceduralCorrectionContext {
+    const validation = validateWaifuAnimationKernelExports(
+      this.exports,
+      WA_KERNEL_FEATURE_RETAINED_PROCEDURAL_CORRECTIONS
+    );
+    if (!validation.ok) throw new Error(`WASM retained procedural corrections unavailable: ${validation.reason}`);
+    return new WasmProceduralCorrectionContext(this, arena, options);
   }
 
   forceDisableForTests(reason = "forced-disable"): void {
@@ -900,6 +940,35 @@ export class WaifuAnimationWasmKernel {
         input.outputPoseOffset,
         input.outputPoseCapacityBytes,
         input.jointCount
+      )
+    );
+  }
+
+  invokeProceduralCorrections(
+    avatarHandle: number,
+    localPoseOffset: number,
+    localPoseCapacityBytes: number,
+    modelPoseOffset: number,
+    modelPoseCapacityBytes: number,
+    jointCount: number,
+    descriptorsOffset: number,
+    descriptorCount: number,
+    descriptorsCapacityBytes: number,
+    optionsOffset: number
+  ): WaKernelStatus {
+    if (!this.available || !this.exports.wa_apply_procedural_corrections) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      this.exports.wa_apply_procedural_corrections(
+        avatarHandle,
+        localPoseOffset,
+        localPoseCapacityBytes,
+        modelPoseOffset,
+        modelPoseCapacityBytes,
+        jointCount,
+        descriptorsOffset,
+        descriptorCount,
+        descriptorsCapacityBytes,
+        optionsOffset
       )
     );
   }
@@ -1673,7 +1742,7 @@ export class WasmPoseArenaContext {
   readonly localToModelOptionsOffset: number;
   readonly rootMatrixOffset: number;
   private readonly kernel: WaifuAnimationWasmKernel;
-  private readonly avatarHandle: number;
+  readonly avatarHandle: number;
   private readonly skeletonHandle: number;
   private readonly maskLengths: Uint32Array;
   private poseViewCache: Float32Array[];
@@ -2018,6 +2087,307 @@ export class WasmPoseArenaContext {
   private assertMaskSlot(slot: number): void {
     if (!Number.isInteger(slot) || slot < 0 || slot >= this.maskCapacity) {
       throw new Error(`WASM mask slot ${slot} is out of range`);
+    }
+  }
+}
+
+export type WasmTwoBoneCorrection = {
+  kind: "two-bone";
+  rootJoint: number;
+  midJoint: number;
+  endJoint: number;
+  target: readonly [number, number, number];
+  pole?: readonly [number, number, number];
+  midAxis?: readonly [number, number, number];
+  twistAngle?: number;
+  soften?: number;
+  weight?: number;
+  maxStretch?: number;
+};
+
+export type WasmAimCorrection = {
+  kind: "aim";
+  joint: number;
+  target: readonly [number, number, number];
+  forward?: readonly [number, number, number];
+  up?: readonly [number, number, number];
+  pole?: readonly [number, number, number];
+  offset?: readonly [number, number, number];
+  twistAngle?: number;
+  weight?: number;
+};
+
+export type WasmFootCorrection = {
+  kind: "foot";
+  hipJoint: number;
+  kneeJoint: number;
+  ankleJoint: number;
+  /** TypeScript-resolved ankle target after contact projection, policy, and bilateral pelvis compensation. */
+  targetAnkle: readonly [number, number, number];
+  pole?: readonly [number, number, number];
+  maxStretch?: number;
+  influence?: number;
+  /** Optional TypeScript-resolved model-space ankle orientation target. */
+  orientationTarget?: readonly [number, number, number];
+  ankleUp?: readonly [number, number, number];
+  footForward?: readonly [number, number, number];
+  orientationWeight?: number;
+};
+
+export type WasmProceduralCorrection = WasmTwoBoneCorrection | WasmAimCorrection | WasmFootCorrection;
+export type WasmProceduralCorrectionContextOptions = { capacity?: number };
+export type WasmProceduralCorrectionRunResult =
+  | { kind: "wasm-scalar"; status: WaKernelStatus.Ok }
+  | { kind: "typescript"; status: WaKernelStatus; reason: string };
+
+const PROCEDURAL_DESCRIPTOR_BYTES = 192;
+const PROCEDURAL_FLAG_POLE = 1 << 0;
+const PROCEDURAL_FLAG_MID_AXIS = 1 << 1;
+const PROCEDURAL_FLAG_UP = 1 << 2;
+const PROCEDURAL_FLAG_OFFSET = 1 << 3;
+const PROCEDURAL_FLAG_ORIENTATION = 1 << 4;
+
+/**
+ * Retained ABI v1.4 scalar correction queue over an existing pose arena. Contact queries,
+ * lock/stick policy, skipped statuses, pelvis target selection, and reports remain TypeScript-owned.
+ * A successful run applies descriptors in submission order and refreshes each corrected subtree.
+ */
+export class WasmProceduralCorrectionContext {
+  readonly capacity: number;
+  readonly descriptorsOffset: number;
+  private readonly optionsOffset: number;
+
+  constructor(
+    private readonly kernel: WaifuAnimationWasmKernel,
+    private readonly arena: WasmPoseArenaContext,
+    options: WasmProceduralCorrectionContextOptions = {}
+  ) {
+    this.capacity = positiveCapacity(options.capacity, 8, "procedural correction capacity");
+    this.descriptorsOffset = kernel.allocateBytes(this.capacity * PROCEDURAL_DESCRIPTOR_BYTES, DEFAULT_ALIGNMENT);
+    this.optionsOffset = kernel.allocateBytes(OPTIONS_BYTES, DEFAULT_ALIGNMENT);
+  }
+
+  run(
+    pose: number,
+    corrections: readonly WasmProceduralCorrection[],
+    updateTo = this.arena.jointCount - 1
+  ): WasmProceduralCorrectionRunResult {
+    if (!this.kernel.available) {
+      this.runTypeScriptFallback(pose, corrections, updateTo);
+      return {
+        kind: "typescript",
+        status: WaKernelStatus.Unsupported,
+        reason: this.kernel.disabledReason ?? "kernel-disabled"
+      };
+    }
+    if (corrections.length > this.capacity) {
+      this.runTypeScriptFallback(pose, corrections, updateTo);
+      return { kind: "typescript", status: WaKernelStatus.Capacity, reason: "descriptor-capacity" };
+    }
+    if (!Number.isInteger(updateTo) || updateTo < 0 || updateTo >= this.arena.jointCount)
+      return { kind: "typescript", status: WaKernelStatus.InvalidArgument, reason: "update-range" };
+    try {
+      this.arena.poseOffset(pose);
+      const view = this.kernel.dataViewForCurrentMemory();
+      for (let index = 0; index < corrections.length; index += 1)
+        this.writeDescriptor(view, index, corrections[index]!);
+      view.setUint32(this.optionsOffset, this.arena.parentIndicesOffset, true);
+      view.setUint32(this.optionsOffset + 4, this.arena.jointCount, true);
+      view.setUint32(this.optionsOffset + 8, this.arena.jointCount * PARENT_BYTES, true);
+      view.setInt32(this.optionsOffset + 12, NO_PARENT, true);
+      view.setInt32(this.optionsOffset + 16, updateTo, true);
+      view.setUint32(this.optionsOffset + 20, 0, true);
+      view.setUint32(this.optionsOffset + 24, 0, true);
+      view.setUint32(this.optionsOffset + 28, 0, true);
+      const status = this.kernel.invokeProceduralCorrections(
+        this.arena.avatarHandle,
+        this.arena.poseOffset(pose),
+        this.arena.poseStrideBytes,
+        this.arena.modelPoseOffset,
+        this.arena.jointCount * MAT4_BYTES,
+        this.arena.jointCount,
+        this.descriptorsOffset,
+        corrections.length,
+        this.capacity * PROCEDURAL_DESCRIPTOR_BYTES,
+        this.optionsOffset
+      );
+      if (status === WaKernelStatus.Ok) return { kind: "wasm-scalar", status };
+      this.runTypeScriptFallback(pose, corrections, updateTo);
+      return { kind: "typescript", status, reason: `kernel-status:${statusName(status)}` };
+    } catch (error) {
+      try {
+        this.runTypeScriptFallback(pose, corrections, updateTo);
+      } catch (_fallbackError) {
+        // Preserve the original descriptor error; malformed input cannot be safely applied by either backend.
+      }
+      return {
+        kind: "typescript",
+        status: WaKernelStatus.InvalidArgument,
+        reason: error instanceof Error ? error.message : "invalid-descriptor"
+      };
+    }
+  }
+
+  private runTypeScriptFallback(
+    pose: number,
+    corrections: readonly WasmProceduralCorrection[],
+    updateTo: number
+  ): void {
+    const localPose = this.arena.copyPoseToTransforms(pose);
+    const modelPose = copyModelPoseViewToMat4Array(this.arena.modelPoseView);
+    for (const correction of corrections) {
+      if (correction.kind === "aim") {
+        const model = modelPose[correction.joint];
+        if (!model) throw new Error(`modelPose is missing joint ${correction.joint}`);
+        const solved = solveAimIk({
+          joint: model,
+          target: [...correction.target],
+          ...(correction.forward ? { forward: [...correction.forward] } : {}),
+          ...(correction.up ? { up: [...correction.up] } : {}),
+          ...(correction.pole ? { pole: [...correction.pole] } : {}),
+          ...(correction.offset ? { offset: [...correction.offset] } : {}),
+          ...(correction.twistAngle === undefined ? {} : { twistAngle: correction.twistAngle }),
+          ...(correction.weight === undefined ? {} : { weight: correction.weight })
+        });
+        applyAimIkModelCorrection({
+          skeleton: this.arena.skeleton,
+          localPose,
+          modelPose,
+          joint: correction.joint,
+          jointCorrection: solved.jointCorrection,
+          updateTo
+        });
+        continue;
+      }
+      const rootJoint = correction.kind === "two-bone" ? correction.rootJoint : correction.hipJoint;
+      const midJoint = correction.kind === "two-bone" ? correction.midJoint : correction.kneeJoint;
+      const endJoint = correction.kind === "two-bone" ? correction.endJoint : correction.ankleJoint;
+      const target = correction.kind === "two-bone" ? correction.target : correction.targetAnkle;
+      const solved = solveTwoBoneIkModel({
+        root: modelPose[rootJoint]!,
+        mid: modelPose[midJoint]!,
+        end: modelPose[endJoint]!,
+        target: [...target],
+        ...(correction.pole ? { pole: [...correction.pole] } : {}),
+        ...(correction.kind === "two-bone" && correction.midAxis ? { midAxis: [...correction.midAxis] } : {}),
+        ...(correction.kind === "two-bone" && correction.twistAngle !== undefined
+          ? { twistAngle: correction.twistAngle }
+          : {}),
+        ...(correction.kind === "two-bone" && correction.soften !== undefined ? { soften: correction.soften } : {}),
+        ...((correction.kind === "two-bone" ? correction.weight : correction.influence) === undefined
+          ? {}
+          : { weight: correction.kind === "two-bone" ? correction.weight : correction.influence }),
+        ...(correction.maxStretch === undefined ? {} : { maxStretch: correction.maxStretch })
+      });
+      applyTwoBoneIkLocalCorrections({
+        skeleton: this.arena.skeleton,
+        localPose,
+        modelPose,
+        rootJoint,
+        midJoint,
+        corrections: solved,
+        updateTo
+      });
+      if (correction.kind === "foot" && correction.orientationTarget) {
+        const aim = solveAimIk({
+          joint: modelPose[endJoint]!,
+          target: [...correction.orientationTarget],
+          forward: [...(correction.ankleUp ?? [0, 1, 0])],
+          up: [...(correction.footForward ?? [0, 0, 1])],
+          pole: [...(correction.footForward ?? [0, 0, 1])],
+          weight: correction.orientationWeight ?? correction.influence ?? 1
+        });
+        applyAimIkModelCorrection({
+          skeleton: this.arena.skeleton,
+          localPose,
+          modelPose,
+          joint: endJoint,
+          jointCorrection: aim.jointCorrection,
+          updateTo
+        });
+      }
+    }
+    this.arena.writePose(pose, localPose);
+  }
+
+  invokeRawForTests(
+    input: { pose?: number; count?: number; capacityBytes?: number; descriptorsOffset?: number } = {}
+  ): WaKernelStatus {
+    return this.kernel.invokeProceduralCorrections(
+      this.arena.avatarHandle,
+      this.arena.poseOffset(input.pose ?? 0),
+      this.arena.poseStrideBytes,
+      this.arena.modelPoseOffset,
+      this.arena.jointCount * MAT4_BYTES,
+      this.arena.jointCount,
+      input.descriptorsOffset ?? this.descriptorsOffset,
+      input.count ?? 0,
+      input.capacityBytes ?? this.capacity * PROCEDURAL_DESCRIPTOR_BYTES,
+      this.optionsOffset
+    );
+  }
+
+  private writeDescriptor(view: DataView, index: number, correction: WasmProceduralCorrection): void {
+    const base = this.descriptorsOffset + index * PROCEDURAL_DESCRIPTOR_BYTES;
+    new Uint8Array(view.buffer, base, PROCEDURAL_DESCRIPTOR_BYTES).fill(0);
+    const writeVec = (offset: number, value: readonly [number, number, number]): void => {
+      view.setFloat32(base + offset, value[0], true);
+      view.setFloat32(base + offset + 4, value[1], true);
+      view.setFloat32(base + offset + 8, value[2], true);
+    };
+    if (correction.kind === "two-bone") {
+      let flags = 0;
+      if (correction.pole) flags |= PROCEDURAL_FLAG_POLE;
+      if (correction.midAxis) flags |= PROCEDURAL_FLAG_MID_AXIS;
+      view.setUint32(base, 1, true);
+      view.setUint32(base + 4, flags, true);
+      view.setInt32(base + 8, correction.rootJoint, true);
+      view.setInt32(base + 12, correction.midJoint, true);
+      view.setInt32(base + 16, correction.endJoint, true);
+      writeVec(24, correction.target);
+      if (correction.pole) writeVec(36, correction.pole);
+      if (correction.midAxis) writeVec(48, correction.midAxis);
+      view.setFloat32(base + 72, correction.twistAngle ?? 0, true);
+      view.setFloat32(base + 76, correction.soften ?? 0.998, true);
+      view.setFloat32(base + 80, correction.weight ?? 1, true);
+      view.setFloat32(base + 84, correction.maxStretch ?? 1, true);
+    } else if (correction.kind === "aim") {
+      let flags = 0;
+      if (correction.pole) flags |= PROCEDURAL_FLAG_POLE;
+      if (correction.up) flags |= PROCEDURAL_FLAG_UP;
+      if (correction.offset) flags |= PROCEDURAL_FLAG_OFFSET;
+      view.setUint32(base, 2, true);
+      view.setUint32(base + 4, flags, true);
+      view.setInt32(base + 8, correction.joint, true);
+      writeVec(24, correction.target);
+      writeVec(36, correction.forward ?? [1, 0, 0]);
+      writeVec(48, correction.up ?? [0, 1, 0]);
+      writeVec(60, correction.pole ?? [0, 1, 0]);
+      writeVec(72, correction.offset ?? [0, 0, 0]);
+      view.setFloat32(base + 84, correction.twistAngle ?? 0, true);
+      view.setFloat32(base + 88, correction.weight ?? 1, true);
+    } else {
+      let flags = 0;
+      if (correction.pole) flags |= PROCEDURAL_FLAG_POLE;
+      if (correction.orientationTarget) flags |= PROCEDURAL_FLAG_ORIENTATION;
+      view.setUint32(base, 3, true);
+      view.setUint32(base + 4, flags, true);
+      view.setInt32(base + 8, correction.hipJoint, true);
+      view.setInt32(base + 12, correction.kneeJoint, true);
+      view.setInt32(base + 16, correction.ankleJoint, true);
+      writeVec(24, correction.targetAnkle);
+      if (correction.pole) writeVec(36, correction.pole);
+      view.setFloat32(base + 76, 0.998, true);
+      view.setFloat32(base + 80, correction.influence ?? 1, true);
+      view.setFloat32(base + 84, correction.maxStretch ?? 1, true);
+      if (correction.orientationTarget) {
+        writeVec(104, correction.orientationTarget);
+        writeVec(116, correction.ankleUp ?? [0, 1, 0]);
+        writeVec(128, correction.footForward ?? [0, 0, 1]);
+        writeVec(140, correction.footForward ?? [0, 0, 1]);
+        view.setFloat32(base + 164, 0, true);
+        view.setFloat32(base + 168, correction.orientationWeight ?? correction.influence ?? 1, true);
+      }
     }
   }
 }
