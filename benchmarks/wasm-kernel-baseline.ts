@@ -1,6 +1,6 @@
 import os from "node:os";
 import process from "node:process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 
 import {
@@ -12,6 +12,7 @@ import {
   blendPoses,
   createSkeleton,
   localToModelPose,
+  loadWaifuAnimationWasmKernel,
   normalizePose,
   quatFromAxisAngle,
   sampleClipToPoseWithContext,
@@ -24,7 +25,10 @@ import {
   type Pose,
   type Quat,
   type Skeleton,
-  type SkinningJob
+  type SkinningJob,
+  WaKernelStatus,
+  type WaKernelLoadResult,
+  type WasmLocalToModelContext
 } from "../src/index.js";
 
 type BenchmarkConfig = {
@@ -96,6 +100,10 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
 
 const config = parseArgs(process.argv.slice(2));
 const fixture = createFixture(config.jointCount);
+const wasmKernel = await loadBenchmarkKernel();
+const wasmLocalToModel =
+  wasmKernel.kind === "wasm-scalar" ? wasmKernel.kernel.createLocalToModelContext(fixture.skeleton) : undefined;
+if (wasmLocalToModel) wasmLocalToModel.writeLocalPose(fixture.preBlendedPose);
 const singleAvatar = createAvatarState(0);
 const multiAvatars = Array.from({ length: config.multiAvatarCount }, (_value, index) => createAvatarState(index));
 const runtime = createRuntime(fixture, 0);
@@ -126,12 +134,24 @@ results.push(
 results.push(
   runBenchmark({
     name: "local_to_model_1_avatar",
-    description: "convert one local TRS pose to column-major model matrices",
+    description: "convert one local TRS pose to column-major model matrices with scalar TypeScript",
     config,
     operationCountPerIteration: 1,
     op: () => localToModelOnly(fixture, singleAvatar)
   })
 );
+if (wasmLocalToModel) {
+  results.push(
+    runBenchmark({
+      name: "local_to_model_scalar_wasm_1_avatar",
+      description:
+        "convert one already-packed padded-SoA local TRS pose to column-major model matrices with scalar WASM",
+      config,
+      operationCountPerIteration: 1,
+      op: () => localToModelWasmOnly(wasmLocalToModel)
+    })
+  );
+}
 results.push(
   runBenchmark({
     name: "skinning_palette_cpu_1_avatar",
@@ -223,10 +243,27 @@ const output = {
     cpuModel: os.cpus()[0]?.model ?? "unknown",
     totalMemoryBytes: os.totalmem()
   },
+  wasmKernel:
+    wasmKernel.kind === "wasm-scalar"
+      ? {
+          status: "ready",
+          mode: wasmKernel.kind,
+          startupMs: wasmKernel.startupMs,
+          simdSupported: wasmKernel.simdSupported,
+          featureFlags: wasmKernel.kernel.featureFlags
+        }
+      : {
+          status: "fallback",
+          mode: "typescript",
+          startupMs: wasmKernel.startupMs,
+          simdSupported: wasmKernel.simdSupported,
+          reason: wasmKernel.reason
+        },
   results,
   hotPathRank: rankHotPaths(results),
   notes: [
     "Timings use deterministic synthetic clips and skeletons; checksums guard against dead-code elimination.",
+    "WASM startup is reported separately in wasmKernel.startupMs and is not included in steady-state local_to_model_scalar_wasm_1_avatar timings.",
     "No heap-allocation precision is claimed. Current TypeScript object churn is inferred structurally from API shapes, not Node heap deltas.",
     "Use --smoke for a fast gate and default arguments for a steadier local baseline. Override with --iterations, --warmup, --joints, --avatars, or --runtime-avatars."
   ]
@@ -255,6 +292,25 @@ function readPositiveIntegerArg(args: readonly string[], name: string, fallback:
   if (value === undefined || value.startsWith("--")) return fallback;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function loadBenchmarkKernel(): Promise<WaKernelLoadResult> {
+  const bytes = readBenchmarkKernelBytes();
+  if (!bytes) return await loadWaifuAnimationWasmKernel();
+  return await loadWaifuAnimationWasmKernel({ source: { bytes } });
+}
+
+function readBenchmarkKernelBytes(): ArrayBuffer | undefined {
+  const candidates = [
+    new URL("../dist/wasm-kernel/waifu_animation_kernel.wasm", import.meta.url),
+    new URL("../target/wasm32-unknown-unknown/release/waifu_animation_kernel.wasm", import.meta.url)
+  ];
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    const bytes = readFileSync(candidate);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+  return undefined;
 }
 
 function createFixture(jointCount: number): BenchmarkFixture {
@@ -544,6 +600,12 @@ function localToModelOnly(fixture: BenchmarkFixture, avatar: AvatarSamplingState
   return checksumMatrices(modelPose);
 }
 
+function localToModelWasmOnly(context: WasmLocalToModelContext): number {
+  const status = context.updateModelPoseFromSoa();
+  if (status !== WaKernelStatus.Ok) throw new Error(`scalar WASM local-to-model failed with status ${status}`);
+  return checksumMatrixBuffer(context.modelPoseView);
+}
+
 function skinningPaletteAndCpu(fixture: BenchmarkFixture): number {
   const modelMatrices = localToModelPose(fixture.skeleton, fixture.preBlendedPose);
   const job: SkinningJob = {
@@ -652,6 +714,18 @@ function checksumMatrices(matrices: readonly Mat4[]): number {
     const matrix = matrices[joint]!;
     sum += (matrix[0] ?? 0) * 0.5 + (matrix[5] ?? 0) * 0.25 + (matrix[10] ?? 0) * 0.125;
     sum += (matrix[12] ?? 0) * 0.0625 + (matrix[13] ?? 0) * 0.03125 + (matrix[14] ?? 0) * 0.015625;
+  }
+  return sum;
+}
+
+function checksumMatrixBuffer(values: Float32Array): number {
+  const jointCount = Math.floor(values.length / 16);
+  let sum = 0;
+  const stride = Math.max(1, Math.floor(jointCount / 12));
+  for (let joint = 0; joint < jointCount; joint += stride) {
+    const base = joint * 16;
+    sum += (values[base] ?? 0) * 0.5 + (values[base + 5] ?? 0) * 0.25 + (values[base + 10] ?? 0) * 0.125;
+    sum += (values[base + 12] ?? 0) * 0.0625 + (values[base + 13] ?? 0) * 0.03125 + (values[base + 14] ?? 0) * 0.015625;
   }
   return sum;
 }

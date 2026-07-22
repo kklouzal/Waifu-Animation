@@ -2,5 +2,6 @@ node_modules/
 dist/
 artifacts/
 coverage/
+target/
 *.tsbuildinfo
 npm-debug.log*

@@ -18,7 +18,7 @@ runCharacterAnimationRuntimeApplierTests();
 runInteractionCoordinatorTests();
 runNavigationWorldCoordinatorTests();
 runRootMotionAuthorityTests();
-runWasmKernelContractTests();
+await runWasmKernelContractTests();
 await runCoreDataTests();
 await runMotionRuntimeTests();
 await runRetargetingIkFacialTests();

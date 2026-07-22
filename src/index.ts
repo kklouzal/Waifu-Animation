@@ -28,3 +28,4 @@ export * from "./interactions.js";
 export * from "./navigation.js";
 export * from "./world-coordinator.js";
 export * from "./root-motion-authority.js";
+export * from "./wasm-kernel.js";

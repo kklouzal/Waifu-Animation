@@ -14,12 +14,15 @@
   "files": [
     "dist/**/*.d.ts",
     "dist/**/*.js",
+    "dist/wasm-kernel/*.wasm",
+    "dist/wasm-kernel/README.md",
     "README.md",
     "LICENSE",
     "docs"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:wasm && tsc -p tsconfig.json",
+    "build:wasm": "node scripts/build-wasm-kernel.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "check:tests": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --noUnusedLocals --noUnusedParameters --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck tests/run-tests.ts",
     "bench:wasm-kernel": "tsx benchmarks/wasm-kernel-baseline.ts",

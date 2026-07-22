@@ -1,0 +1,10 @@
+[workspace]
+members = ["crates/waifu-animation-kernel"]
+resolver = "3"
+
+[profile.release]
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true
+codegen-units = 1

@@ -158,6 +158,38 @@ uint32_t wa_local_to_model(
 );
 ```
 
+Phase 1 adds the support exports needed to materialize that surface from TypeScript without JS-side memory ownership ambiguity:
+
+```c
+uint32_t wa_heap_base(void);
+uint32_t wa_alloc(uint32_t size_bytes, uint32_t alignment, uint32_t out_offset_ptr);
+uint32_t wa_create_skeleton(
+  uint32_t parent_indices_offset,
+  uint32_t joint_count,
+  uint32_t parent_indices_capacity_bytes,
+  uint32_t out_handle_ptr
+);
+uint32_t wa_force_memory_growth_for_test(uint32_t min_extra_pages); /* debug/test only */
+uint32_t wa_reset_for_test(void);                                  /* debug/test only */
+```
+
+`wa_create_skeleton` creates the documented static skeleton handle from an immutable parent-index table already copied into the exported memory. `wa_create_avatar` requires that skeleton handle and creates the mutable avatar handle. The TypeScript loader treats the debug/test exports as optional and never requires them in production paths.
+
+Phase 1 `wa_local_to_model` uses a 32-byte `options_ptr` descriptor so offsets remain capacity-checked despite the small C-compatible call surface:
+
+| Byte offset | Type  | Meaning                                      |
+| ----------: | ----- | -------------------------------------------- |
+|           0 | `u32` | parent indices offset                        |
+|           4 | `u32` | parent index count                           |
+|           8 | `u32` | parent index capacity bytes                  |
+|          12 | `i32` | `from`, or `-1`/`NO_PARENT`                  |
+|          16 | `i32` | `to`, inclusive                              |
+|          20 | `u32` | flags: bit 0 `fromExcluded`, bit 1 `hasRoot` |
+|          24 | `u32` | root matrix offset when `hasRoot`            |
+|          28 | `u32` | root matrix capacity bytes                   |
+
+The TypeScript `WasmLocalToModelContext` owns reusable local-pose SoA, model-matrix AoS, options, parent, and root-memory regions. Object-shaped `Transform[]`/`Mat4[]` adapters are outside the kernel and are explicit about copying; callers that maintain the SoA view can invoke the per-frame WASM path without per-joint JS object marshaling.
+
 Later phases add blend/additive/masks, packed sampling, runtime composition, skinning, and IK/foot-plant behind feature bits.
 
 ## Memory model and layouts
@@ -298,6 +330,14 @@ Gates:
 ### Phase 1 — Rust workspace, loader, feature detection, local-to-model parity
 
 Add Rust crate/build, TypeScript loader, memory epoch/view refresh, scalar fallback, and local-to-model kernel only.
+
+Implemented tooling surface:
+
+- Rust workspace/crate: `Cargo.toml`, `Cargo.lock`, `crates/waifu-animation-kernel`.
+- WASM build: `npm run build:wasm` compiles `wasm32-unknown-unknown --release --locked` and copies the intentionally packed scalar asset to `dist/wasm-kernel/waifu_animation_kernel.wasm` plus a generated README. The generated `target/` and `dist/` outputs stay ignored.
+- Loader/capability/context: `src/wasm-kernel.ts`, exported from `src/index.ts`, supports explicit bytes/module/URL initialization, ABI/feature validation, SIMD probe seam, scalar fallback, forced-disable/reset test hooks, and epoch-based typed-array refresh.
+- Public synchronous TypeScript APIs remain scalar-safe. The accelerated path is opt-in through a retained context (or through `updateLocalToModelPoseRange(..., { kernel })`), and it falls back to scalar TypeScript when disabled, unsupported, or failed.
+- Benchmark JSON now reports WASM startup separately in `wasmKernel.startupMs` and adds a steady-state `local_to_model_scalar_wasm_1_avatar` row when the scalar WASM asset is available.
 
 Gates:
 

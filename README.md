@@ -36,10 +36,13 @@ npm run build
 npm test
 ```
 
+`npm run build` also runs `npm run build:wasm`, compiling the internal scalar Rust/WASM local-to-model kernel into `dist/wasm-kernel/waifu_animation_kernel.wasm` for explicit opt-in loading. If WASM is unavailable, disabled, or fails ABI validation, the existing synchronous TypeScript APIs remain scalar-only.
+
 ## Public Modules
 
 - `math`: deterministic random helpers, transform math, quaternion interpolation, matrix composition.
 - `skeleton`: Ozz-style skeleton representation, humanoid mapping, local-to-model conversion.
+- `wasm-kernel`: optional explicit bytes/module/URL loader and retained local-to-model context for the internal scalar Rust/WASM kernel, with scalar TypeScript fallback.
 - `attachments`: renderer-agnostic Ozz-style joint attachment transform helpers.
 - `clip`: binary-backed clip types, sampling, validation, quaternion continuity.
 - `tracks`: generic user-channel tracks, sampling, optimization, and bounded edge triggering.

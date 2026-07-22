@@ -193,6 +193,15 @@ export type RawSkeletonValidationIssue = {
   message: string;
 };
 
+export type LocalToModelPoseKernel = {
+  tryUpdateLocalToModelPoseRange(
+    skeleton: Skeleton,
+    localPose: readonly Transform[],
+    out: Mat4[],
+    options?: Omit<LocalToModelPoseRangeOptions, "kernel">
+  ): Mat4[] | undefined;
+};
+
 export type LocalToModelPoseRangeOptions = {
   /** Optional root/model matrix multiplied before root joints, matching Ozz LocalToModelJob::root. */
   root?: Mat4;
@@ -202,6 +211,8 @@ export type LocalToModelPoseRangeOptions = {
   to?: number;
   /** When true, keeps the `from` joint model matrix as-is and updates only its descendants. */
   fromExcluded?: boolean;
+  /** Optional retained accelerated local-to-model context. Falls back to scalar TypeScript when unavailable. */
+  kernel?: LocalToModelPoseKernel;
 };
 
 export type JointReference = number | string;
@@ -845,6 +856,10 @@ export function updateLocalToModelPoseRange(
   out.length = skeleton.joints.length;
   if (to < 0) return out;
 
+  const kernelOptions = createKernelRangeOptions(options, from, to);
+  const accelerated = options.kernel?.tryUpdateLocalToModelPoseRange(skeleton, localPose, out, kernelOptions);
+  if (accelerated) return accelerated;
+
   const selected = new Uint8Array(jointCount);
   for (let index = 0; index < jointCount; index += 1) {
     const parentIndex = skeleton.joints[index]!.parentIndex;
@@ -871,6 +886,17 @@ export function updateLocalToModelPoseRange(
     out[index] = multiplyMat4(parentModel, local);
   }
   return out;
+}
+
+function createKernelRangeOptions(
+  options: LocalToModelPoseRangeOptions,
+  from: number,
+  to: number
+): Omit<LocalToModelPoseRangeOptions, "kernel"> {
+  const kernelOptions: Omit<LocalToModelPoseRangeOptions, "kernel"> = { from, to };
+  if (options.root !== undefined) kernelOptions.root = options.root;
+  if (options.fromExcluded !== undefined) kernelOptions.fromExcluded = options.fromExcluded;
+  return kernelOptions;
 }
 
 function sanitizeLocalToModelBoundary(
