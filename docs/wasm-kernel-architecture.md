@@ -1,6 +1,6 @@
 # Rust/WASM Kernel Architecture Contract
 
-Status: contract-first, executable migration map for a future internal Rust/WASM hot-path kernel. This artifact intentionally does **not** add Rust implementation. It fixes the kernel boundary, ABI, memory model, fallback policy, numeric parity contract, deterministic benchmark harness, and phased exit gates that later implementation slices must satisfy.
+Status: implemented through Phase 2 scalar Rust/WASM local-to-model plus retained padded-SoA blend, additive, masks, and normalization. Packed sampling, runtime scheduling, skinning, IK, Three.js/VRM, and app integration remain outside the kernel.
 
 ## Bounded kernel boundary
 
@@ -80,18 +80,24 @@ It emits JSON only, includes environment/fixture/results/checksums, and intentio
 Observed smoke baseline on Dev-01, 2026-07-22 UTC, command `npm run bench:wasm-kernel:smoke`:
 
 - environment: Node v24.18.0, V8 13.6.233.17-node.50, linux x64, 8 x Intel(R) Xeon(R) CPU E3-1285 v6 @ 4.10GHz, 67,301,683,200 bytes RAM;
-- fixture: 72 joints = 18 SoA groups, 3 clips, 216 tracks/clip, 5 keys/track, 2 override layers, 1 additive layer, 4096 CPU-skinned vertices x 4 influences, smoke iterations 60 after 20 warmup.
+- fixture: 72 joints = 18 SoA groups, 3 clips, 216 tracks/clip, 5 keys/track, 2 override layers, 1 additive layer, 4096 CPU-skinned vertices x 4 influences, smoke iterations 60 after 20 warmup;
+- scalar-WASM startup: 16.852436 ms, reported separately and excluded from steady-state rows.
 
-| Workload                                   | ms/avatar-frame |   ops/sec |    Checksum |
-| ------------------------------------------ | --------------: | --------: | ----------: |
-| `sampling_3_clips_1_avatar`                |      0.64500335 |   1550.38 |   19.292506 |
-| `blend_additive_masks_1_avatar`            |     0.215446583 |  4641.522 |   12.768127 |
-| `local_to_model_1_avatar`                  |      0.03124035 | 32009.885 |  819.347673 |
-| `skinning_palette_cpu_1_avatar`            |      3.42289795 |    292.15 |  433.285489 |
-| `sample_blend_local_to_model_1_avatar`     |      1.00024025 |    999.76 |  732.760487 |
-| `sample_blend_local_to_model_multi_avatar` |     0.954713933 |  1047.434 | 2933.879263 |
-| `animation_runtime_evaluate_1_avatar`      |     0.829434517 |  1205.641 |  731.334951 |
-| `animation_runtime_evaluate_multi_avatar`  |     0.782256708 |  1278.353 | 1463.644778 |
+| Workload                                                       | ms/avatar-frame |    ops/sec |    Checksum |
+| -------------------------------------------------------------- | --------------: | ---------: | ----------: |
+| `sampling_3_clips_1_avatar`                                    |     0.810434517 |   1233.906 |   19.292506 |
+| `blend_additive_masks_typescript_object_pose_1_avatar`         |     0.221787983 |   4508.811 |   12.768127 |
+| `blend_additive_masks_scalar_wasm_already_packed_1_avatar`     |       0.0792188 |  12623.266 |   12.768127 |
+| `blend_additive_masks_scalar_wasm_already_packed_multi_avatar` |     0.052393175 |  19086.455 |    51.07251 |
+| `local_to_model_1_avatar`                                      |     0.038418733 |  26028.969 |  819.347673 |
+| `local_to_model_scalar_wasm_1_avatar`                          |     0.009679633 | 103309.698 |  819.347681 |
+| `skinning_palette_cpu_1_avatar`                                |      3.20263725 |    312.243 |  433.285489 |
+| `sample_blend_local_to_model_1_avatar`                         |     1.077307217 |     928.24 |  732.760487 |
+| `sample_blend_local_to_model_multi_avatar`                     |     0.935913025 |   1068.475 | 2933.879263 |
+| `animation_runtime_evaluate_1_avatar`                          |     0.801986383 |   1246.904 |  731.334951 |
+| `animation_runtime_evaluate_multi_avatar`                      |     0.779247675 |   1283.289 | 1463.644778 |
+
+These smoke numbers are local synthetic evidence, not a production speedup claim. The TypeScript pose row uses object-shaped poses; the WASM rows begin already packed, so packing/materialization and end-to-end sampling/runtime costs are intentionally outside that comparison.
 
 Measured/structural priority:
 
@@ -108,9 +114,9 @@ If future target-workload JSON contradicts this order, measured workload priorit
 
 ### Versioning
 
-- ABI identity: `waifu_animation_kernel`, major `1`, minor `0`.
+- ABI identity: `waifu_animation_kernel`, major `1`. Phase 1 is minor `0`; Phase 2 pose jobs report minor `1`.
 - Loader calls `wa_version_major()`, `wa_version_minor()`, and `wa_feature_flags()` before enabling any kernel job.
-- Major mismatch rejects the kernel. Minor additions are allowed only when required feature bits are present.
+- Major mismatch rejects the kernel. The default scalar local-to-model loader still accepts ABI v1.0. Pose jobs require ABI v1.1, their feature bits, and all four pose-job exports, so the minor addition remains backward-compatible and explicitly gated.
 - Exports use C-compatible scalar parameters and return `i32` status. Multi-value returns are written into caller-provided memory structs.
 
 ### Status codes
@@ -190,7 +196,11 @@ Phase 1 `wa_local_to_model` uses a 32-byte `options_ptr` descriptor so offsets r
 
 The TypeScript `WasmLocalToModelContext` owns reusable local-pose SoA, model-matrix AoS, options, parent, and root-memory regions. Object-shaped `Transform[]`/`Mat4[]` adapters are outside the kernel and are explicit about copying; callers that maintain the SoA view can invoke the per-frame WASM path without per-joint JS object marshaling.
 
-Later phases add blend/additive/masks, packed sampling, runtime composition, skinning, and IK/foot-plant behind feature bits.
+Phase 2 adds `wa_blend_poses`, `wa_additive_delta`, `wa_apply_additive`, and `wa_normalize_pose`. Every pose range includes a capacity, blend uses a retained array of 24-byte descriptors (`pose offset`, `pose capacity`, `weight`, `mask offset`, `mask count`, `mask capacity`), and masks use current TypeScript semantics: omitted means all ones, short means missing joints are zero, extra values are ignored, and sparse masks are ordinary dense buffers with zero entries. All descriptors/ranges/capacities are validated before output writes.
+
+`WasmPoseArenaContext` owns contiguous retained pose slots, mask slots, and layer descriptors per avatar. Slot 0 starts as the skeleton rest pose. `poseView()` and `maskView()` permit already-packed steady-state jobs with caller-selected reusable output slots. `writePose()` and `copyPoseToTransforms()` are explicit object packing/materialization adapters; they do not claim allocation-free object conversion. The contexts keep no process-global TypeScript mutable state, and refresh typed views after memory growth. Existing object-shaped pose APIs remain scalar TypeScript by default.
+
+Later phases add packed sampling, runtime composition, skinning, and IK/foot-plant behind feature bits.
 
 ## Memory model and layouts
 
@@ -276,12 +286,10 @@ Requirements:
 Feature bits:
 
 - bit 0: scalar local-to-model;
-- bit 1: scalar blend/additive/masks;
-- bit 2: scalar packed sampling;
-- bit 3: runtime composition facade;
-- bit 4: skinning palette/CPU skinning;
-- bit 5: two-bone/aim IK;
-- bit 6: foot plant;
+- bit 1: scalar override blend;
+- bit 2: scalar additive delta/application;
+- bit 3: scalar dense/short/sparse-by-zero joint masks;
+- bits 4-15: reserved for later scalar jobs (packed sampling, runtime composition, skinning, IK, foot plant);
 - bit 16: SIMD local-to-model;
 - bit 17: SIMD blend/additive/masks;
 - bit 18: SIMD packed sampling;
@@ -317,7 +325,7 @@ Invalid/NaN rules:
 
 ## Phased migration order and exit gates
 
-### Phase 0 — contract and baseline (this slice)
+### Phase 0 — contract and baseline (implemented)
 
 Files: this architecture contract, deterministic benchmark harness, TypeScript contract fixtures/tests, package scripts, README link.
 
@@ -325,9 +333,9 @@ Gates:
 
 - benchmark smoke emits valid JSON with environment and result rows;
 - `npm run check`, benchmark typecheck, relevant tests/full tests when practical, formatting/lint for changed files, and `git diff --check` pass;
-- commit contains no Rust implementation and no push.
+- baseline commit contained no Rust implementation and was not pushed by the bounded worker.
 
-### Phase 1 — Rust workspace, loader, feature detection, local-to-model parity
+### Phase 1 — Rust workspace, loader, feature detection, local-to-model parity (implemented)
 
 Add Rust crate/build, TypeScript loader, memory epoch/view refresh, scalar fallback, and local-to-model kernel only.
 
@@ -346,11 +354,18 @@ Gates:
 - benchmark includes TS vs scalar-WASM local-to-model rows;
 - forced disable and instantiate failure fall back cleanly.
 
-This is the recommended next bounded implementation slice. If implementation capacity allows one combined job, add blend/local-to-model together only after local-to-model parity is green.
+Phase 1 parity is green and remains the scalar fallback boundary for local-to-model.
 
-### Phase 2 — blend/additive/masks kernel
+### Phase 2 — blend/additive/masks kernel (implemented)
 
-Gates: parity for threshold fallback, zero/negative/non-finite weights, short/sparse masks, quaternion hemisphere cases, additive positive/negative weights, padded lanes, and no per-frame JS `Transform` allocation in WASM steady state.
+Implemented:
+
+- retained padded-SoA override blending with fallback threshold, quaternion hemisphere accumulation, normalization, and finite repair;
+- additive delta generation and ordered signed application, including zero/negative scale-ratio edges;
+- omitted/full, zero, short, sparse-by-zero, invalid, and extra-value masks matching TypeScript rules;
+- reusable caller-owned output slots, capacity/range/handle validation, deterministic repeats, memory-growth view refresh, forced-disable behavior, and ABI/feature/export rejection coverage;
+- differential tests across single/multiple layers, custom fallback, antipodes, signed/non-finite weights, padded counts, malformed ranges/capacities, and additive ordering;
+- benchmark rows for current TypeScript object-pose composition versus scalar-WASM already-packed one- and multi-avatar arenas. Startup is separate and no production speedup or precise heap-allocation claim is made.
 
 ### Phase 3 — packed clip sampling kernel
 

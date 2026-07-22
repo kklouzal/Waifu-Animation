@@ -2,9 +2,16 @@ import { type Mat4, type Transform, normalizeQuat } from "./math.js";
 import { NO_PARENT, type LocalToModelPoseRangeOptions, type Skeleton } from "./skeleton.js";
 
 export const WA_KERNEL_ABI_MAJOR = 1;
+/** Oldest ABI v1 minor accepted by the scalar local-to-model facade. */
 export const WA_KERNEL_ABI_MINOR = 0;
+export const WA_KERNEL_POSE_JOBS_ABI_MINOR = 1;
 
 export const WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL = 1 << 0;
+export const WA_KERNEL_FEATURE_SCALAR_POSE_BLEND = 1 << 1;
+export const WA_KERNEL_FEATURE_SCALAR_ADDITIVE = 1 << 2;
+export const WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS = 1 << 3;
+export const WA_KERNEL_FEATURE_SCALAR_POSE_JOBS =
+  WA_KERNEL_FEATURE_SCALAR_POSE_BLEND | WA_KERNEL_FEATURE_SCALAR_ADDITIVE | WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS;
 export const WA_KERNEL_FEATURE_SIMD_LOCAL_TO_MODEL = 1 << 16;
 export const WA_KERNEL_FEATURE_DEBUG_SELF_TEST = 0x80000000;
 
@@ -88,17 +95,141 @@ export type WaKernelRawExports = {
     jointCount: number,
     optionsPtr: number
   ) => number;
+  wa_blend_poses?: (
+    avatarHandle: number,
+    layersOffset: number,
+    layerCount: number,
+    layersCapacityBytes: number,
+    fallbackPoseOffset: number,
+    fallbackPoseCapacityBytes: number,
+    restPoseOffset: number,
+    restPoseCapacityBytes: number,
+    outputPoseOffset: number,
+    outputPoseCapacityBytes: number,
+    jointCount: number,
+    threshold: number
+  ) => number;
+  wa_additive_delta?: (
+    avatarHandle: number,
+    restPoseOffset: number,
+    restPoseCapacityBytes: number,
+    samplePoseOffset: number,
+    samplePoseCapacityBytes: number,
+    outputPoseOffset: number,
+    outputPoseCapacityBytes: number,
+    jointCount: number
+  ) => number;
+  wa_apply_additive?: (
+    avatarHandle: number,
+    basePoseOffset: number,
+    basePoseCapacityBytes: number,
+    deltaPoseOffset: number,
+    deltaPoseCapacityBytes: number,
+    outputPoseOffset: number,
+    outputPoseCapacityBytes: number,
+    jointCount: number,
+    weight: number,
+    maskOffset: number,
+    maskCount: number,
+    maskCapacityBytes: number
+  ) => number;
+  wa_normalize_pose?: (
+    avatarHandle: number,
+    inputPoseOffset: number,
+    inputPoseCapacityBytes: number,
+    outputPoseOffset: number,
+    outputPoseCapacityBytes: number,
+    jointCount: number
+  ) => number;
   wa_force_memory_growth_for_test?: (minExtraPages: number) => number;
   wa_reset_for_test?: () => number;
 };
 
 export type WasmLocalToModelUpdateOptions = Pick<LocalToModelPoseRangeOptions, "root" | "from" | "to" | "fromExcluded">;
 
+export type WasmPoseArenaOptions = {
+  /** Number of retained padded-SoA pose slots. Slot 0 is initialized from the skeleton rest pose. */
+  poseCapacity?: number;
+  /** Number of retained dense mask slots. */
+  maskCapacity?: number;
+  /** Values retained per mask slot; defaults to the skeleton joint count and may be larger for extra-value tests. */
+  maskValueCapacity?: number;
+  /** Maximum override layer descriptors submitted by one blend job. */
+  layerCapacity?: number;
+};
+
+export type WasmPoseBlendLayer = {
+  pose: number;
+  weight: number;
+  /** Omit for an all-ones mask. Dense sparse-by-zero masks use a regular mask slot. */
+  mask?: number;
+  /** Defaults to the last length passed to writeMask/writeSparseMask. Missing short entries read as zero. */
+  maskCount?: number;
+};
+
+export type WasmPoseBlendOptions = {
+  fallbackPose?: number;
+  outputPose: number;
+  threshold?: number;
+};
+
+export type WasmRawBlendInvocation = {
+  avatarHandle: number;
+  layersOffset: number;
+  layerCount: number;
+  layersCapacityBytes: number;
+  fallbackPoseOffset: number;
+  fallbackPoseCapacityBytes: number;
+  restPoseOffset: number;
+  restPoseCapacityBytes: number;
+  outputPoseOffset: number;
+  outputPoseCapacityBytes: number;
+  jointCount: number;
+  threshold: number;
+};
+
+export type WasmRawAdditiveDeltaInvocation = {
+  avatarHandle: number;
+  restPoseOffset: number;
+  restPoseCapacityBytes: number;
+  samplePoseOffset: number;
+  samplePoseCapacityBytes: number;
+  outputPoseOffset: number;
+  outputPoseCapacityBytes: number;
+  jointCount: number;
+};
+
+export type WasmRawApplyAdditiveInvocation = {
+  avatarHandle: number;
+  basePoseOffset: number;
+  basePoseCapacityBytes: number;
+  deltaPoseOffset: number;
+  deltaPoseCapacityBytes: number;
+  outputPoseOffset: number;
+  outputPoseCapacityBytes: number;
+  jointCount: number;
+  weight: number;
+  maskOffset: number;
+  maskCount: number;
+  maskCapacityBytes: number;
+};
+
+export type WasmRawNormalizePoseInvocation = {
+  avatarHandle: number;
+  inputPoseOffset: number;
+  inputPoseCapacityBytes: number;
+  outputPoseOffset: number;
+  outputPoseCapacityBytes: number;
+  jointCount: number;
+};
+
 const SOA_TRANSFORM_FLOATS = 40;
 const SOA_TRANSFORM_BYTES = SOA_TRANSFORM_FLOATS * 4;
+const F32_BYTES = 4;
 const MAT4_FLOATS = 16;
 const MAT4_BYTES = MAT4_FLOATS * 4;
 const OPTIONS_BYTES = 32;
+const BLEND_LAYER_BYTES = 24;
 const PARENT_BYTES = 4;
 const DEFAULT_ALIGNMENT = 16;
 const MATRIX_ALIGNMENT = 64;
@@ -192,6 +323,25 @@ export function validateWaifuAnimationKernelExports(
   if ((featureFlags & requiredFeatures) >>> 0 !== requiredFeatures >>> 0) {
     return { ok: false, reason: "missing-required-feature", major, minor, featureFlags };
   }
+  if ((requiredFeatures & WA_KERNEL_FEATURE_SCALAR_POSE_JOBS) !== 0) {
+    if (minor < WA_KERNEL_POSE_JOBS_ABI_MINOR) {
+      return { ok: false, reason: "pose-jobs-abi-minor-too-old", major, minor, featureFlags };
+    }
+    const requiredPoseExports = new Set<string>(["wa_normalize_pose"]);
+    if ((requiredFeatures & WA_KERNEL_FEATURE_SCALAR_POSE_BLEND) !== 0) requiredPoseExports.add("wa_blend_poses");
+    if ((requiredFeatures & WA_KERNEL_FEATURE_SCALAR_ADDITIVE) !== 0) {
+      requiredPoseExports.add("wa_additive_delta");
+      requiredPoseExports.add("wa_apply_additive");
+    }
+    if ((requiredFeatures & WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS) !== 0) {
+      requiredPoseExports.add("wa_blend_poses");
+      requiredPoseExports.add("wa_apply_additive");
+    }
+    for (const name of requiredPoseExports) {
+      if (typeof exports[name] !== "function")
+        return { ok: false, reason: `missing-export:${name}`, major, minor, featureFlags };
+    }
+  }
   return { ok: true, major, minor, featureFlags };
 }
 
@@ -271,6 +421,15 @@ export class WaifuAnimationWasmKernel {
 
   createLocalToModelContext(skeleton: Skeleton): WasmLocalToModelContext {
     return new WasmLocalToModelContext(this, skeleton);
+  }
+
+  createPoseArenaContext(skeleton: Skeleton, options: WasmPoseArenaOptions = {}): WasmPoseArenaContext {
+    const validation = validateWaifuAnimationKernelExports(
+      this.exports,
+      WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL | WA_KERNEL_FEATURE_SCALAR_POSE_JOBS
+    );
+    if (!validation.ok) throw new Error(`WASM kernel pose jobs unavailable: ${validation.reason}`);
+    return new WasmPoseArenaContext(this, skeleton, options);
   }
 
   forceDisableForTests(reason = "forced-disable"): void {
@@ -354,6 +513,76 @@ export class WaifuAnimationWasmKernel {
     return status;
   }
 
+  invokeBlendPoses(input: WasmRawBlendInvocation): WaKernelStatus {
+    if (!this.available || !this.exports.wa_blend_poses) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      this.exports.wa_blend_poses(
+        input.avatarHandle,
+        input.layersOffset,
+        input.layerCount,
+        input.layersCapacityBytes,
+        input.fallbackPoseOffset,
+        input.fallbackPoseCapacityBytes,
+        input.restPoseOffset,
+        input.restPoseCapacityBytes,
+        input.outputPoseOffset,
+        input.outputPoseCapacityBytes,
+        input.jointCount,
+        input.threshold
+      )
+    );
+  }
+
+  invokeAdditiveDelta(input: WasmRawAdditiveDeltaInvocation): WaKernelStatus {
+    if (!this.available || !this.exports.wa_additive_delta) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      this.exports.wa_additive_delta(
+        input.avatarHandle,
+        input.restPoseOffset,
+        input.restPoseCapacityBytes,
+        input.samplePoseOffset,
+        input.samplePoseCapacityBytes,
+        input.outputPoseOffset,
+        input.outputPoseCapacityBytes,
+        input.jointCount
+      )
+    );
+  }
+
+  invokeApplyAdditive(input: WasmRawApplyAdditiveInvocation): WaKernelStatus {
+    if (!this.available || !this.exports.wa_apply_additive) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      this.exports.wa_apply_additive(
+        input.avatarHandle,
+        input.basePoseOffset,
+        input.basePoseCapacityBytes,
+        input.deltaPoseOffset,
+        input.deltaPoseCapacityBytes,
+        input.outputPoseOffset,
+        input.outputPoseCapacityBytes,
+        input.jointCount,
+        input.weight,
+        input.maskOffset,
+        input.maskCount,
+        input.maskCapacityBytes
+      )
+    );
+  }
+
+  invokeNormalizePose(input: WasmRawNormalizePoseInvocation): WaKernelStatus {
+    if (!this.available || !this.exports.wa_normalize_pose) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      this.exports.wa_normalize_pose(
+        input.avatarHandle,
+        input.inputPoseOffset,
+        input.inputPoseCapacityBytes,
+        input.outputPoseOffset,
+        input.outputPoseCapacityBytes,
+        input.jointCount
+      )
+    );
+  }
+
   refreshViewsIfNeeded(): void {
     const epoch = this.exports.wa_memory_epoch();
     if (
@@ -370,6 +599,330 @@ export class WaifuAnimationWasmKernel {
   dataViewForCurrentMemory(): DataView {
     this.refreshViewsIfNeeded();
     return this.dataView;
+  }
+
+  private finishPoseJobStatus(status: number): WaKernelStatus {
+    this.refreshViewsIfNeeded();
+    if (status === 7 || status === 6) this.quarantinedReason = statusName(status);
+    return status;
+  }
+}
+
+/**
+ * Retained scalar-WASM pose arena. Numeric jobs read and write padded SoA slots
+ * in-place; steady-state blend/additive calls do not create `Transform[]`.
+ * `writePose` and `copyPoseToTransforms` are explicit object packing and
+ * materialization adapters and therefore are not allocation-free promises.
+ */
+export class WasmPoseArenaContext {
+  readonly jointCount: number;
+  readonly groupCount: number;
+  readonly poseCapacity: number;
+  readonly maskCapacity: number;
+  readonly maskValueCapacity: number;
+  readonly layerCapacity: number;
+  readonly poseStrideBytes: number;
+  readonly maskStrideBytes: number;
+  readonly poseArenaOffset: number;
+  readonly maskArenaOffset: number;
+  readonly layerDescriptorsOffset: number;
+  readonly parentIndicesOffset: number;
+  private readonly kernel: WaifuAnimationWasmKernel;
+  private readonly avatarHandle: number;
+  private readonly skeletonHandle: number;
+  private readonly maskLengths: Uint32Array;
+  private poseViewCache: Float32Array[];
+  private maskViewCache: Float32Array[];
+  private cachedBuffer: ArrayBuffer;
+  private destroyed = false;
+
+  constructor(kernel: WaifuAnimationWasmKernel, skeleton: Skeleton, options: WasmPoseArenaOptions = {}) {
+    assertSupportedJointCount(skeleton.joints.length);
+    this.kernel = kernel;
+    this.jointCount = skeleton.joints.length;
+    this.groupCount = Math.ceil(this.jointCount / 4);
+    this.poseCapacity = positiveCapacity(options.poseCapacity, 8, "poseCapacity");
+    this.maskCapacity = positiveCapacity(options.maskCapacity, 4, "maskCapacity");
+    this.maskValueCapacity = positiveCapacity(options.maskValueCapacity, this.jointCount, "maskValueCapacity");
+    this.layerCapacity = positiveCapacity(options.layerCapacity, 8, "layerCapacity");
+    this.poseStrideBytes = this.groupCount * SOA_TRANSFORM_BYTES;
+    this.maskStrideBytes = this.maskValueCapacity * PARENT_BYTES;
+    this.parentIndicesOffset = kernel.allocateBytes(this.jointCount * PARENT_BYTES, DEFAULT_ALIGNMENT);
+    this.poseArenaOffset = kernel.allocateBytes(this.poseCapacity * this.poseStrideBytes, DEFAULT_ALIGNMENT);
+    this.maskArenaOffset = kernel.allocateBytes(this.maskCapacity * this.maskStrideBytes, DEFAULT_ALIGNMENT);
+    this.layerDescriptorsOffset = kernel.allocateBytes(this.layerCapacity * BLEND_LAYER_BYTES, DEFAULT_ALIGNMENT);
+    this.cachedBuffer = kernel.memory.buffer;
+    this.poseViewCache = this.createPoseViews();
+    this.maskViewCache = this.createMaskViews();
+    this.maskLengths = new Uint32Array(this.maskCapacity);
+
+    const dataView = kernel.dataViewForCurrentMemory();
+    for (let joint = 0; joint < this.jointCount; joint += 1) {
+      dataView.setInt32(this.parentIndicesOffset + joint * PARENT_BYTES, readSkeletonParent(skeleton, joint), true);
+    }
+    this.skeletonHandle = kernel.createSkeleton(
+      this.parentIndicesOffset,
+      this.jointCount,
+      this.jointCount * PARENT_BYTES
+    );
+    this.avatarHandle = kernel.createAvatar(this.skeletonHandle, this.jointCount);
+    for (let slot = 0; slot < this.poseCapacity; slot += 1) writeIdentitySoa(this.poseView(slot), this.jointCount);
+    for (let slot = 0; slot < this.maskCapacity; slot += 1) this.maskView(slot).fill(0);
+    this.writePose(0, skeleton.restPose);
+  }
+
+  poseOffset(slot: number): number {
+    this.assertPoseSlot(slot);
+    return this.poseArenaOffset + slot * this.poseStrideBytes;
+  }
+
+  maskOffset(slot: number): number {
+    this.assertMaskSlot(slot);
+    return this.maskArenaOffset + slot * this.maskStrideBytes;
+  }
+
+  poseView(slot: number): Float32Array {
+    this.assertPoseSlot(slot);
+    this.refreshViews();
+    return this.poseViewCache[slot]!;
+  }
+
+  maskView(slot: number): Float32Array {
+    this.assertMaskSlot(slot);
+    this.refreshViews();
+    return this.maskViewCache[slot]!;
+  }
+
+  writePose(slot: number, pose: readonly Transform[]): Float32Array {
+    if (pose.length !== this.jointCount) {
+      throw new Error(`pose length ${pose.length} does not match WASM pose arena ${this.jointCount}`);
+    }
+    return writeTransformPoseToSoa(pose, this.poseView(slot), this.jointCount);
+  }
+
+  copyPoseToTransforms(slot: number, out: Transform[] = []): Transform[] {
+    return copySoaPoseToTransformPose(this.poseView(slot), this.jointCount, out);
+  }
+
+  writeMask(slot: number, mask: ArrayLike<number>): Float32Array {
+    if (mask.length > this.maskValueCapacity) {
+      throw new Error(`mask length ${mask.length} exceeds WASM mask slot capacity ${this.maskValueCapacity}`);
+    }
+    const view = this.maskView(slot);
+    view.fill(0);
+    for (let index = 0; index < mask.length; index += 1) view[index] = Number(mask[index]);
+    this.maskLengths[slot] = mask.length;
+    return view;
+  }
+
+  writeSparseMask(
+    slot: number,
+    entries: readonly { joint: number; weight: number }[],
+    length = this.jointCount
+  ): Float32Array {
+    if (!Number.isInteger(length) || length < 0 || length > this.maskValueCapacity) {
+      throw new Error(`sparse mask length ${length} exceeds WASM mask slot capacity ${this.maskValueCapacity}`);
+    }
+    const view = this.maskView(slot);
+    view.fill(0);
+    for (const entry of entries) {
+      if (Number.isInteger(entry.joint) && entry.joint >= 0 && entry.joint < length) {
+        view[entry.joint] = entry.weight;
+      }
+    }
+    this.maskLengths[slot] = length;
+    return view;
+  }
+
+  blend(layers: readonly WasmPoseBlendLayer[], options: WasmPoseBlendOptions): WaKernelStatus {
+    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    if (layers.length > this.layerCapacity) return WaKernelStatus.Capacity;
+    this.refreshViews();
+    const dataView = this.kernel.dataViewForCurrentMemory();
+    for (let index = 0; index < layers.length; index += 1) {
+      const layer = layers[index]!;
+      const descriptor = this.layerDescriptorsOffset + index * BLEND_LAYER_BYTES;
+      const poseOffset = this.poseOffset(layer.pose);
+      let maskOffset = 0;
+      let maskCount = 0;
+      let maskCapacityBytes = 0;
+      if (layer.mask !== undefined) {
+        this.assertMaskSlot(layer.mask);
+        maskOffset = this.maskOffset(layer.mask);
+        maskCount = layer.maskCount ?? this.maskLengths[layer.mask]!;
+        if (!Number.isInteger(maskCount) || maskCount < 0 || maskCount > this.maskValueCapacity) {
+          return WaKernelStatus.Capacity;
+        }
+        maskCapacityBytes = this.maskStrideBytes;
+      }
+      dataView.setUint32(descriptor, poseOffset, true);
+      dataView.setUint32(descriptor + 4, this.poseStrideBytes, true);
+      dataView.setFloat32(descriptor + 8, layer.weight, true);
+      dataView.setUint32(descriptor + 12, maskOffset, true);
+      dataView.setUint32(descriptor + 16, maskCount, true);
+      dataView.setUint32(descriptor + 20, maskCapacityBytes, true);
+    }
+    const fallbackPose = options.fallbackPose ?? 0;
+    this.assertPoseSlot(fallbackPose);
+    this.assertPoseSlot(options.outputPose);
+    return this.kernel.invokeBlendPoses({
+      avatarHandle: this.avatarHandle,
+      layersOffset: this.layerDescriptorsOffset,
+      layerCount: layers.length,
+      layersCapacityBytes: this.layerCapacity * BLEND_LAYER_BYTES,
+      fallbackPoseOffset: this.poseOffset(fallbackPose),
+      fallbackPoseCapacityBytes: this.poseStrideBytes,
+      restPoseOffset: this.poseOffset(0),
+      restPoseCapacityBytes: this.poseStrideBytes,
+      outputPoseOffset: this.poseOffset(options.outputPose),
+      outputPoseCapacityBytes: this.poseStrideBytes,
+      jointCount: this.jointCount,
+      threshold: options.threshold ?? 0.1
+    });
+  }
+
+  additiveDelta(restPose: number, samplePose: number, outputPose: number): WaKernelStatus {
+    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    return this.kernel.invokeAdditiveDelta({
+      avatarHandle: this.avatarHandle,
+      restPoseOffset: this.poseOffset(restPose),
+      restPoseCapacityBytes: this.poseStrideBytes,
+      samplePoseOffset: this.poseOffset(samplePose),
+      samplePoseCapacityBytes: this.poseStrideBytes,
+      outputPoseOffset: this.poseOffset(outputPose),
+      outputPoseCapacityBytes: this.poseStrideBytes,
+      jointCount: this.jointCount
+    });
+  }
+
+  applyAdditive(
+    basePose: number,
+    deltaPose: number,
+    weight: number,
+    outputPose: number,
+    mask?: number,
+    maskCount?: number
+  ): WaKernelStatus {
+    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    let resolvedMaskOffset = 0;
+    let resolvedMaskCount = 0;
+    let resolvedMaskCapacity = 0;
+    if (mask !== undefined) {
+      this.assertMaskSlot(mask);
+      resolvedMaskOffset = this.maskOffset(mask);
+      resolvedMaskCount = maskCount ?? this.maskLengths[mask]!;
+      if (!Number.isInteger(resolvedMaskCount) || resolvedMaskCount < 0 || resolvedMaskCount > this.maskValueCapacity) {
+        return WaKernelStatus.Capacity;
+      }
+      resolvedMaskCapacity = this.maskStrideBytes;
+    }
+    return this.kernel.invokeApplyAdditive({
+      avatarHandle: this.avatarHandle,
+      basePoseOffset: this.poseOffset(basePose),
+      basePoseCapacityBytes: this.poseStrideBytes,
+      deltaPoseOffset: this.poseOffset(deltaPose),
+      deltaPoseCapacityBytes: this.poseStrideBytes,
+      outputPoseOffset: this.poseOffset(outputPose),
+      outputPoseCapacityBytes: this.poseStrideBytes,
+      jointCount: this.jointCount,
+      weight,
+      maskOffset: resolvedMaskOffset,
+      maskCount: resolvedMaskCount,
+      maskCapacityBytes: resolvedMaskCapacity
+    });
+  }
+
+  normalize(inputPose: number, outputPose = inputPose): WaKernelStatus {
+    if (this.destroyed || !this.kernel.available) return WaKernelStatus.Unsupported;
+    return this.kernel.invokeNormalizePose({
+      avatarHandle: this.avatarHandle,
+      inputPoseOffset: this.poseOffset(inputPose),
+      inputPoseCapacityBytes: this.poseStrideBytes,
+      outputPoseOffset: this.poseOffset(outputPose),
+      outputPoseCapacityBytes: this.poseStrideBytes,
+      jointCount: this.jointCount
+    });
+  }
+
+  invokeRawBlendForTests(overrides: Partial<WasmRawBlendInvocation> = {}): WaKernelStatus {
+    return this.kernel.invokeBlendPoses({
+      avatarHandle: this.avatarHandle,
+      layersOffset: this.layerDescriptorsOffset,
+      layerCount: 0,
+      layersCapacityBytes: this.layerCapacity * BLEND_LAYER_BYTES,
+      fallbackPoseOffset: this.poseOffset(0),
+      fallbackPoseCapacityBytes: this.poseStrideBytes,
+      restPoseOffset: this.poseOffset(0),
+      restPoseCapacityBytes: this.poseStrideBytes,
+      outputPoseOffset: this.poseOffset(1),
+      outputPoseCapacityBytes: this.poseStrideBytes,
+      jointCount: this.jointCount,
+      threshold: 0.1,
+      ...overrides
+    });
+  }
+
+  invokeRawAdditiveDeltaForTests(overrides: Partial<WasmRawAdditiveDeltaInvocation> = {}): WaKernelStatus {
+    return this.kernel.invokeAdditiveDelta({
+      avatarHandle: this.avatarHandle,
+      restPoseOffset: this.poseOffset(0),
+      restPoseCapacityBytes: this.poseStrideBytes,
+      samplePoseOffset: this.poseOffset(1),
+      samplePoseCapacityBytes: this.poseStrideBytes,
+      outputPoseOffset: this.poseOffset(2),
+      outputPoseCapacityBytes: this.poseStrideBytes,
+      jointCount: this.jointCount,
+      ...overrides
+    });
+  }
+
+  destroy(): WaKernelStatus {
+    if (this.destroyed) return WaKernelStatus.BadHandle;
+    this.destroyed = true;
+    const avatarStatus = this.kernel.destroyHandle(this.avatarHandle);
+    const skeletonStatus = this.kernel.destroyHandle(this.skeletonHandle);
+    return avatarStatus === WaKernelStatus.Ok ? skeletonStatus : avatarStatus;
+  }
+
+  refreshViews(): void {
+    this.kernel.refreshViewsIfNeeded();
+    if (this.cachedBuffer !== this.kernel.memory.buffer) {
+      this.cachedBuffer = this.kernel.memory.buffer;
+      this.poseViewCache = this.createPoseViews();
+      this.maskViewCache = this.createMaskViews();
+    }
+  }
+
+  private createPoseViews(): Float32Array[] {
+    return Array.from(
+      { length: this.poseCapacity },
+      (_value, slot) =>
+        new Float32Array(
+          this.cachedBuffer,
+          this.poseArenaOffset + slot * this.poseStrideBytes,
+          this.poseStrideBytes / F32_BYTES
+        )
+    );
+  }
+
+  private createMaskViews(): Float32Array[] {
+    return Array.from(
+      { length: this.maskCapacity },
+      (_value, slot) =>
+        new Float32Array(this.cachedBuffer, this.maskArenaOffset + slot * this.maskStrideBytes, this.maskValueCapacity)
+    );
+  }
+
+  private assertPoseSlot(slot: number): void {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= this.poseCapacity) {
+      throw new Error(`WASM pose slot ${slot} is out of range`);
+    }
+  }
+
+  private assertMaskSlot(slot: number): void {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= this.maskCapacity) {
+      throw new Error(`WASM mask slot ${slot} is out of range`);
+    }
   }
 }
 
@@ -608,6 +1161,54 @@ export function writeTransformPoseToSoa(
   return target;
 }
 
+export function copySoaPoseToTransformPose(
+  source: Float32Array,
+  jointCount: number,
+  out: Transform[] = []
+): Transform[] {
+  assertSupportedJointCount(jointCount);
+  if (source.length < Math.ceil(jointCount / 4) * SOA_TRANSFORM_FLOATS) {
+    throw new Error("local pose SoA source capacity is too small");
+  }
+  out.length = jointCount;
+  for (let joint = 0; joint < jointCount; joint += 1) {
+    const groupBase = (joint >> 2) * SOA_TRANSFORM_FLOATS;
+    const lane = joint & 3;
+    const translation: Transform["translation"] = [
+      finiteOr(source[groupBase + lane], 0),
+      finiteOr(source[groupBase + 4 + lane], 0),
+      finiteOr(source[groupBase + 8 + lane], 0)
+    ];
+    const rotation = normalizeQuat([
+      finiteOr(source[groupBase + 12 + lane], 0),
+      finiteOr(source[groupBase + 16 + lane], 0),
+      finiteOr(source[groupBase + 20 + lane], 0),
+      finiteOr(source[groupBase + 24 + lane], 1)
+    ]);
+    const scale: Transform["scale"] = [
+      finiteOr(source[groupBase + 28 + lane], 1),
+      finiteOr(source[groupBase + 32 + lane], 1),
+      finiteOr(source[groupBase + 36 + lane], 1)
+    ];
+    const existing = out[joint];
+    if (existing) {
+      existing.translation[0] = translation[0];
+      existing.translation[1] = translation[1];
+      existing.translation[2] = translation[2];
+      existing.rotation[0] = rotation[0];
+      existing.rotation[1] = rotation[1];
+      existing.rotation[2] = rotation[2];
+      existing.rotation[3] = rotation[3];
+      existing.scale[0] = scale[0];
+      existing.scale[1] = scale[1];
+      existing.scale[2] = scale[2];
+    } else {
+      out[joint] = { translation, rotation, scale };
+    }
+  }
+  return out;
+}
+
 export function copyModelPoseViewToMat4Array(modelPose: Float32Array, out: Mat4[] = []): Mat4[] {
   const jointCount = Math.floor(modelPose.length / MAT4_FLOATS);
   out.length = jointCount;
@@ -680,6 +1281,14 @@ function assertSupportedJointCount(jointCount: number): void {
   if (!Number.isInteger(jointCount) || jointCount <= 0 || jointCount > MAX_JOINTS) {
     throw new Error(`WASM local-to-model joint count ${jointCount} is out of range`);
   }
+}
+
+function positiveCapacity(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved <= 0 || resolved > MAX_JOINTS) {
+    throw new Error(`WASM pose arena ${name} ${resolved} is out of range`);
+  }
+  return resolved;
 }
 
 function readSkeletonParent(skeleton: Skeleton, index: number): number {

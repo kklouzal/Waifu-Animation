@@ -6,8 +6,11 @@ use core::arch::wasm32;
 use core::panic::PanicInfo;
 
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 0;
+pub const ABI_MINOR: u32 = 1;
 pub const FEATURE_SCALAR_LOCAL_TO_MODEL: u32 = 1 << 0;
+pub const FEATURE_SCALAR_POSE_BLEND: u32 = 1 << 1;
+pub const FEATURE_SCALAR_ADDITIVE: u32 = 1 << 2;
+pub const FEATURE_SCALAR_JOINT_MASKS: u32 = 1 << 3;
 pub const FEATURE_DEBUG_SELF_TEST: u32 = 1 << 31;
 
 pub const WA_OK: u32 = 0;
@@ -26,6 +29,10 @@ const WASM_PAGE_BYTES: u32 = 65_536;
 const SOA_TRANSFORM_BYTES: u32 = 160;
 const MAT4_BYTES: u32 = 64;
 const OPTIONS_BYTES: u32 = 32;
+const BLEND_LAYER_BYTES: u32 = 24;
+const F32_BYTES: u32 = 4;
+const TRANSFORM_COMPONENTS: usize = 10;
+const EPSILON: f32 = 1.0e-8;
 const AVATAR_MAGIC: u32 = 0x5741_4101;
 const SKELETON_MAGIC: u32 = 0x5741_5301;
 const AVATAR_FLAG_DESTROYED: u32 = 1;
@@ -152,7 +159,11 @@ pub extern "C" fn wa_version_minor() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn wa_feature_flags() -> u32 {
-    FEATURE_SCALAR_LOCAL_TO_MODEL | FEATURE_DEBUG_SELF_TEST
+    FEATURE_SCALAR_LOCAL_TO_MODEL
+        | FEATURE_SCALAR_POSE_BLEND
+        | FEATURE_SCALAR_ADDITIVE
+        | FEATURE_SCALAR_JOINT_MASKS
+        | FEATURE_DEBUG_SELF_TEST
 }
 
 #[unsafe(no_mangle)]
@@ -390,6 +401,225 @@ pub extern "C" fn wa_local_to_model(
     )
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_blend_poses(
+    avatar_handle: u32,
+    layers_offset: u32,
+    layer_count: u32,
+    layers_capacity_bytes: u32,
+    fallback_pose_offset: u32,
+    fallback_pose_capacity_bytes: u32,
+    rest_pose_offset: u32,
+    rest_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+    threshold: f32,
+) -> u32 {
+    let Some(record) = avatar_record(avatar_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let pose_bytes = match validate_pose_job(
+        record,
+        joint_count,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+    ) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let fallback_status = validate_pose_range(
+        fallback_pose_offset,
+        fallback_pose_capacity_bytes,
+        pose_bytes,
+    );
+    if fallback_status != WA_OK {
+        return fallback_status;
+    }
+    let rest_status = validate_pose_range(rest_pose_offset, rest_pose_capacity_bytes, pose_bytes);
+    if rest_status != WA_OK {
+        return rest_status;
+    }
+    if layer_count > MAX_JOINTS || (layer_count > 0 && !is_aligned(layers_offset, 4)) {
+        return WA_ERR_INVALID_ARG;
+    }
+    let layer_bytes = match layer_count.checked_mul(BLEND_LAYER_BYTES) {
+        Some(value) => value,
+        None => return WA_ERR_CAPACITY,
+    };
+    if layers_capacity_bytes < layer_bytes {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(layers_offset, layer_bytes) {
+        return WA_ERR_OOB;
+    }
+    for layer in 0..layer_count {
+        let descriptor = layers_offset + layer * BLEND_LAYER_BYTES;
+        let pose_offset = unsafe { read_u32(descriptor) };
+        let pose_capacity = unsafe { read_u32(descriptor + 4) };
+        let mask_offset = unsafe { read_u32(descriptor + 12) };
+        let mask_count = unsafe { read_u32(descriptor + 16) };
+        let mask_capacity = unsafe { read_u32(descriptor + 20) };
+        if !is_aligned(pose_offset, 16) || pose_capacity < pose_bytes {
+            return if !is_aligned(pose_offset, 16) {
+                WA_ERR_INVALID_ARG
+            } else {
+                WA_ERR_CAPACITY
+            };
+        }
+        if !memory_range_valid(pose_offset, pose_bytes) {
+            return WA_ERR_OOB;
+        }
+        let mask_status = validate_mask(mask_offset, mask_count, mask_capacity);
+        if mask_status != WA_OK {
+            return mask_status;
+        }
+    }
+
+    let resolved_threshold = if threshold.is_finite() {
+        threshold.max(0.0)
+    } else {
+        0.1
+    };
+    blend_poses_unchecked(
+        layers_offset,
+        layer_count,
+        fallback_pose_offset,
+        rest_pose_offset,
+        output_pose_offset,
+        joint_count,
+        resolved_threshold,
+    );
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_additive_delta(
+    avatar_handle: u32,
+    rest_pose_offset: u32,
+    rest_pose_capacity_bytes: u32,
+    sample_pose_offset: u32,
+    sample_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+) -> u32 {
+    let Some(record) = avatar_record(avatar_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let pose_bytes = match validate_pose_job(
+        record,
+        joint_count,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+    ) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    for (offset, capacity) in [
+        (rest_pose_offset, rest_pose_capacity_bytes),
+        (sample_pose_offset, sample_pose_capacity_bytes),
+    ] {
+        let status = validate_pose_range(offset, capacity, pose_bytes);
+        if status != WA_OK {
+            return status;
+        }
+    }
+    additive_delta_unchecked(
+        rest_pose_offset,
+        sample_pose_offset,
+        output_pose_offset,
+        joint_count,
+    );
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_apply_additive(
+    avatar_handle: u32,
+    base_pose_offset: u32,
+    base_pose_capacity_bytes: u32,
+    delta_pose_offset: u32,
+    delta_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+    weight: f32,
+    mask_offset: u32,
+    mask_count: u32,
+    mask_capacity_bytes: u32,
+) -> u32 {
+    let Some(record) = avatar_record(avatar_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let pose_bytes = match validate_pose_job(
+        record,
+        joint_count,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+    ) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    for (offset, capacity) in [
+        (base_pose_offset, base_pose_capacity_bytes),
+        (delta_pose_offset, delta_pose_capacity_bytes),
+    ] {
+        let status = validate_pose_range(offset, capacity, pose_bytes);
+        if status != WA_OK {
+            return status;
+        }
+    }
+    let mask_status = validate_mask(mask_offset, mask_count, mask_capacity_bytes);
+    if mask_status != WA_OK {
+        return mask_status;
+    }
+    apply_additive_unchecked(
+        base_pose_offset,
+        delta_pose_offset,
+        output_pose_offset,
+        joint_count,
+        sanitize_f32(weight, 0.0),
+        mask_offset,
+        mask_count,
+    );
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_normalize_pose(
+    avatar_handle: u32,
+    input_pose_offset: u32,
+    input_pose_capacity_bytes: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+    joint_count: u32,
+) -> u32 {
+    let Some(record) = avatar_record(avatar_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    let pose_bytes = match validate_pose_job(
+        record,
+        joint_count,
+        output_pose_offset,
+        output_pose_capacity_bytes,
+    ) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let input_status =
+        validate_pose_range(input_pose_offset, input_pose_capacity_bytes, pose_bytes);
+    if input_status != WA_OK {
+        return input_status;
+    }
+    for joint in 0..joint_count {
+        let transform = read_transform_repaired(input_pose_offset, joint);
+        write_transform(output_pose_offset, joint, transform);
+    }
+    write_padded_identity_lanes(output_pose_offset, joint_count);
+    WA_OK
+}
+
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn wa_force_memory_growth_for_test(min_extra_pages: u32) -> u32 {
@@ -494,6 +724,431 @@ fn local_to_model_unchecked(
 
     let _ = record;
     WA_OK
+}
+
+fn validate_pose_job(
+    record: AvatarRecord,
+    joint_count: u32,
+    output_pose_offset: u32,
+    output_pose_capacity_bytes: u32,
+) -> Result<u32, u32> {
+    if joint_count == 0 || joint_count > record.joint_count || joint_count > MAX_JOINTS {
+        return Err(WA_ERR_INVALID_ARG);
+    }
+    let pose_bytes = group_count(joint_count)
+        .checked_mul(SOA_TRANSFORM_BYTES)
+        .ok_or(WA_ERR_CAPACITY)?;
+    let status = validate_pose_range(output_pose_offset, output_pose_capacity_bytes, pose_bytes);
+    if status == WA_OK {
+        Ok(pose_bytes)
+    } else {
+        Err(status)
+    }
+}
+
+fn validate_pose_range(offset: u32, capacity_bytes: u32, required_bytes: u32) -> u32 {
+    if !is_aligned(offset, 16) {
+        return WA_ERR_INVALID_ARG;
+    }
+    if capacity_bytes < required_bytes {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(offset, required_bytes) {
+        return WA_ERR_OOB;
+    }
+    WA_OK
+}
+
+fn validate_mask(offset: u32, count: u32, capacity_bytes: u32) -> u32 {
+    if count == 0 && offset == 0 {
+        return WA_OK;
+    }
+    if !is_aligned(offset, 4) {
+        return WA_ERR_INVALID_ARG;
+    }
+    let required = match count.checked_mul(F32_BYTES) {
+        Some(value) => value,
+        None => return WA_ERR_CAPACITY,
+    };
+    if capacity_bytes < required {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(offset, required) {
+        return WA_ERR_OOB;
+    }
+    WA_OK
+}
+
+fn blend_poses_unchecked(
+    layers_offset: u32,
+    layer_count: u32,
+    fallback_pose_offset: u32,
+    rest_pose_offset: u32,
+    output_pose_offset: u32,
+    joint_count: u32,
+    threshold: f32,
+) {
+    let mut has_any_layer = false;
+    for layer in 0..layer_count {
+        let weight = unsafe { read_f32(layers_offset + layer * BLEND_LAYER_BYTES + 8) };
+        if weight.is_finite() && weight > 0.0 {
+            has_any_layer = true;
+            break;
+        }
+    }
+
+    for joint in 0..joint_count {
+        let mut rotation_sum = [0.0f32; 4];
+        let mut translation_sum = [0.0f32; 3];
+        let mut scale_sum = [0.0f32; 3];
+        let mut total_weight = 0.0f32;
+
+        for layer in 0..layer_count {
+            let descriptor = layers_offset + layer * BLEND_LAYER_BYTES;
+            let layer_weight = unsafe { read_f32(descriptor + 8) };
+            if !layer_weight.is_finite() || layer_weight <= 0.0 {
+                continue;
+            }
+            let mask_offset = unsafe { read_u32(descriptor + 12) };
+            let mask_count = unsafe { read_u32(descriptor + 16) };
+            let mask_weight = read_mask_weight(mask_offset, mask_count, joint);
+            let weight = layer_weight * mask_weight;
+            if !weight.is_finite() || weight <= 0.0 {
+                continue;
+            }
+            let pose_offset = unsafe { read_u32(descriptor) };
+            let transform = read_transform_raw(pose_offset, joint);
+            if !transform_is_finite(&transform) {
+                continue;
+            }
+            accumulate_transform(
+                &mut rotation_sum,
+                &mut translation_sum,
+                &mut scale_sum,
+                &transform,
+                weight,
+            );
+            total_weight += weight;
+        }
+
+        let requested_fallback = read_transform_raw(fallback_pose_offset, joint);
+        let fallback_raw = if transform_is_finite(&requested_fallback) {
+            requested_fallback
+        } else {
+            read_transform_raw(rest_pose_offset, joint)
+        };
+        let fallback = normalize_transform(fallback_raw);
+        if threshold > 0.0 && (!has_any_layer || total_weight < threshold) {
+            let fallback_weight = if has_any_layer {
+                threshold - total_weight
+            } else {
+                1.0
+            };
+            if fallback_weight > 0.0 {
+                accumulate_transform(
+                    &mut rotation_sum,
+                    &mut translation_sum,
+                    &mut scale_sum,
+                    &fallback,
+                    fallback_weight,
+                );
+                total_weight += fallback_weight;
+            }
+        }
+
+        let output = if !total_weight.is_finite() || total_weight <= 0.0 {
+            fallback
+        } else {
+            let inverse = 1.0 / total_weight;
+            normalize_transform([
+                translation_sum[0] * inverse,
+                translation_sum[1] * inverse,
+                translation_sum[2] * inverse,
+                rotation_sum[0],
+                rotation_sum[1],
+                rotation_sum[2],
+                rotation_sum[3],
+                scale_sum[0] * inverse,
+                scale_sum[1] * inverse,
+                scale_sum[2] * inverse,
+            ])
+        };
+        write_transform(output_pose_offset, joint, output);
+    }
+    write_padded_identity_lanes(output_pose_offset, joint_count);
+}
+
+fn accumulate_transform(
+    rotation_sum: &mut [f32; 4],
+    translation_sum: &mut [f32; 3],
+    scale_sum: &mut [f32; 3],
+    transform: &[f32; TRANSFORM_COMPONENTS],
+    weight: f32,
+) {
+    let normalized = normalize_quat(transform[3], transform[4], transform[5], transform[6]);
+    let mut rotation = [normalized.0, normalized.1, normalized.2, normalized.3];
+    let has_existing = rotation_sum.iter().map(|value| value.abs()).sum::<f32>() > 0.0;
+    let reference = if has_existing {
+        let normalized_sum = normalize_quat(
+            rotation_sum[0],
+            rotation_sum[1],
+            rotation_sum[2],
+            rotation_sum[3],
+        );
+        [
+            normalized_sum.0,
+            normalized_sum.1,
+            normalized_sum.2,
+            normalized_sum.3,
+        ]
+    } else {
+        rotation
+    };
+    if dot_quat(reference, rotation) < 0.0 {
+        for value in &mut rotation {
+            *value = -*value;
+        }
+    }
+    for index in 0..3 {
+        translation_sum[index] += transform[index] * weight;
+        scale_sum[index] += transform[index + 7] * weight;
+    }
+    for index in 0..4 {
+        rotation_sum[index] += rotation[index] * weight;
+    }
+}
+
+fn additive_delta_unchecked(
+    rest_pose_offset: u32,
+    sample_pose_offset: u32,
+    output_pose_offset: u32,
+    joint_count: u32,
+) {
+    for joint in 0..joint_count {
+        let rest = read_transform_raw(rest_pose_offset, joint);
+        let sample = read_transform_raw(sample_pose_offset, joint);
+        let inverse_rest = invert_quat([rest[3], rest[4], rest[5], rest[6]]);
+        let delta_rotation =
+            multiply_quat(inverse_rest, [sample[3], sample[4], sample[5], sample[6]]);
+        write_transform(
+            output_pose_offset,
+            joint,
+            [
+                sample[0] - rest[0],
+                sample[1] - rest[1],
+                sample[2] - rest[2],
+                delta_rotation[0],
+                delta_rotation[1],
+                delta_rotation[2],
+                delta_rotation[3],
+                scale_ratio(sample[7], rest[7]),
+                scale_ratio(sample[8], rest[8]),
+                scale_ratio(sample[9], rest[9]),
+            ],
+        );
+    }
+    write_padded_identity_lanes(output_pose_offset, joint_count);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_additive_unchecked(
+    base_pose_offset: u32,
+    delta_pose_offset: u32,
+    output_pose_offset: u32,
+    joint_count: u32,
+    layer_weight: f32,
+    mask_offset: u32,
+    mask_count: u32,
+) {
+    for joint in 0..joint_count {
+        let base = read_transform_repaired(base_pose_offset, joint);
+        let delta = read_transform_raw(delta_pose_offset, joint);
+        let amount = layer_weight * read_mask_weight(mask_offset, mask_count, joint);
+        let output =
+            if !amount.is_finite() || amount.abs() <= EPSILON || !transform_is_finite(&delta) {
+                base
+            } else {
+                apply_transform_delta(base, delta, amount)
+            };
+        write_transform(output_pose_offset, joint, output);
+    }
+    write_padded_identity_lanes(output_pose_offset, joint_count);
+}
+
+fn apply_transform_delta(
+    base: [f32; TRANSFORM_COMPONENTS],
+    delta: [f32; TRANSFORM_COMPONENTS],
+    amount: f32,
+) -> [f32; TRANSFORM_COMPONENTS] {
+    let mut delta_rotation = [delta[3], delta[4], delta[5], delta[6]];
+    if delta_rotation[3] < 0.0 {
+        for value in &mut delta_rotation {
+            *value = -*value;
+        }
+    }
+    let absolute = amount.abs();
+    let weighted_rotation = normalize_quat_array([
+        delta_rotation[0] * absolute,
+        delta_rotation[1] * absolute,
+        delta_rotation[2] * absolute,
+        1.0 + (delta_rotation[3] - 1.0) * absolute,
+    ]);
+    let applied_rotation = if amount >= 0.0 {
+        weighted_rotation
+    } else {
+        [
+            -weighted_rotation[0],
+            -weighted_rotation[1],
+            -weighted_rotation[2],
+            weighted_rotation[3],
+        ]
+    };
+    let rotation = multiply_quat([base[3], base[4], base[5], base[6]], applied_rotation);
+    [
+        base[0] + delta[0] * amount,
+        base[1] + delta[1] * amount,
+        base[2] + delta[2] * amount,
+        rotation[0],
+        rotation[1],
+        rotation[2],
+        rotation[3],
+        apply_scale_delta(base[7], delta[7], absolute, amount >= 0.0),
+        apply_scale_delta(base[8], delta[8], absolute, amount >= 0.0),
+        apply_scale_delta(base[9], delta[9], absolute, amount >= 0.0),
+    ]
+}
+
+fn apply_scale_delta(base: f32, delta: f32, absolute: f32, positive: bool) -> f32 {
+    let factor = 1.0 + (delta - 1.0) * absolute;
+    if positive {
+        base * factor
+    } else {
+        scale_ratio(base, factor)
+    }
+}
+
+fn read_mask_weight(offset: u32, count: u32, joint: u32) -> f32 {
+    if offset == 0 && count == 0 {
+        return 1.0;
+    }
+    if joint >= count {
+        return 0.0;
+    }
+    let value = unsafe { read_f32(offset + joint * F32_BYTES) };
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        0.0
+    }
+}
+
+fn read_transform_raw(offset: u32, joint: u32) -> [f32; TRANSFORM_COMPONENTS] {
+    let group = joint >> 2;
+    let lane = joint & 3;
+    let base = offset + group * SOA_TRANSFORM_BYTES;
+    let mut transform = [0.0; TRANSFORM_COMPONENTS];
+    for (field, value) in transform.iter_mut().enumerate() {
+        *value = unsafe { read_f32(base + (field as u32 * 4 + lane) * F32_BYTES) };
+    }
+    transform
+}
+
+fn read_transform_repaired(offset: u32, joint: u32) -> [f32; TRANSFORM_COMPONENTS] {
+    normalize_transform(read_transform_raw(offset, joint))
+}
+
+fn write_transform(offset: u32, joint: u32, transform: [f32; TRANSFORM_COMPONENTS]) {
+    let group = joint >> 2;
+    let lane = joint & 3;
+    let base = offset + group * SOA_TRANSFORM_BYTES;
+    for (field, value) in transform.iter().enumerate() {
+        unsafe { write_f32(base + (field as u32 * 4 + lane) * F32_BYTES, *value) };
+    }
+}
+
+fn write_padded_identity_lanes(offset: u32, joint_count: u32) {
+    let padded_count = group_count(joint_count) * 4;
+    for joint in joint_count..padded_count {
+        write_transform(
+            offset,
+            joint,
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        );
+    }
+}
+
+fn transform_is_finite(transform: &[f32; TRANSFORM_COMPONENTS]) -> bool {
+    transform.iter().all(|value| value.is_finite())
+        && libm_hypot4(transform[3], transform[4], transform[5], transform[6]) > EPSILON
+}
+
+fn normalize_transform(mut transform: [f32; TRANSFORM_COMPONENTS]) -> [f32; TRANSFORM_COMPONENTS] {
+    for value in &mut transform[..3] {
+        *value = sanitize_f32(*value, 0.0);
+    }
+    let rotation = normalize_quat(transform[3], transform[4], transform[5], transform[6]);
+    transform[3] = rotation.0;
+    transform[4] = rotation.1;
+    transform[5] = rotation.2;
+    transform[6] = rotation.3;
+    for value in &mut transform[7..] {
+        *value = sanitize_f32(*value, 1.0);
+    }
+    transform
+}
+
+fn normalize_quat_array(value: [f32; 4]) -> [f32; 4] {
+    let normalized = normalize_quat(value[0], value[1], value[2], value[3]);
+    [normalized.0, normalized.1, normalized.2, normalized.3]
+}
+
+fn dot_quat(a: [f32; 4], b: [f32; 4]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+}
+
+fn invert_quat(value: [f32; 4]) -> [f32; 4] {
+    let dot = dot_quat(value, value);
+    if !dot.is_finite() || dot <= EPSILON {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
+    [
+        -value[0] / dot,
+        -value[1] / dot,
+        -value[2] / dot,
+        value[3] / dot,
+    ]
+}
+
+fn multiply_quat(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    normalize_quat_array([
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ])
+}
+
+fn scale_ratio(numerator: f32, denominator: f32) -> f32 {
+    if !numerator.is_finite() || !denominator.is_finite() {
+        return 0.0;
+    }
+    let resolved_denominator = if denominator.abs() > EPSILON {
+        denominator
+    } else if denominator.is_sign_negative() {
+        -EPSILON
+    } else {
+        EPSILON
+    };
+    let ratio = numerator / resolved_denominator;
+    if ratio.is_finite() {
+        ratio
+    } else if numerator == 0.0 {
+        0.0
+    } else if numerator.is_sign_negative() != resolved_denominator.is_sign_negative() {
+        -f32::MAX
+    } else {
+        f32::MAX
+    }
 }
 
 fn validate_options(options: &LocalToModelOptions, joint_count: u32) -> u32 {
@@ -906,5 +1561,36 @@ mod tests {
         assert!(!valid_parent(1, 1));
         assert!(!valid_parent(2, 1));
         assert!(!valid_parent(-2, 1));
+    }
+
+    #[test]
+    fn scale_ratio_preserves_signed_zero_denominators() {
+        assert_eq!(scale_ratio(2.0, 0.0), 200_000_000.0);
+        assert_eq!(scale_ratio(2.0, -0.0), -200_000_000.0);
+        assert_eq!(scale_ratio(-2.0, 0.0), -200_000_000.0);
+        assert_eq!(scale_ratio(f32::NAN, 1.0), 0.0);
+    }
+
+    #[test]
+    fn signed_additive_rotation_stays_normalized() {
+        let base = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let delta = [
+            0.25,
+            -0.5,
+            1.0,
+            0.0,
+            0.382_683_43,
+            0.0,
+            0.923_879_5,
+            2.0,
+            0.5,
+            -1.0,
+        ];
+        for weight in [-0.5, 0.5] {
+            let output = apply_transform_delta(base, delta, weight);
+            let length = libm_hypot4(output[3], output[4], output[5], output[6]);
+            assert!((length - 1.0).abs() < 1.0e-6);
+            assert!(output.iter().all(|value| value.is_finite()));
+        }
     }
 }

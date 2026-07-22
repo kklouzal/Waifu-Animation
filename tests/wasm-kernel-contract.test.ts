@@ -7,8 +7,14 @@ import type { WaifuAnimationWasmKernel } from "./test-api.js";
 import {
   AnimationSamplingContext,
   WA_KERNEL_ABI_MAJOR,
+  WA_KERNEL_FEATURE_SCALAR_ADDITIVE,
+  WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS,
   WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL,
+  WA_KERNEL_FEATURE_SCALAR_POSE_BLEND,
+  WA_KERNEL_FEATURE_SCALAR_POSE_JOBS,
   WaKernelStatus,
+  additiveDeltaPose,
+  applyAdditivePose,
   applyAimIkChainToPose,
   applyAimIkModelCorrection,
   applyTwoBoneIkLocalCorrections,
@@ -199,6 +205,12 @@ export async function runWasmKernelContractTests(): Promise<void> {
 async function assertWasmLocalToModelParity(): Promise<void> {
   const kernel = await loadRequiredKernel();
   assert.equal(
+    kernel.featureFlags & WA_KERNEL_FEATURE_SCALAR_POSE_JOBS,
+    WA_KERNEL_FEATURE_SCALAR_POSE_JOBS,
+    "ABI v1.1 kernel should feature-gate blend/additive/mask jobs"
+  );
+  assertWasmPoseJobsParity(kernel);
+  assert.equal(
     typeof detectWaKernelSimdSupport(typeof WebAssembly === "undefined" ? undefined : WebAssembly),
     "boolean",
     "SIMD capability probe should be optional and not require SharedArrayBuffer"
@@ -380,12 +392,456 @@ async function assertWasmLocalToModelParity(): Promise<void> {
     false,
     "ABI major mismatch should reject the kernel"
   );
+  const poseFeatureFlags =
+    WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL |
+    WA_KERNEL_FEATURE_SCALAR_POSE_BLEND |
+    WA_KERNEL_FEATURE_SCALAR_ADDITIVE |
+    WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS;
+  const oldMinorPoseExports = {
+    memory: new WebAssembly.Memory({ initial: 1 }),
+    wa_version_major: () => WA_KERNEL_ABI_MAJOR,
+    wa_version_minor: () => 0,
+    wa_feature_flags: () => poseFeatureFlags,
+    wa_memory_epoch: () => 0,
+    wa_refresh_views_required: () => 0,
+    wa_heap_base: () => 1024,
+    wa_alloc: () => WaKernelStatus.Ok,
+    wa_create_skeleton: () => WaKernelStatus.Ok,
+    wa_create_avatar: () => WaKernelStatus.Ok,
+    wa_destroy_handle: () => WaKernelStatus.Ok,
+    wa_local_to_model: () => WaKernelStatus.Ok,
+    wa_blend_poses: () => WaKernelStatus.Ok,
+    wa_additive_delta: () => WaKernelStatus.Ok,
+    wa_apply_additive: () => WaKernelStatus.Ok,
+    wa_normalize_pose: () => WaKernelStatus.Ok
+  };
+  assert.equal(
+    validateWaifuAnimationKernelExports(oldMinorPoseExports, WA_KERNEL_FEATURE_SCALAR_POSE_JOBS).ok,
+    false,
+    "pose-job feature request should reject ABI v1.0 even if exports are spoofed"
+  );
+  assert.equal(
+    validateWaifuAnimationKernelExports(
+      {
+        ...oldMinorPoseExports,
+        wa_version_minor: () => 1,
+        wa_feature_flags: () => WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL
+      },
+      WA_KERNEL_FEATURE_SCALAR_POSE_JOBS
+    ).ok,
+    false,
+    "pose-job feature request should reject missing feature bits"
+  );
+  const missingPoseExport: Record<string, unknown> = {
+    ...oldMinorPoseExports,
+    wa_version_minor: () => 1
+  };
+  delete missingPoseExport.wa_apply_additive;
+  assert.equal(
+    validateWaifuAnimationKernelExports(missingPoseExport, WA_KERNEL_FEATURE_SCALAR_POSE_JOBS).ok,
+    false,
+    "pose-job feature request should reject missing additive export"
+  );
 
   const disabledContext = kernel.createLocalToModelContext(fixture.skeleton);
   kernel.forceDisableForTests("unit-test forced disable");
   const fallbackOut = updateLocalToModelPoseRange(fixture.skeleton, animatedPose, [], { kernel: disabledContext });
   assertModelPosesNearlyEqual(fallbackOut, localToModelPose(fixture.skeleton, animatedPose), "forced disable fallback");
   kernel.clearForcedDisableForTests();
+}
+
+function assertWasmPoseJobsParity(kernel: WaifuAnimationWasmKernel): void {
+  for (const jointCount of [1, 3, 4, 5, 8, 9]) {
+    const paddedSkeleton = createSkeleton(
+      Array.from({ length: jointCount }, (_value, joint) => ({
+        name: `padded_${joint}`,
+        parentIndex: joint === 0 ? -1 : joint - 1,
+        rest: { translation: [joint * 0.01, 0.1 + joint * 0.02, -joint * 0.005] as [number, number, number] }
+      }))
+    );
+    const paddedRest = createRestPose(paddedSkeleton);
+    const paddedPose = clonePose(paddedRest);
+    for (let joint = 0; joint < jointCount; joint += 1) {
+      paddedPose[joint]!.translation[0] += 0.025 * (joint + 1);
+      paddedPose[joint]!.rotation = [0, Math.sin((joint + 1) * 0.05), 0, Math.cos((joint + 1) * 0.05)];
+    }
+    const paddedArena = kernel.createPoseArenaContext(paddedSkeleton, {
+      poseCapacity: 3,
+      maskCapacity: 1,
+      layerCapacity: 1
+    });
+    paddedArena.writePose(1, paddedPose);
+    assert.equal(
+      paddedArena.blend([{ pose: 1, weight: 0.65 }], { outputPose: 2, threshold: 0.1 }),
+      WaKernelStatus.Ok,
+      `padded blend ${jointCount}: status`
+    );
+    assertPoseNearlyEqual(
+      paddedArena.copyPoseToTransforms(2),
+      blendPoses(paddedSkeleton, [{ pose: paddedPose, weight: 0.65 }], {
+        threshold: 0.1,
+        fallbackPose: paddedRest
+      }),
+      3e-5,
+      `WASM padded blend ${jointCount}`
+    );
+    assertPaddedIdentity(paddedArena.poseView(2), jointCount);
+    assert.equal(paddedArena.destroy(), WaKernelStatus.Ok, `padded arena ${jointCount}: destroy`);
+  }
+
+  const fixture = createWasmKernelSyntheticFixture({ jointCount: 9, keyCount: 4, vertexCount: 0, phase: 0.19 });
+  const rest = createRestPose(fixture.skeleton);
+  const base = sampleClipToPose(fixture.skeleton, fixture.clip, 0.37, { restPose: rest });
+  const overlay = sampleClipToPose(fixture.skeleton, fixture.overlayClip, 0.61, { restPose: rest });
+  const additive = sampleClipToPose(fixture.skeleton, fixture.additiveClip, 0.79, { restPose: rest });
+  const fallback = clonePose(rest);
+  fallback[0]!.translation = [0.25, 0.5, -0.75];
+  const arena = kernel.createPoseArenaContext(fixture.skeleton, {
+    poseCapacity: 10,
+    maskCapacity: 4,
+    maskValueCapacity: 11,
+    layerCapacity: 6
+  });
+  arena.writePose(1, base);
+  arena.writePose(2, overlay);
+  arena.writePose(3, additive);
+  arena.writePose(4, fallback);
+
+  const zeroMask = new Float32Array(fixture.skeleton.joints.length);
+  const shortMask = new Float32Array([1, 0.5, Number.NaN]);
+  const denseSparseMask = new Float32Array(fixture.skeleton.joints.length);
+  denseSparseMask[1] = 1;
+  denseSparseMask[4] = 0.25;
+  denseSparseMask[6] = -1;
+  denseSparseMask[8] = 0.75;
+  arena.writeMask(0, zeroMask);
+  arena.writeMask(1, shortMask);
+  arena.writeSparseMask(
+    2,
+    [
+      { joint: 1, weight: 1 },
+      { joint: 4, weight: 0.25 },
+      { joint: 6, weight: -1 },
+      { joint: 8, weight: 0.75 },
+      { joint: 99, weight: 1 },
+      { joint: -1, weight: 1 }
+    ],
+    fixture.skeleton.joints.length
+  );
+  const extraMask = new Float32Array(11);
+  extraMask.fill(0.4);
+  extraMask[9] = 999;
+  extraMask[10] = Number.POSITIVE_INFINITY;
+  arena.writeMask(3, extraMask);
+
+  const blendCases: Array<{
+    label: string;
+    layers: Parameters<typeof arena.blend>[0];
+    options: Parameters<typeof arena.blend>[1];
+    reference: ReturnType<typeof blendPoses>;
+  }> = [
+    {
+      label: "single override",
+      layers: [{ pose: 1, weight: 0.75 }],
+      options: { outputPose: 5, threshold: 0.1 },
+      reference: blendPoses(fixture.skeleton, [{ pose: base, weight: 0.75 }], { threshold: 0.1, fallbackPose: rest })
+    },
+    {
+      label: "multiple override and full mask",
+      layers: [
+        { pose: 1, weight: 0.7 },
+        { pose: 2, weight: 0.35 }
+      ],
+      options: { outputPose: 5, threshold: 0.1 },
+      reference: blendPoses(
+        fixture.skeleton,
+        [
+          { pose: base, weight: 0.7 },
+          { pose: overlay, weight: 0.35 }
+        ],
+        { threshold: 0.1, fallbackPose: rest }
+      )
+    },
+    {
+      label: "threshold custom fallback",
+      layers: [{ pose: 1, weight: 0.02 }],
+      options: { outputPose: 5, threshold: 0.2, fallbackPose: 4 },
+      reference: blendPoses(fixture.skeleton, [{ pose: base, weight: 0.02 }], {
+        threshold: 0.2,
+        fallbackPose: fallback
+      })
+    },
+    {
+      label: "negative threshold clamps to zero",
+      layers: [{ pose: 1, weight: 0.02 }],
+      options: { outputPose: 5, threshold: -1, fallbackPose: 4 },
+      reference: blendPoses(fixture.skeleton, [{ pose: base, weight: 0.02 }], {
+        threshold: -1,
+        fallbackPose: fallback
+      })
+    },
+    {
+      label: "zero mask",
+      layers: [{ pose: 2, weight: 1, mask: 0 }],
+      options: { outputPose: 5, threshold: 0.1 },
+      reference: blendPoses(fixture.skeleton, [{ pose: overlay, weight: 1, mask: zeroMask }], {
+        threshold: 0.1,
+        fallbackPose: rest
+      })
+    },
+    {
+      label: "short invalid mask",
+      layers: [{ pose: 2, weight: 0.8, mask: 1 }],
+      options: { outputPose: 5, threshold: 0.1 },
+      reference: blendPoses(fixture.skeleton, [{ pose: overlay, weight: 0.8, mask: shortMask }], {
+        threshold: 0.1,
+        fallbackPose: rest
+      })
+    },
+    {
+      label: "sparse-by-zero mask and ignored out-of-range entries",
+      layers: [{ pose: 2, weight: 0.8, mask: 2 }],
+      options: { outputPose: 5, threshold: 0.1 },
+      reference: blendPoses(fixture.skeleton, [{ pose: overlay, weight: 0.8, mask: denseSparseMask }], {
+        threshold: 0.1,
+        fallbackPose: rest
+      })
+    },
+    {
+      label: "extra dense mask values ignored",
+      layers: [{ pose: 2, weight: 0.8, mask: 3 }],
+      options: { outputPose: 5, threshold: 0.1 },
+      reference: blendPoses(fixture.skeleton, [{ pose: overlay, weight: 0.8, mask: extraMask }], {
+        threshold: 0.1,
+        fallbackPose: rest
+      })
+    },
+    {
+      label: "zero negative and nonfinite layer weights",
+      layers: [
+        { pose: 1, weight: 0 },
+        { pose: 2, weight: -1 },
+        { pose: 3, weight: Number.NaN }
+      ],
+      options: { outputPose: 5, threshold: Number.NaN },
+      reference: blendPoses(
+        fixture.skeleton,
+        [
+          { pose: base, weight: 0 },
+          { pose: overlay, weight: -1 },
+          { pose: additive, weight: Number.NaN }
+        ],
+        { threshold: Number.NaN, fallbackPose: rest }
+      )
+    }
+  ];
+  for (const testCase of blendCases) {
+    assert.equal(arena.blend(testCase.layers, testCase.options), WaKernelStatus.Ok, `${testCase.label}: status`);
+    assertPoseNearlyEqual(
+      arena.copyPoseToTransforms(testCase.options.outputPose),
+      testCase.reference,
+      3e-5,
+      `WASM blend ${testCase.label}`
+    );
+  }
+
+  const antipode = clonePose(overlay);
+  antipode[3]!.rotation = antipode[3]!.rotation.map((value) => -value) as [number, number, number, number];
+  arena.writePose(2, antipode);
+  assert.equal(
+    arena.blend(
+      [
+        { pose: 1, weight: 0.5 },
+        { pose: 2, weight: 0.5 }
+      ],
+      { outputPose: 5, threshold: 0 }
+    ),
+    WaKernelStatus.Ok,
+    "quaternion antipode blend status"
+  );
+  assertPoseNearlyEqual(
+    arena.copyPoseToTransforms(5),
+    blendPoses(
+      fixture.skeleton,
+      [
+        { pose: base, weight: 0.5 },
+        { pose: antipode, weight: 0.5 }
+      ],
+      { threshold: 0, fallbackPose: rest }
+    ),
+    3e-5,
+    "WASM quaternion hemisphere accumulation"
+  );
+
+  const invalidOverlay = clonePose(overlay);
+  invalidOverlay[2]!.translation = [Number.NaN, 0, 0];
+  arena.writePose(2, overlay);
+  setSoaComponent(arena.poseView(2), 2, 0, Number.NaN);
+  assert.equal(arena.blend([{ pose: 2, weight: 1 }], { outputPose: 5, threshold: 0.1 }), WaKernelStatus.Ok);
+  assertPoseNearlyEqual(
+    arena.copyPoseToTransforms(5),
+    blendPoses(fixture.skeleton, [{ pose: invalidOverlay, weight: 1 }], { threshold: 0.1, fallbackPose: rest }),
+    3e-5,
+    "WASM invalid layer transform skip and finite fallback"
+  );
+  assert.ok(Array.from(arena.poseView(5)).every(Number.isFinite), "blend output and padded lanes should be finite");
+  arena.writePose(2, overlay);
+
+  const invalidFallback = clonePose(fallback);
+  invalidFallback[0]!.rotation = [Number.NaN, 0, 0, 0];
+  arena.writePose(4, fallback);
+  setSoaComponent(arena.poseView(4), 0, 3, Number.NaN);
+  assert.equal(
+    arena.blend([], { outputPose: 5, threshold: 0, fallbackPose: 4 }),
+    WaKernelStatus.Ok,
+    "invalid custom fallback status"
+  );
+  assertPoseNearlyEqual(
+    arena.copyPoseToTransforms(5),
+    blendPoses(fixture.skeleton, [], { threshold: 0, fallbackPose: invalidFallback }),
+    3e-5,
+    "WASM invalid fallback should resolve to skeleton rest"
+  );
+  arena.writePose(4, fallback);
+
+  assert.equal(arena.additiveDelta(0, 3, 6), WaKernelStatus.Ok, "additive delta generation status");
+  assertPoseNearlyEqual(
+    arena.copyPoseToTransforms(6),
+    additiveDeltaPose(rest, additive),
+    3e-5,
+    "WASM additive delta generation"
+  );
+  const additiveWeights = [0.35, -0.35, 0, Number.NaN];
+  for (const weight of additiveWeights) {
+    assert.equal(arena.applyAdditive(1, 6, weight, 7, 2), WaKernelStatus.Ok, `additive weight ${weight}: status`);
+    assertPoseNearlyEqual(
+      arena.copyPoseToTransforms(7),
+      applyAdditivePose(base, additiveDeltaPose(rest, additive), weight, denseSparseMask),
+      4e-5,
+      `WASM additive signed weight ${weight}`
+    );
+  }
+
+  const scaleRest = clonePose(rest);
+  const scaleSample = clonePose(additive);
+  scaleRest[1]!.scale = [0, -0, -2];
+  scaleSample[1]!.scale = [2, -3, 0];
+  arena.writePose(0, scaleRest);
+  arena.writePose(3, scaleSample);
+  assert.equal(arena.additiveDelta(0, 3, 6), WaKernelStatus.Ok, "scale edge delta status");
+  assertPoseNearlyEqual(
+    arena.copyPoseToTransforms(6),
+    additiveDeltaPose(scaleRest, scaleSample),
+    6e-5,
+    "WASM additive scale zero and negative edge cases"
+  );
+  arena.writePose(0, rest);
+  arena.writePose(3, additive);
+  assert.equal(arena.additiveDelta(0, 3, 6), WaKernelStatus.Ok);
+
+  const delta = additiveDeltaPose(rest, additive);
+  assert.equal(arena.applyAdditive(1, 6, 0.2, 7, 2), WaKernelStatus.Ok);
+  assert.equal(arena.applyAdditive(7, 6, -0.1, 8, 1), WaKernelStatus.Ok);
+  const orderedReference = applyAdditivePose(
+    applyAdditivePose(base, delta, 0.2, denseSparseMask),
+    delta,
+    -0.1,
+    shortMask
+  );
+  assertPoseNearlyEqual(arena.copyPoseToTransforms(8), orderedReference, 5e-5, "WASM additive layer ordering");
+
+  setSoaComponent(arena.poseView(8), 0, 0, Number.NaN);
+  setSoaComponent(arena.poseView(8), 1, 6, Number.POSITIVE_INFINITY);
+  setSoaComponent(arena.poseView(8), 2, 7, Number.NEGATIVE_INFINITY);
+  assert.equal(arena.normalize(8, 9), WaKernelStatus.Ok, "finite repair normalize status");
+  assert.ok(Array.from(arena.poseView(9)).every(Number.isFinite), "normalized pose including padding should be finite");
+  assertPaddedIdentity(arena.poseView(9), arena.jointCount);
+
+  const retainedPoseView = arena.poseView(5);
+  const retainedMaskView = arena.maskView(2);
+  const retainedPoseOffset = arena.poseOffset(5);
+  const materialized = arena.copyPoseToTransforms(5);
+  const firstTransform = materialized[0];
+  assert.equal(arena.blend([{ pose: 1, weight: 1 }], { outputPose: 5, threshold: 0.1 }), WaKernelStatus.Ok);
+  assert.equal(arena.poseView(5), retainedPoseView, "steady-state pose view should be retained");
+  assert.equal(arena.maskView(2), retainedMaskView, "steady-state mask view should be retained");
+  assert.equal(arena.poseOffset(5), retainedPoseOffset, "caller-owned output offset should remain stable");
+  assert.equal(arena.copyPoseToTransforms(5, materialized), materialized, "materialization should reuse caller array");
+  assert.equal(materialized[0], firstTransform, "materialization should reuse caller transforms");
+  const repeatA = Array.from(arena.poseView(5));
+  assert.equal(arena.blend([{ pose: 1, weight: 1 }], { outputPose: 5, threshold: 0.1 }), WaKernelStatus.Ok);
+  assert.deepEqual(Array.from(arena.poseView(5)), repeatA, "pose jobs should repeat deterministically");
+
+  assert.equal(arena.invokeRawBlendForTests({ avatarHandle: 0 }), WaKernelStatus.BadHandle, "blend bad handle");
+  assert.equal(
+    arena.invokeRawBlendForTests({ fallbackPoseOffset: 3 }),
+    WaKernelStatus.InvalidArgument,
+    "blend misaligned fallback offset"
+  );
+  assert.equal(
+    arena.invokeRawBlendForTests({ outputPoseCapacityBytes: 0 }),
+    WaKernelStatus.Capacity,
+    "blend output capacity"
+  );
+  assert.equal(
+    arena.invokeRawBlendForTests({ layerCount: 1, layersCapacityBytes: 0 }),
+    WaKernelStatus.Capacity,
+    "blend descriptor capacity"
+  );
+  assert.equal(
+    arena.invokeRawBlendForTests({
+      layerCount: 1,
+      layersOffset: kernel.memory.buffer.byteLength + 64,
+      layersCapacityBytes: 24
+    }),
+    WaKernelStatus.OutOfBounds,
+    "blend descriptor range"
+  );
+  const rawView = new DataView(kernel.memory.buffer);
+  rawView.setUint32(arena.layerDescriptorsOffset + 12, arena.maskOffset(2), true);
+  rawView.setUint32(arena.layerDescriptorsOffset + 16, arena.jointCount, true);
+  rawView.setUint32(arena.layerDescriptorsOffset + 20, 0, true);
+  assert.equal(
+    arena.invokeRawBlendForTests({ layerCount: 1 }),
+    WaKernelStatus.Capacity,
+    "blend mask descriptor capacity"
+  );
+  assert.equal(
+    arena.invokeRawAdditiveDeltaForTests({ samplePoseCapacityBytes: 0 }),
+    WaKernelStatus.Capacity,
+    "additive pose capacity"
+  );
+  assert.equal(
+    arena.invokeRawAdditiveDeltaForTests({ samplePoseOffset: kernel.memory.buffer.byteLength + 64 }),
+    WaKernelStatus.OutOfBounds,
+    "additive pose range"
+  );
+
+  const oldBuffer = arena.poseView(1).buffer;
+  assert.equal(kernel.forceMemoryGrowthForTests(1), WaKernelStatus.Ok, "pose arena memory growth status");
+  assert.notEqual(arena.poseView(1).buffer, oldBuffer, "pose arena should refresh views after memory growth");
+  assert.equal(arena.blend([{ pose: 1, weight: 1 }], { outputPose: 5 }), WaKernelStatus.Ok);
+
+  kernel.forceDisableForTests("pose jobs forced fallback");
+  assert.equal(arena.blend([{ pose: 1, weight: 1 }], { outputPose: 5 }), WaKernelStatus.Unsupported);
+  assert.equal(arena.applyAdditive(1, 6, 0.2, 7), WaKernelStatus.Unsupported);
+  kernel.clearForcedDisableForTests();
+}
+
+function setSoaComponent(view: Float32Array, joint: number, field: number, value: number): void {
+  const groupBase = (joint >> 2) * 40;
+  view[groupBase + field * 4 + (joint & 3)] = value;
+}
+
+function assertPaddedIdentity(view: Float32Array, jointCount: number): void {
+  const paddedCount = Math.ceil(jointCount / 4) * 4;
+  for (let joint = jointCount; joint < paddedCount; joint += 1) {
+    const expected = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1];
+    for (let field = 0; field < expected.length; field += 1) {
+      const groupBase = (joint >> 2) * 40;
+      assert.equal(view[groupBase + field * 4 + (joint & 3)], expected[field], `padded joint ${joint} field ${field}`);
+    }
+  }
 }
 
 async function loadRequiredKernel(): Promise<WaifuAnimationWasmKernel> {
@@ -396,13 +852,11 @@ async function loadRequiredKernel(): Promise<WaifuAnimationWasmKernel> {
 }
 
 function ensureWasmKernelBytes(): ArrayBuffer {
-  if (!existsSync(WASM_DIST_PATH) && !existsSync(WASM_TARGET_PATH)) {
-    const result = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "build-wasm-kernel.mjs")], {
-      cwd: REPO_ROOT,
-      stdio: "inherit"
-    });
-    assert.equal(result.status, 0, "WASM kernel build script should succeed for contract tests");
-  }
+  const result = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "build-wasm-kernel.mjs")], {
+    cwd: REPO_ROOT,
+    stdio: "inherit"
+  });
+  assert.equal(result.status, 0, "WASM kernel build script should succeed for contract tests");
   const path = existsSync(WASM_DIST_PATH) ? WASM_DIST_PATH : WASM_TARGET_PATH;
   const bytes = readFileSync(path);
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);

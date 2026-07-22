@@ -28,7 +28,8 @@ import {
   type SkinningJob,
   WaKernelStatus,
   type WaKernelLoadResult,
-  type WasmLocalToModelContext
+  type WasmLocalToModelContext,
+  type WasmPoseArenaContext
 } from "../src/index.js";
 
 type BenchmarkConfig = {
@@ -104,6 +105,16 @@ const wasmKernel = await loadBenchmarkKernel();
 const wasmLocalToModel =
   wasmKernel.kind === "wasm-scalar" ? wasmKernel.kernel.createLocalToModelContext(fixture.skeleton) : undefined;
 if (wasmLocalToModel) wasmLocalToModel.writeLocalPose(fixture.preBlendedPose);
+const wasmPoseArena =
+  wasmKernel.kind === "wasm-scalar"
+    ? createBenchmarkPoseArena(wasmKernel.kernel.createPoseArenaContext(fixture.skeleton))
+    : undefined;
+const wasmPoseAvatars =
+  wasmKernel.kind === "wasm-scalar"
+    ? Array.from({ length: config.multiAvatarCount }, () =>
+        createBenchmarkPoseArena(wasmKernel.kernel.createPoseArenaContext(fixture.skeleton))
+      )
+    : [];
 const singleAvatar = createAvatarState(0);
 const multiAvatars = Array.from({ length: config.multiAvatarCount }, (_value, index) => createAvatarState(index));
 const runtime = createRuntime(fixture, 0);
@@ -124,13 +135,38 @@ results.push(
 );
 results.push(
   runBenchmark({
-    name: "blend_additive_masks_1_avatar",
-    description: "blend two override poses, apply one additive masked pose, and normalize one avatar pose",
+    name: "blend_additive_masks_typescript_object_pose_1_avatar",
+    description: "current TypeScript object-pose blend, additive, masks, and normalization for one avatar",
     config,
     operationCountPerIteration: 1,
     op: () => blendAdditiveAndNormalize(fixture)
   })
 );
+if (wasmPoseArena) {
+  results.push(
+    runBenchmark({
+      name: "blend_additive_masks_scalar_wasm_already_packed_1_avatar",
+      description:
+        "scalar WASM blend, additive-delta generation/application, masks, and normalization over retained padded-SoA buffers",
+      config,
+      operationCountPerIteration: 1,
+      op: () => blendAdditiveWasmAlreadyPacked(wasmPoseArena)
+    })
+  );
+  results.push(
+    runBenchmark({
+      name: "blend_additive_masks_scalar_wasm_already_packed_multi_avatar",
+      description: "same retained padded-SoA scalar WASM pose jobs across independently owned avatar arenas",
+      config,
+      operationCountPerIteration: config.multiAvatarCount,
+      op: () => {
+        let checksum = 0;
+        for (const arena of wasmPoseAvatars) checksum += blendAdditiveWasmAlreadyPacked(arena);
+        return checksum;
+      }
+    })
+  );
+}
 results.push(
   runBenchmark({
     name: "local_to_model_1_avatar",
@@ -263,8 +299,11 @@ const output = {
   hotPathRank: rankHotPaths(results),
   notes: [
     "Timings use deterministic synthetic clips and skeletons; checksums guard against dead-code elimination.",
-    "WASM startup is reported separately in wasmKernel.startupMs and is not included in steady-state local_to_model_scalar_wasm_1_avatar timings.",
-    "No heap-allocation precision is claimed. Current TypeScript object churn is inferred structurally from API shapes, not Node heap deltas.",
+    "WASM startup is reported separately in wasmKernel.startupMs and is excluded from all scalar-WASM steady-state rows.",
+    "The scalar-WASM pose rows begin with prepacked retained SoA poses and masks; object packing and Transform[] materialization are intentionally outside those timings.",
+    "Each multi-avatar scalar-WASM row uses an independent retained context; offsets and typed views are reused unless WebAssembly.Memory grows.",
+    "The TypeScript pose row measures the current object-shaped public API, so the comparison includes its current object allocation behavior but does not isolate allocation cost.",
+    "No precise heap-allocation claim is made from Node heap deltas; retained-buffer behavior is enforced structurally by contract tests.",
     "Use --smoke for a fast gate and default arguments for a steadier local baseline. Override with --iterations, --warmup, --joints, --avatars, or --runtime-avatars."
   ]
 };
@@ -582,6 +621,33 @@ function blendAdditiveAndNormalize(fixture: BenchmarkFixture): number {
   return checksumPose(composeBlendAdditivePose(fixture));
 }
 
+function createBenchmarkPoseArena(context: WasmPoseArenaContext): WasmPoseArenaContext {
+  context.writePose(1, fixture.preSampledBase);
+  context.writePose(2, fixture.preSampledOverlay);
+  context.writePose(3, fixture.preSampledAdditive);
+  context.writeMask(0, fixture.upperMask);
+  context.writeMask(1, fixture.sparseMask);
+  return context;
+}
+
+function blendAdditiveWasmAlreadyPacked(context: WasmPoseArenaContext): number {
+  if (
+    context.blend(
+      [
+        { pose: 1, weight: 0.82 },
+        { pose: 2, weight: 0.34, mask: 0 }
+      ],
+      { outputPose: 4, threshold: 0.1 }
+    ) !== WaKernelStatus.Ok ||
+    context.additiveDelta(0, 3, 5) !== WaKernelStatus.Ok ||
+    context.applyAdditive(4, 5, 0.2, 6, 1) !== WaKernelStatus.Ok ||
+    context.normalize(6) !== WaKernelStatus.Ok
+  ) {
+    throw new Error("scalar WASM retained pose job failed");
+  }
+  return checksumTransformSoa(context.poseView(6), context.jointCount);
+}
+
 function composeBlendAdditivePose(fixture: Omit<BenchmarkFixture, "preBlendedPose">): Pose {
   const blended = blendPoses(
     fixture.skeleton,
@@ -604,6 +670,26 @@ function localToModelWasmOnly(context: WasmLocalToModelContext): number {
   const status = context.updateModelPoseFromSoa();
   if (status !== WaKernelStatus.Ok) throw new Error(`scalar WASM local-to-model failed with status ${status}`);
   return checksumMatrixBuffer(context.modelPoseView);
+}
+
+function checksumTransformSoa(values: Float32Array, jointCount: number): number {
+  let checksum = 0;
+  const stride = Math.max(1, Math.floor(jointCount / 12));
+  for (let joint = 0; joint < jointCount; joint += stride) {
+    const groupBase = (joint >> 2) * 40;
+    const lane = joint & 3;
+    checksum += (values[groupBase + lane] ?? 0) * 0.5;
+    checksum += (values[groupBase + 4 + lane] ?? 0) * 0.25;
+    checksum += (values[groupBase + 8 + lane] ?? 0) * 0.125;
+    checksum += (values[groupBase + 12 + lane] ?? 0) * 0.0625;
+    checksum += (values[groupBase + 16 + lane] ?? 0) * 0.03125;
+    checksum += (values[groupBase + 20 + lane] ?? 0) * 0.015625;
+    checksum += (values[groupBase + 24 + lane] ?? 0) * 0.0078125;
+    checksum += (values[groupBase + 28 + lane] ?? 0) * 0.00390625;
+    checksum += (values[groupBase + 32 + lane] ?? 0) * 0.001953125;
+    checksum += (values[groupBase + 36 + lane] ?? 0) * 0.0009765625;
+  }
+  return checksum;
 }
 
 function skinningPaletteAndCpu(fixture: BenchmarkFixture): number {
@@ -742,7 +828,7 @@ function checksumNumericArray(values: ArrayLike<number>): number {
 function rankHotPaths(results: readonly BenchmarkResult[]): HotPathRank[] {
   const resultByName = new Map(results.map((result) => [result.name, result]));
   const sampling = resultByName.get("sampling_3_clips_1_avatar")!;
-  const blend = resultByName.get("blend_additive_masks_1_avatar")!;
+  const blend = resultByName.get("blend_additive_masks_typescript_object_pose_1_avatar")!;
   const localToModel = resultByName.get("local_to_model_1_avatar")!;
   const skinning = resultByName.get("skinning_palette_cpu_1_avatar")!;
   const runtimeResult = resultByName.get("animation_runtime_evaluate_1_avatar")!;
