@@ -1151,6 +1151,66 @@ export async function runMotionRuntimeRootMotionTests(): Promise<void> {
   );
   assert.equal(runtimeHumanoidMotionUpdate.rootMotionLayers[0]?.carrier.joint, "hips");
 
+  const runtimeCarrierReplacement = new AnimationRuntime(motionSkeleton);
+  runtimeCarrierReplacement.setLayer("move", motionClip, {
+    weight: 1,
+    targetWeight: 1,
+    motionCarrier: { humanBone: "hips" }
+  });
+  runtimeCarrierReplacement.crossfade(
+    "move",
+    {
+      id: "replacement-root-carrier",
+      duration: 1,
+      tracks: [
+        {
+          joint: "root",
+          property: "translation",
+          times: toFloat32Array([0, 1]),
+          values: toFloat32Array([0, 0, 0, 10, 0, 0])
+        }
+      ]
+    },
+    { weight: 1, targetWeight: 1, resetTime: true }
+  );
+  const carrierReplacementUpdate = runtimeCarrierReplacement.update(0.5, { collectRootMotion: true });
+  assert.deepEqual(
+    carrierReplacementUpdate.rootMotionDelta.translation,
+    [5, 0, 0],
+    "crossfading a layer to a different clip should not inherit stale explicit motion-carrier metadata"
+  );
+  assert.equal(carrierReplacementUpdate.rootMotionLayers[0]?.carrier.joint, "root");
+
+  const sourceBasisClipA: AnimationClip = {
+    id: "source-basis-a",
+    duration: 1,
+    tracks: [
+      {
+        humanBone: "hips",
+        property: "rotation",
+        sourceRestQuaternion: toFloat32Array([0, 0, 0, 1]),
+        times: toFloat32Array([0]),
+        values: sanitizeQuaternionTrackValues([...quatFromAxisAngle([1, 0, 0], Math.PI / 2)])
+      }
+    ]
+  };
+  const sourceBasisClipB: AnimationClip = { ...sourceBasisClipA, id: "source-basis-b" };
+  const runtimeSourceBasisReplacement = new AnimationRuntime(motionSkeleton);
+  runtimeSourceBasisReplacement.setLayer("pose", sourceBasisClipA, {
+    weight: 1,
+    targetWeight: 1,
+    sourceBasisQuaternion: () => quatFromAxisAngle([0, 1, 0], Math.PI / 2)
+  });
+  runtimeSourceBasisReplacement.crossfade("pose", sourceBasisClipB, { weight: 1, targetWeight: 1, resetTime: true });
+  assert.ok(
+    quaternionNearlyEqual(
+      runtimeSourceBasisReplacement.evaluate().localPose[1]!.rotation,
+      quatFromAxisAngle([1, 0, 0], Math.PI / 2),
+      1e-6
+    ),
+    "crossfading a layer to a different clip should not inherit stale source-basis retarget metadata"
+  );
+
   const runtimeInvalidRootMotion = new AnimationRuntime(motionSkeleton);
   const runtimeInvalidLayer = runtimeInvalidRootMotion.setLayer("invalid", motionClip, {
     weight: 1,

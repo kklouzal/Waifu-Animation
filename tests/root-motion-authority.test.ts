@@ -157,6 +157,32 @@ function runCollisionReconciliationTests(): void {
   assert.ok(nearlyEqual(partial.residual.yawDelta, Math.PI / 4, 1e-9));
   assert.ok(vectorNearlyEqual(partial.applied.position, [0, 0, 2], 1e-9));
 
+  const reversedYaw = new RootMotionReconciler().reconcile({
+    actor,
+    animationDelta: makeDelta([0, 0, 0], Math.PI / 2),
+    policy: { mode: "animation-driven", animationDeltaSpace: "world" },
+    ownership: { token: "collision-reversed-yaw" },
+    world: { resolveRootMotion: () => ({ yawDelta: -Math.PI / 4 }) }
+  });
+  assert.ok(
+    nearlyEqual(reversedYaw.consumed.yawDelta, 0, 1e-9),
+    "world adapters should not introduce opposite-sign yaw under no-gain clamping"
+  );
+  assert.ok(reversedYaw.issues.some((issue) => issue.code === "no-gain"));
+
+  const reversedDisplacement = new RootMotionReconciler().reconcile({
+    actor,
+    animationDelta: makeDelta([0, 0, 2]),
+    policy: { mode: "animation-driven", animationDeltaSpace: "world" },
+    ownership: { token: "collision-reversed-displacement" },
+    world: { resolveRootMotion: () => ({ displacement: [0, 0, -1] }) }
+  });
+  assert.ok(
+    vectorNearlyEqual(reversedDisplacement.consumed.displacement, [0, 0, 0], 1e-9),
+    "world adapters should not introduce opposite-direction displacement under no-gain clamping"
+  );
+  assert.ok(reversedDisplacement.issues.some((issue) => issue.code === "no-gain"));
+
   const blocked = new RootMotionReconciler().reconcile({
     actor,
     animationDelta: makeDelta([0, 0, 5], Math.PI / 2),
@@ -281,6 +307,19 @@ function runOwnershipAndSnapshotTests(): void {
     ownership: { token: "frame-1" }
   });
   assert.equal(restoredDuplicate.ownership.duplicateToken, true, "token history should survive snapshot/restore");
+
+  const zeroHistory = new RootMotionReconciler({ maxTokenHistory: 0 });
+  zeroHistory.restore(snapshot);
+  const zeroHistoryReplay = zeroHistory.reconcile({
+    actor,
+    animationDelta: makeDelta([1, 0, 0]),
+    ownership: { token: "frame-1" }
+  });
+  assert.equal(
+    zeroHistoryReplay.ownership.duplicateToken,
+    false,
+    "restoring into maxTokenHistory=0 should keep token history disabled instead of replaying stale tokens"
+  );
 
   const doubleApplyRisk = new RootMotionReconciler().reconcile({
     actor,

@@ -67,6 +67,10 @@ export type CrossfadeOptions = AnimationLayerOptions & {
   resetTime?: boolean;
   /** When true and `mask` is omitted, clear any mask previously stored on the target layer. */
   clearMask?: boolean;
+  /** When true and `motionCarrier` is omitted, clear any motion carrier previously stored on the target layer. */
+  clearMotionCarrier?: boolean;
+  /** When true and `sourceBasisQuaternion` is omitted, clear any source-basis resolver previously stored on the target layer. */
+  clearSourceBasisQuaternion?: boolean;
   /** Optional source override layer ids to fade out. Defaults to all same-priority override layers except the target. */
   fromIds?: readonly string[];
   /** Override layer ids to keep active even when they match the crossfade scope. */
@@ -248,6 +252,7 @@ export class AnimationRuntime {
   crossfade(id: string, clip: AnimationClip, options: CrossfadeOptions = {}): AnimationLayer {
     const existing = this.layers.get(id);
     const resetTime = options.resetTime ?? !existing;
+    const mayInheritClipMetadata = canInheritLayerClipMetadata(existing, clip);
     const blendMode = sanitizeLayerBlendMode(options.blendMode ?? existing?.blendMode);
     const targetWeight = sanitizeLayerWeight(blendMode, options.targetWeight ?? options.weight ?? 1, 1);
     const fadeSpeed = finiteNonNegative(options.fadeSpeed, 8);
@@ -267,9 +272,11 @@ export class AnimationRuntime {
       blendMode,
       ...(options.motionCarrier
         ? { motionCarrier: options.motionCarrier }
-        : existing?.motionCarrier
-          ? { motionCarrier: existing.motionCarrier }
-          : {}),
+        : options.clearMotionCarrier
+          ? {}
+          : mayInheritClipMetadata && existing?.motionCarrier
+            ? { motionCarrier: existing.motionCarrier }
+            : {}),
       ...(options.mask
         ? { mask: options.mask }
         : options.clearMask
@@ -279,9 +286,11 @@ export class AnimationRuntime {
             : {}),
       ...(options.sourceBasisQuaternion
         ? { sourceBasisQuaternion: options.sourceBasisQuaternion }
-        : existing?.sourceBasisQuaternion
-          ? { sourceBasisQuaternion: existing.sourceBasisQuaternion }
-          : {})
+        : options.clearSourceBasisQuaternion
+          ? {}
+          : mayInheritClipMetadata && existing?.sourceBasisQuaternion
+            ? { sourceBasisQuaternion: existing.sourceBasisQuaternion }
+            : {})
     };
     this.layers.set(id, layer);
 
@@ -461,6 +470,10 @@ function resolveLayerLoop(...candidates: unknown[]): boolean {
     if (typeof candidate === "boolean") return candidate;
   }
   return false;
+}
+
+function canInheritLayerClipMetadata(existing: AnimationLayer | undefined, clip: AnimationClip): boolean {
+  return existing !== undefined && (existing.clip === clip || existing.clip.id === clip.id);
 }
 
 function readLocomotionLayerDuration(layer: LocomotionBlendLayerInput): number {

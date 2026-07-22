@@ -10,6 +10,7 @@ import {
   addVec3,
   cloneTransform,
   cloneVec3,
+  dotVec3,
   identityTransform,
   lengthVec3,
   quatFromAxisAngle,
@@ -342,7 +343,7 @@ export class RootMotionReconciler {
       tokens.push(token);
     }
     this.#sequence = snapshot.sequence;
-    this.#consumedTokens = tokens.slice(-this.config.maxTokenHistory);
+    this.#consumedTokens = this.config.maxTokenHistory > 0 ? tokens.slice(-this.config.maxTokenHistory) : [];
     this.#consumedTokenSet = new Set(this.#consumedTokens);
   }
 
@@ -388,6 +389,7 @@ export class RootMotionReconciler {
   }
 
   #rememberToken(token: string): void {
+    if (this.config.maxTokenHistory <= 0) return;
     if (this.#consumedTokenSet.has(token)) return;
     this.#consumedTokens.push(token);
     this.#consumedTokenSet.add(token);
@@ -1259,6 +1261,10 @@ function limitNoGain(
       pushIssue(issues, "bounded", field, "no-gain", "root motion world adapter cannot add displacement", actorId);
     return [0, 0, 0];
   }
+  if (valueLength > EPSILON && dotVec3(value, requested) < -EPSILON) {
+    pushIssue(issues, "bounded", field, "no-gain", "root motion world adapter cannot reverse displacement", actorId);
+    return [0, 0, 0];
+  }
   if (valueLength <= requestedLength + EPSILON) return cloneVec3(value);
   pushIssue(
     issues,
@@ -1292,6 +1298,18 @@ function limitYawNoGain(
       );
     return 0;
   }
+  if (valueAbs > EPSILON && Math.sign(value) !== Math.sign(requested)) {
+    if (isAmbiguousHalfTurn(valueAbs, requestedAbs)) return Math.sign(requested) * valueAbs;
+    pushIssue(
+      issues,
+      "bounded",
+      "world.resolveRootMotion.yawDelta",
+      "no-gain",
+      "root motion world adapter cannot reverse requested yaw",
+      actorId
+    );
+    return 0;
+  }
   if (valueAbs <= requestedAbs + EPSILON) return value;
   pushIssue(
     issues,
@@ -1302,6 +1320,10 @@ function limitYawNoGain(
     actorId
   );
   return Math.sign(value) * requestedAbs;
+}
+
+function isAmbiguousHalfTurn(valueAbs: number, requestedAbs: number): boolean {
+  return valueAbs >= Math.PI - EPSILON && requestedAbs >= Math.PI - EPSILON;
 }
 
 function finitePositiveInRange(value: number | undefined, fallback: number, max: number): number {
