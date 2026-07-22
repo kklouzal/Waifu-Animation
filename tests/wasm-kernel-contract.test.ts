@@ -14,6 +14,7 @@ import {
   WA_KERNEL_FEATURE_SCALAR_POSE_BLEND,
   WA_KERNEL_FEATURE_SCALAR_POSE_JOBS,
   WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING,
+  WA_KERNEL_FEATURE_RETAINED_SKINNING,
   WaKernelStatus,
   additiveDeltaPose,
   applyAdditivePose,
@@ -22,16 +23,19 @@ import {
   applyTwoBoneIkLocalCorrections,
   assert,
   blendPoses,
+  buildSkinningMatrixPalette,
   buildPackedRuntimeAnimation,
   clonePose,
   createRestPose,
   createSkeleton,
   createWasmAnimationRuntime,
   createWasmAnimationRuntimeBackend,
+  createWasmSkinningContext,
   detectWaKernelSimdSupport,
   localToModelPose,
   loadWaifuAnimationWasmKernel,
   normalizePose,
+  runWasmSkinningOrFallback,
   sampleClipToPose,
   sampleClipToPoseWithContext,
   samplePackedRuntimeAnimationToPose,
@@ -217,6 +221,7 @@ async function assertWasmLocalToModelParity(): Promise<void> {
   );
   assertWasmPoseJobsParity(kernel);
   assertWasmPackedSamplingParity(kernel);
+  assertWasmSkinningParity(kernel);
   assertWasmAnimationRuntimeParity(kernel);
   const fixture = createWasmKernelSyntheticFixture({ jointCount: 9, keyCount: 4, vertexCount: 0, phase: 0.33 });
   const disabledRuntime = await createWasmAnimationRuntime(fixture.skeleton, { kernel: { disabled: true } });
@@ -392,6 +397,20 @@ async function assertWasmLocalToModelParity(): Promise<void> {
   const disabledOut: ReturnType<typeof loadWaifuAnimationWasmKernel> = loadWaifuAnimationWasmKernel({ disabled: true });
   const disabledResult = await disabledOut;
   assert.equal(disabledResult.kind, "typescript", "forced disabled loader should fall back to TypeScript");
+  const disabledSkinningJob = {
+    vertexCount: 1,
+    modelMatrices: [skinningTestMatrix()],
+    inverseBindMatrices: [skinningTestMatrix()],
+    jointIndices: new Uint16Array([0]),
+    positions: { data: new Float32Array([1, 2, 3]) }
+  };
+  const disabledSkinningContext = createWasmSkinningContext(disabledResult, disabledSkinningJob);
+  assert.equal(disabledSkinningContext, undefined, "disabled loader should not construct a retained skinning context");
+  assert.equal(
+    runWasmSkinningOrFallback(disabledSkinningContext, disabledSkinningJob).kind,
+    "typescript",
+    "disabled retained skinning factory should keep scalar fallback explicit"
+  );
   const noSourceResult = await loadWaifuAnimationWasmKernel();
   assert.equal(noSourceResult.kind, "typescript", "missing WASM source should fall back to TypeScript");
   const invalidResult = await loadWaifuAnimationWasmKernel({ source: { bytes: new Uint8Array([0, 1, 2, 3]) } });
@@ -500,6 +519,36 @@ async function assertWasmLocalToModelParity(): Promise<void> {
     validateWaifuAnimationKernelExports(packedSamplingExports, WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING).ok,
     false,
     "packed sampling should reject a missing ratio export"
+  );
+  const skinningExports: Record<string, unknown> = {
+    ...oldMinorPoseExports,
+    wa_version_minor: () => 3,
+    wa_feature_flags: () => poseFeatureFlags | WA_KERNEL_FEATURE_RETAINED_SKINNING,
+    wa_create_skinning_job: () => WaKernelStatus.Ok,
+    wa_build_skinning_palette: () => WaKernelStatus.Ok,
+    wa_skin_vertices: () => WaKernelStatus.Ok
+  };
+  assert.equal(
+    validateWaifuAnimationKernelExports(
+      { ...skinningExports, wa_version_minor: () => 2 },
+      WA_KERNEL_FEATURE_RETAINED_SKINNING
+    ).ok,
+    false,
+    "retained skinning should reject ABI v1.2"
+  );
+  assert.equal(
+    validateWaifuAnimationKernelExports(
+      { ...skinningExports, wa_feature_flags: () => poseFeatureFlags },
+      WA_KERNEL_FEATURE_RETAINED_SKINNING
+    ).ok,
+    false,
+    "retained skinning should reject a missing feature bit"
+  );
+  delete skinningExports.wa_skin_vertices;
+  assert.equal(
+    validateWaifuAnimationKernelExports(skinningExports, WA_KERNEL_FEATURE_RETAINED_SKINNING).ok,
+    false,
+    "retained skinning should reject a missing CPU export"
   );
 
   const disabledContext = kernel.createLocalToModelContext(fixture.skeleton);
@@ -939,6 +988,307 @@ function assertWasmPackedSamplingParity(kernel: WaifuAnimationWasmKernel): void 
   edgeContext.destroy();
   edgeAsset.destroy();
   edgeArena.destroy();
+}
+
+function assertWasmSkinningParity(kernel: WaifuAnimationWasmKernel): void {
+  assert.equal(
+    kernel.featureFlags & WA_KERNEL_FEATURE_RETAINED_SKINNING,
+    WA_KERNEL_FEATURE_RETAINED_SKINNING,
+    "ABI v1.3 kernel should feature-gate retained palette and CPU skinning"
+  );
+  const identity = skinningTestMatrix();
+  const translated = skinningTestMatrix({ translation: [2, -1, 0.5] });
+  const scaled = skinningTestMatrix({ scale: [2, 0.5, 3] });
+  const inverseBind = skinningTestMatrix({ translation: [-0.25, 0.5, 0] });
+
+  const identityJob = {
+    vertexCount: 1,
+    influences: 1,
+    modelMatrices: [identity],
+    inverseBindMatrices: [identity],
+    jointIndices: new Uint16Array([0]),
+    positions: { data: new Float32Array([1, -2, 3]) },
+    normals: { data: new Float32Array([0, 1, 0]) },
+    tangents: { data: new Float32Array([1, 0, 0, -1]), stride: 4 },
+    outTangents: { data: new Float32Array([0, 0, 0, -1]), stride: 4 }
+  };
+  const identityContext = kernel.createSkinningContext(identityJob);
+  assert.equal(identityContext.runRetained(), WaKernelStatus.Ok, "single-joint identity retained skinning");
+  assert.deepEqual(identityContext.outPositions, identityJob.positions.data, "identity preserves positions");
+  assert.deepEqual(identityContext.outNormals, identityJob.normals.data, "identity preserves normals");
+  assert.deepEqual(
+    identityContext.outTangents,
+    new Float32Array([1, 0, 0, -1]),
+    "identity transforms tangent xyz while preserving caller-owned w"
+  );
+  identityContext.destroy();
+
+  const shortOutputJob = {
+    vertexCount: 2,
+    influences: 1,
+    modelMatrices: [identity],
+    inverseBindMatrices: [identity],
+    jointIndices: new Uint16Array([0, 0]),
+    positions: { data: new Float32Array([1, 2, 3, 4, 5, 6]) },
+    outPositions: { data: new Float32Array(3) }
+  };
+  const shortOutputContext = kernel.createSkinningContext(shortOutputJob);
+  assert.equal(shortOutputContext.vertexCount, 2, "retained setup matches scalar requested vertex count");
+  assert.equal(
+    shortOutputContext.runRetained(),
+    WaKernelStatus.Ok,
+    "short caller output is replaced by reserved capacity"
+  );
+  assert.deepEqual(shortOutputContext.outPositions, skinVertices(shortOutputJob).positions, "short output parity");
+  shortOutputContext.destroy();
+
+  for (const influences of [1, 2, 4, 8]) {
+    const vertexCount = 4;
+    const positionStride = 5;
+    const normalStride = 4;
+    const tangentStride = 4;
+    const positions = new Float32Array(vertexCount * positionStride + 1).fill(91);
+    const normals = new Float32Array(vertexCount * normalStride + 1).fill(92);
+    const tangents = new Float32Array(vertexCount * tangentStride + 1).fill(93);
+    const indices = new Float32Array(2 + vertexCount * (influences + 2)).fill(99);
+    const storedWeights = influences;
+    const weights = new Float32Array(1 + vertexCount * (storedWeights + 2)).fill(Number.NaN);
+    const outPositions = new Float32Array(vertexCount * 6 + 2).fill(-7);
+    const outNormals = new Float32Array(vertexCount * 5 + 1).fill(-8);
+    const outTangents = new Float32Array(vertexCount * 4 + 1).fill(-9);
+    for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+      const p = 1 + vertex * positionStride;
+      positions.set([vertex + 0.25, vertex * -0.5, 1 + vertex * 0.125], p);
+      normals.set([0, 1, vertex % 2], 1 + vertex * normalStride);
+      tangents.set([1, 0, 0, vertex % 2 === 0 ? 1 : -1], 1 + vertex * tangentStride);
+      for (let influence = 0; influence < influences; influence += 1) {
+        indices[2 + vertex * (influences + 2) + influence] = vertex === 2 && influence === 0 ? 999 : influence % 3;
+        weights[1 + vertex * (storedWeights + 2) + influence] =
+          vertex === 1 ? (influence === 0 ? -1 : Number.NaN) : vertex === 2 ? 0 : 0.75 / Math.max(1, influences - 1);
+      }
+    }
+    const job = {
+      vertexCount,
+      influences,
+      weightMode: "explicit" as const,
+      modelMatrices: [identity, translated, scaled],
+      inverseBindMatrices: [identity, inverseBind, identity],
+      jointIndices: indices,
+      jointWeights: weights,
+      jointIndexOffset: 2,
+      jointIndexStride: influences + 2,
+      jointWeightOffset: 1,
+      jointWeightStride: storedWeights + 2,
+      positions: { data: positions, offset: 1, stride: positionStride },
+      normals: { data: normals, offset: 1, stride: normalStride },
+      tangents: { data: tangents, offset: 1, stride: tangentStride },
+      outPositions: { data: outPositions.slice(), offset: 2, stride: 6 },
+      outNormals: { data: outNormals.slice(), offset: 1, stride: 5 },
+      outTangents: { data: outTangents.slice(), offset: 1, stride: 4 }
+    };
+    const reference = skinVertices(job);
+    const context = kernel.createSkinningContext({
+      ...job,
+      outPositions: { ...job.outPositions, data: outPositions.slice() },
+      outNormals: { ...job.outNormals, data: outNormals.slice() },
+      outTangents: { ...job.outTangents, data: outTangents.slice() }
+    });
+    assert.equal(context.runRetained(), WaKernelStatus.Ok, `retained skinning ${influences} influences`);
+    assertFloatArrayNearlyEqual(context.outPositions, reference.positions, 3e-5, `${influences} influence positions`);
+    assertFloatArrayNearlyEqual(context.outNormals!, reference.normals!, 3e-5, `${influences} influence normals`);
+    assertFloatArrayNearlyEqual(context.outTangents!, reference.tangents!, 3e-5, `${influences} influence tangents`);
+    assert.equal(context.outTangents![4], -9, "kernel writes tangent xyz only and preserves caller-owned padding/w");
+    const first = context.outPositions.slice();
+    const memoryBytes = kernel.memory.buffer.byteLength;
+    assert.equal(context.runRetained(), WaKernelStatus.Ok, "deterministic retained repeat");
+    assert.deepEqual(context.outPositions, first, "retained skinning repeats bit-for-bit");
+    assert.equal(kernel.memory.buffer.byteLength, memoryBytes, "steady-state retained skinning must not grow memory");
+    assert.equal(context.destroy(), WaKernelStatus.Ok, `destroy ${influences} influence context`);
+    assert.equal(context.skin(), WaKernelStatus.BadHandle, "destroyed retained skinning context rejects use");
+  }
+
+  const restoredJob = {
+    vertexCount: 2,
+    influences: 4,
+    modelMatrices: [identity, translated, scaled],
+    inverseBindMatrices: [identity, inverseBind, identity],
+    jointRemaps: new Float32Array([2, 1, Number.NaN]),
+    jointIndices: new Float32Array([0, 1, 2, 2, 0, 1, 2, 1]),
+    jointWeights: new Float32Array([2, -1, Number.NaN, 0.25, 0.5, 0.75]),
+    positions: { data: new Float32Array([1, 2, 3, Number.NaN, 4, 5]) },
+    normals: { data: new Float32Array([0, 1, 0]) },
+    tangents: { data: new Float32Array([1, 0, 0, -1]), stride: 4 },
+    outTangents: { data: new Float32Array([0, 0, 0, -1, 0, 0, 0, 1]), stride: 4 }
+  };
+  const restoredReference = skinVertices(restoredJob);
+  const restored = kernel.createSkinningContext(restoredJob);
+  assert.equal(restored.runRetained(), WaKernelStatus.Ok, "restored-last malformed/short optional inputs");
+  assertFloatArrayNearlyEqual(restored.outPositions, restoredReference.positions, 3e-5, "restored-last positions");
+  assertFloatArrayNearlyEqual(restored.outNormals!, restoredReference.normals!, 3e-5, "short normals repair");
+  assertFloatArrayNearlyEqual(restored.outTangents!, restoredReference.tangents!, 3e-5, "tangent handedness/padding");
+  const expectedPalette = buildSkinningMatrixPalette(restoredJob.modelMatrices, restoredJob.inverseBindMatrices, {
+    jointRemaps: restoredJob.jointRemaps
+  });
+  assertFloatArrayNearlyEqual(
+    restored.palette,
+    Float32Array.from(expectedPalette.flatMap((matrix) => Array.from(matrix))),
+    3e-5,
+    "model times inverse-bind palette"
+  );
+
+  const vectorJob = {
+    vertexCount: 1,
+    influences: 1,
+    modelMatrices: [scaled],
+    inverseBindMatrices: [identity],
+    jointInverseTransposeMatrices: [skinningTestMatrix({ scale: [0.5, 2, 1 / 3] })],
+    jointIndices: new Uint16Array([0]),
+    positions: { data: new Float32Array([1, 1, 1]) },
+    normals: { data: new Float32Array([1, 1, 1]) },
+    tangents: { data: new Float32Array([1, 0, 1, -1]), stride: 4 },
+    outTangents: { data: new Float32Array([0, 0, 0, -1]), stride: 4 }
+  };
+  const vectorReference = skinVertices(vectorJob);
+  const vectorContext = kernel.createSkinningContext(vectorJob);
+  assert.equal(vectorContext.runRetained(), WaKernelStatus.Ok, "nonuniform-scale vector palette");
+  assertFloatArrayNearlyEqual(vectorContext.outNormals!, vectorReference.normals!, 2e-5, "inverse-transpose normals");
+  assertFloatArrayNearlyEqual(
+    vectorContext.outTangents!,
+    vectorReference.tangents!,
+    2e-5,
+    "inverse-transpose tangents"
+  );
+  assert.equal(vectorContext.outTangents![3], -1, "tangent handedness remains caller-owned");
+
+  const empty = kernel.createSkinningContext({
+    vertexCount: 0,
+    influences: 1,
+    modelMatrices: [identity],
+    inverseBindMatrices: [identity],
+    jointIndices: new Uint16Array(),
+    positions: { data: new Float32Array() }
+  });
+  assert.equal(empty.runRetained(), WaKernelStatus.Ok, "empty retained skinning job");
+  assert.equal(empty.outPositions.length, 0, "empty output view");
+
+  const largeVertexCount = 4096;
+  const large = kernel.createSkinningContext({
+    vertexCount: largeVertexCount,
+    influences: 4,
+    modelMatrices: [identity, translated, scaled],
+    inverseBindMatrices: [identity, identity, identity],
+    jointIndices: new Uint16Array(largeVertexCount * 4).map((_value, index) => index % 3),
+    jointWeights: new Float32Array(largeVertexCount * 3).fill(0.25),
+    positions: { data: new Float32Array(largeVertexCount * 3).fill(0.5) }
+  });
+  assert.equal(large.runRetained(), WaKernelStatus.Ok, "large 4096x4 fixture");
+  assert.ok(Array.from(large.outPositions).every(Number.isFinite), "large fixture remains finite");
+
+  const independent = kernel.createSkinningContext({
+    vertexCount: 1,
+    influences: 1,
+    modelMatrices: [translated],
+    inverseBindMatrices: [identity],
+    jointIndices: new Uint16Array([0]),
+    positions: { data: new Float32Array([0, 0, 0]) }
+  });
+  assert.equal(independent.runRetained(), WaKernelStatus.Ok, "independent mesh/avatar context");
+  assert.notDeepEqual(
+    independent.outPositions,
+    vectorContext.outPositions,
+    "contexts retain independent buffers/state"
+  );
+
+  const oldBuffer = restored.positions.buffer;
+  assert.equal(kernel.forceMemoryGrowthForTests(1), WaKernelStatus.Ok, "skinning growth test export");
+  assert.notEqual(restored.positions.buffer, oldBuffer, "skinning views refresh after memory growth epoch");
+  assert.equal(restored.runRetained(), WaKernelStatus.Ok, "skinning runs after memory growth refresh");
+
+  assert.equal(restored.invokeRawPaletteForTests({ handle: 0 }), WaKernelStatus.BadHandle, "palette bad handle");
+  assert.equal(
+    restored.invokeRawPaletteForTests({ paletteOffset: restored.modelMatricesOffset }),
+    WaKernelStatus.InvalidArgument,
+    "palette rejects input/output alias"
+  );
+  assert.equal(restored.invokeRawSkinForTests({}, 0), WaKernelStatus.BadHandle, "skin bad handle");
+  assert.equal(
+    restored.invokeRawSkinForTests({ 10: restored.positionsOffset }),
+    WaKernelStatus.InvalidArgument,
+    "skin alias"
+  );
+  assert.equal(restored.invokeRawSkinForTests({ 11: 0 }), WaKernelStatus.Capacity, "skin output capacity");
+  assert.equal(restored.invokeRawSkinForTests({ 10: 3 }), WaKernelStatus.OutOfBounds, "skin output alignment");
+  assert.equal(
+    restored.invokeRawSkinForTests({ 10: kernel.memory.buffer.byteLength + 64 }),
+    WaKernelStatus.OutOfBounds,
+    "skin output bounds"
+  );
+  const staleHandle = independent.handle;
+  assert.equal(independent.destroy(), WaKernelStatus.Ok, "independent skinning destroy");
+  assert.equal(
+    restored.invokeRawSkinForTests({}, staleHandle),
+    WaKernelStatus.BadHandle,
+    "stale skinning handle generation"
+  );
+
+  const retainedDescriptor = new Uint32Array(kernel.memory.buffer, restored.descriptorOffset, 32);
+  const retainedOutputCapacity = retainedDescriptor[11]!;
+  retainedDescriptor[11] = 0;
+  const capacityFallback = restored.runOrFallback(restoredJob);
+  retainedDescriptor[11] = retainedOutputCapacity;
+  assert.equal(capacityFallback.kind, "typescript", "capacity status falls back to scalar TS");
+  assert.equal(capacityFallback.status, WaKernelStatus.Capacity, "capacity fallback preserves status");
+
+  kernel.forceDisableForTests("skinning forced fallback");
+  const fallback = restored.runOrFallback(restoredJob);
+  assert.equal(fallback.kind, "typescript", "disabled retained skinning falls back to scalar TS");
+  assertFloatArrayNearlyEqual(fallback.result.positions, restoredReference.positions, 3e-5, "disabled fallback parity");
+  kernel.clearForcedDisableForTests();
+
+  restored.destroy();
+  vectorContext.destroy();
+  empty.destroy();
+  large.destroy();
+}
+
+function skinningTestMatrix(
+  options: { translation?: [number, number, number]; scale?: [number, number, number] } = {}
+): Float32Array {
+  const translation = options.translation ?? [0, 0, 0];
+  const scale = options.scale ?? [1, 1, 1];
+  return new Float32Array([
+    scale[0],
+    0,
+    0,
+    0,
+    0,
+    scale[1],
+    0,
+    0,
+    0,
+    0,
+    scale[2],
+    0,
+    translation[0],
+    translation[1],
+    translation[2],
+    1
+  ]);
+}
+
+function assertFloatArrayNearlyEqual(
+  actual: ArrayLike<number>,
+  expected: ArrayLike<number>,
+  tolerance: number,
+  message: string
+): void {
+  assert.equal(actual.length, expected.length, `${message}: length`);
+  for (let index = 0; index < actual.length; index += 1) {
+    assert.ok(
+      Math.abs((actual[index] ?? 0) - (expected[index] ?? 0)) <= tolerance,
+      `${message}: component ${index} (${actual[index]} vs ${expected[index]})`
+    );
+  }
 }
 
 function assertWasmPoseJobsParity(kernel: WaifuAnimationWasmKernel): void {

@@ -6,18 +6,27 @@ import {
   type PackedRuntimeAnimation,
   type PackedRuntimeAnimationKeyController
 } from "./packed-runtime.js";
+import {
+  skinVertices,
+  type SkinningJob,
+  type SkinningNumericArray,
+  type SkinningResult,
+  type SkinningWeightMode
+} from "./skinning.js";
 
 export const WA_KERNEL_ABI_MAJOR = 1;
 /** Oldest ABI v1 minor accepted by the scalar local-to-model facade. */
 export const WA_KERNEL_ABI_MINOR = 0;
 export const WA_KERNEL_POSE_JOBS_ABI_MINOR = 1;
 export const WA_KERNEL_PACKED_SAMPLING_ABI_MINOR = 2;
+export const WA_KERNEL_SKINNING_ABI_MINOR = 3;
 
 export const WA_KERNEL_FEATURE_SCALAR_LOCAL_TO_MODEL = 1 << 0;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_BLEND = 1 << 1;
 export const WA_KERNEL_FEATURE_SCALAR_ADDITIVE = 1 << 2;
 export const WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS = 1 << 3;
 export const WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING = 1 << 4;
+export const WA_KERNEL_FEATURE_RETAINED_SKINNING = 1 << 5;
 export const WA_KERNEL_FEATURE_SCALAR_POSE_JOBS =
   WA_KERNEL_FEATURE_SCALAR_POSE_BLEND | WA_KERNEL_FEATURE_SCALAR_ADDITIVE | WA_KERNEL_FEATURE_SCALAR_JOINT_MASKS;
 export const WA_KERNEL_FEATURE_SIMD_LOCAL_TO_MODEL = 1 << 16;
@@ -140,6 +149,33 @@ export type WaKernelRawExports = {
     ratio: number,
     flags: number
   ) => number;
+  wa_create_skinning_job?: (
+    inverseBindOffset: number,
+    paletteCount: number,
+    inverseBindCapacityBytes: number,
+    remapOffset: number,
+    remapCapacityBytes: number,
+    indicesOffset: number,
+    indicesCapacityBytes: number,
+    weightsOffset: number,
+    weightsCapacityBytes: number,
+    vertexCount: number,
+    influences: number,
+    indexStride: number,
+    weightStride: number,
+    weightMode: number,
+    flags: number,
+    outHandlePtr: number
+  ) => number;
+  wa_build_skinning_palette?: (
+    jobHandle: number,
+    modelMatricesOffset: number,
+    modelMatricesCount: number,
+    modelMatricesCapacityBytes: number,
+    paletteOffset: number,
+    paletteCapacityBytes: number
+  ) => number;
+  wa_skin_vertices?: (jobHandle: number, descriptorOffset: number) => number;
   wa_destroy_handle: (handle: number) => number;
   wa_local_to_model: (
     avatarHandle: number,
@@ -237,6 +273,32 @@ export type WasmPackedSamplingFallbackResult =
   | { kind: "wasm-scalar"; status: WaKernelStatus }
   | { kind: "typescript"; status: WaKernelStatus.Unsupported; reason: string };
 
+export type WasmSkinningContextOptions = SkinningJob & {
+  /** Required fixed vertex count for the retained job. */
+  vertexCount: number;
+  /** Immutable bind palette copied once at setup. */
+  inverseBindMatrices: readonly SkinningNumericArray[];
+  /** Reserve additional dynamic model matrices for remapped palettes. */
+  modelMatrixCapacity?: number;
+  /** Reserve a separate caller-owned vector matrix palette for inverse-transpose matrices. */
+  vectorPalette?: boolean;
+};
+
+export type WasmSkinningRunResult =
+  | {
+      kind: "wasm-scalar";
+      status: WaKernelStatus.Ok;
+      positions: Float32Array;
+      normals?: Float32Array;
+      tangents?: Float32Array;
+    }
+  | {
+      kind: "typescript";
+      status: WaKernelStatus;
+      reason: string;
+      result: SkinningResult;
+    };
+
 export type WasmRawBlendInvocation = {
   avatarHandle: number;
   layersOffset: number;
@@ -295,6 +357,7 @@ const MAT4_BYTES = MAT4_FLOATS * 4;
 const OPTIONS_BYTES = 32;
 const BLEND_LAYER_BYTES = 24;
 const PACKED_TRACK_BYTES = 64;
+const SKINNING_DESCRIPTOR_BYTES = 128;
 const PARENT_BYTES = 4;
 const DEFAULT_ALIGNMENT = 16;
 const MATRIX_ALIGNMENT = 64;
@@ -305,6 +368,9 @@ const OPTION_FLAG_FROM_EXCLUDED = 1 << 0;
 const OPTION_FLAG_HAS_ROOT = 1 << 1;
 const SAMPLE_FLAG_LOOP = 1 << 0;
 const SAMPLE_FLAG_RESET_CACHE = 1 << 1;
+const SKINNING_FLAG_HAS_REMAPS = 1 << 0;
+const SKINNING_DESCRIPTOR_NORMALS = 1 << 0;
+const SKINNING_DESCRIPTOR_TANGENTS = 1 << 1;
 
 // Minimal module using one SIMD instruction. This is a capability seam only;
 // Phase 1 always selects scalar-WASM when WASM is enabled.
@@ -425,6 +491,16 @@ export function validateWaifuAnimationKernelExports(
       }
     }
   }
+  if ((requiredFeatures & WA_KERNEL_FEATURE_RETAINED_SKINNING) !== 0) {
+    if (minor < WA_KERNEL_SKINNING_ABI_MINOR) {
+      return { ok: false, reason: "skinning-abi-minor-too-old", major, minor, featureFlags };
+    }
+    for (const name of ["wa_create_skinning_job", "wa_build_skinning_palette", "wa_skin_vertices"]) {
+      if (typeof exports[name] !== "function") {
+        return { ok: false, reason: `missing-export:${name}`, major, minor, featureFlags };
+      }
+    }
+  }
   return { ok: true, major, minor, featureFlags };
 }
 
@@ -519,6 +595,12 @@ export class WaifuAnimationWasmKernel {
     const validation = validateWaifuAnimationKernelExports(this.exports, WA_KERNEL_FEATURE_RETAINED_PACKED_SAMPLING);
     if (!validation.ok) throw new Error(`WASM retained packed sampling unavailable: ${validation.reason}`);
     return new WasmPackedClipAsset(this, skeleton, animation);
+  }
+
+  createSkinningContext(options: WasmSkinningContextOptions): WasmSkinningContext {
+    const validation = validateWaifuAnimationKernelExports(this.exports, WA_KERNEL_FEATURE_RETAINED_SKINNING);
+    if (!validation.ok) throw new Error(`WASM retained skinning unavailable: ${validation.reason}`);
+    return new WasmSkinningContext(this, options);
   }
 
   forceDisableForTests(reason = "forced-disable"): void {
@@ -618,6 +700,73 @@ export class WaifuAnimationWasmKernel {
     this.refreshViewsIfNeeded();
     if (status !== 0) throw new Error(`WASM packed sampling context creation failed: ${statusName(status)}`);
     return this.dataView.getUint32(this.scratchOffset, true);
+  }
+
+  createSkinningJob(input: {
+    inverseBindOffset: number;
+    paletteCount: number;
+    remapOffset: number;
+    indicesOffset: number;
+    indicesCount: number;
+    weightsOffset: number;
+    weightsCount: number;
+    vertexCount: number;
+    influences: number;
+    indexStride: number;
+    weightStride: number;
+    weightMode: SkinningWeightMode;
+  }): number {
+    const create = this.exports.wa_create_skinning_job;
+    if (!this.available || !create) throw new Error("WASM retained skinning is unavailable");
+    const status = create(
+      input.inverseBindOffset,
+      input.paletteCount,
+      input.paletteCount * MAT4_BYTES,
+      input.remapOffset,
+      input.remapOffset === 0 ? 0 : input.paletteCount * F32_BYTES,
+      input.indicesOffset,
+      input.indicesCount * F32_BYTES,
+      input.weightsOffset,
+      input.weightsCount * F32_BYTES,
+      input.vertexCount,
+      input.influences,
+      input.indexStride,
+      input.weightStride,
+      input.weightMode === "explicit" ? 1 : 0,
+      input.remapOffset === 0 ? 0 : SKINNING_FLAG_HAS_REMAPS,
+      this.scratchOffset
+    );
+    this.refreshViewsIfNeeded();
+    if (status !== 0) throw new Error(`WASM skinning job creation failed: ${statusName(status)}`);
+    return this.dataView.getUint32(this.scratchOffset, true);
+  }
+
+  invokeSkinningPalette(input: {
+    handle: number;
+    modelOffset: number;
+    modelCount: number;
+    modelCapacityBytes: number;
+    paletteOffset: number;
+    paletteCapacityBytes: number;
+  }): WaKernelStatus {
+    const invoke = this.exports.wa_build_skinning_palette;
+    if (!this.available || !invoke) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(
+      invoke(
+        input.handle,
+        input.modelOffset,
+        input.modelCount,
+        input.modelCapacityBytes,
+        input.paletteOffset,
+        input.paletteCapacityBytes
+      )
+    );
+  }
+
+  invokeSkinning(handle: number, descriptorOffset: number): WaKernelStatus {
+    const invoke = this.exports.wa_skin_vertices;
+    if (!this.available || !invoke) return WaKernelStatus.Unsupported;
+    return this.finishPoseJobStatus(invoke(handle, descriptorOffset));
   }
 
   resetSamplingContext(contextHandle: number): WaKernelStatus {
@@ -778,6 +927,485 @@ export class WaifuAnimationWasmKernel {
     if (status === 7 || status === 6) this.quarantinedReason = statusName(status);
     return status;
   }
+}
+
+/**
+ * Retained scalar-WASM palette and CPU-skinning job. Immutable inverse binds,
+ * remaps, indices, weights, and layout metadata are copied once. Callers update
+ * the exposed typed views in place; `runRetained` allocates nothing and never
+ * grows memory after construction.
+ */
+export class WasmSkinningContext {
+  readonly vertexCount: number;
+  readonly influences: number;
+  readonly paletteCount: number;
+  readonly modelMatrixCapacity: number;
+  readonly weightMode: SkinningWeightMode;
+  readonly handle: number;
+  readonly modelMatricesOffset: number;
+  readonly paletteOffset: number;
+  readonly vectorPaletteOffset: number;
+  readonly positionsOffset: number;
+  readonly normalsOffset: number;
+  readonly tangentsOffset: number;
+  readonly outPositionsOffset: number;
+  readonly outNormalsOffset: number;
+  readonly outTangentsOffset: number;
+  readonly descriptorOffset: number;
+  private readonly kernel: WaifuAnimationWasmKernel;
+  private readonly layouts: RetainedSkinningLayouts;
+  private readonly inverseBindOffset: number;
+  private readonly remapOffset: number;
+  private readonly indicesOffset: number;
+  private readonly weightsOffset: number;
+  private readonly inverseBindMatricesSnapshot: Float32Array;
+  private modelMatrixCount: number;
+  private cachedBuffer: ArrayBuffer;
+  private destroyed = false;
+  private modelMatricesViewCache!: Float32Array;
+  private paletteViewCache!: Float32Array;
+  private vectorPaletteViewCache: Float32Array | undefined;
+  private positionsViewCache!: Float32Array;
+  private normalsViewCache: Float32Array | undefined;
+  private tangentsViewCache: Float32Array | undefined;
+  private outPositionsViewCache!: Float32Array;
+  private outNormalsViewCache: Float32Array | undefined;
+  private outTangentsViewCache: Float32Array | undefined;
+
+  constructor(kernel: WaifuAnimationWasmKernel, options: WasmSkinningContextOptions) {
+    const requestedVertexCount = requireBoundedNonNegativeInteger(options.vertexCount, "vertexCount", 4_194_304);
+    const influences = requireBoundedPositiveInteger(options.influences ?? 1, "influences", 256);
+    const positionLayout = retainedAttributeLayout(options.positions, 3);
+    this.vertexCount = Math.min(requestedVertexCount, inferredRetainedVertexCount(options.positions, positionLayout));
+    this.influences = influences;
+    this.weightMode = options.weightMode === "explicit" ? "explicit" : "restored-last";
+    const models = options.modelMatrices;
+    if (!models || models.length === 0) throw new Error("WASM retained skinning requires modelMatrices at setup");
+    this.paletteCount = Math.min(
+      65_536,
+      options.jointRemaps
+        ? Math.min(safeNumericLength(options.jointRemaps), options.inverseBindMatrices.length)
+        : Math.min(models.length, options.inverseBindMatrices.length)
+    );
+    if (this.paletteCount <= 0) throw new Error("WASM retained skinning requires a non-empty inverse-bind palette");
+    this.modelMatrixCapacity = requireBoundedPositiveInteger(
+      options.modelMatrixCapacity ?? models.length,
+      "modelMatrixCapacity",
+      65_536
+    );
+    if (models.length > this.modelMatrixCapacity) throw new Error("modelMatrices exceed retained modelMatrixCapacity");
+    this.kernel = kernel;
+    this.layouts = createRetainedSkinningLayouts(options, this.vertexCount, positionLayout);
+
+    const inverseBytes = this.paletteCount * MAT4_BYTES;
+    const remapBytes = options.jointRemaps ? this.paletteCount * F32_BYTES : 0;
+    const indexCount = this.vertexCount * influences;
+    const storedWeightCount = this.weightMode === "explicit" ? influences : influences - 1;
+    const weightCount = this.vertexCount * storedWeightCount;
+    this.inverseBindOffset = kernel.allocateBytes(Math.max(F32_BYTES, inverseBytes), MATRIX_ALIGNMENT);
+    this.remapOffset = remapBytes > 0 ? kernel.allocateBytes(remapBytes, DEFAULT_ALIGNMENT) : 0;
+    this.indicesOffset = kernel.allocateBytes(Math.max(F32_BYTES, indexCount * F32_BYTES), DEFAULT_ALIGNMENT);
+    this.weightsOffset = kernel.allocateBytes(Math.max(F32_BYTES, weightCount * F32_BYTES), DEFAULT_ALIGNMENT);
+    this.modelMatricesOffset = kernel.allocateBytes(this.modelMatrixCapacity * MAT4_BYTES, MATRIX_ALIGNMENT);
+    this.paletteOffset = kernel.allocateBytes(inverseBytes, MATRIX_ALIGNMENT);
+    this.vectorPaletteOffset =
+      options.vectorPalette === true || options.jointInverseTransposeMatrices !== undefined
+        ? kernel.allocateBytes(inverseBytes, MATRIX_ALIGNMENT)
+        : 0;
+    this.positionsOffset = kernel.allocateBytes(Math.max(F32_BYTES, this.layouts.positions.length * F32_BYTES));
+    this.normalsOffset = this.layouts.normals
+      ? kernel.allocateBytes(Math.max(F32_BYTES, this.layouts.normals.length * F32_BYTES))
+      : 0;
+    this.tangentsOffset = this.layouts.tangents
+      ? kernel.allocateBytes(Math.max(F32_BYTES, this.layouts.tangents.length * F32_BYTES))
+      : 0;
+    this.outPositionsOffset = kernel.allocateBytes(Math.max(F32_BYTES, this.layouts.outPositions.length * F32_BYTES));
+    this.outNormalsOffset = this.layouts.outNormals
+      ? kernel.allocateBytes(Math.max(F32_BYTES, this.layouts.outNormals.length * F32_BYTES))
+      : 0;
+    this.outTangentsOffset = this.layouts.outTangents
+      ? kernel.allocateBytes(Math.max(F32_BYTES, this.layouts.outTangents.length * F32_BYTES))
+      : 0;
+    this.descriptorOffset = kernel.allocateBytes(SKINNING_DESCRIPTOR_BYTES, DEFAULT_ALIGNMENT);
+    this.cachedBuffer = kernel.memory.buffer;
+    this.refreshViewCaches();
+    this.positionsViewCache.fill(0);
+    this.normalsViewCache?.fill(0);
+    this.tangentsViewCache?.fill(0);
+    this.outPositionsViewCache.fill(0);
+    this.outNormalsViewCache?.fill(0);
+    this.outTangentsViewCache?.fill(0);
+
+    this.inverseBindMatricesSnapshot = new Float32Array(this.paletteCount * MAT4_FLOATS);
+    for (let index = 0; index < this.paletteCount; index += 1) {
+      this.inverseBindMatricesSnapshot.set(
+        finiteMat4OrIdentity(options.inverseBindMatrices[index]),
+        index * MAT4_FLOATS
+      );
+    }
+    new Float32Array(this.cachedBuffer, this.inverseBindOffset, this.inverseBindMatricesSnapshot.length).set(
+      this.inverseBindMatricesSnapshot
+    );
+    if (this.remapOffset !== 0) {
+      const remaps = new Float32Array(this.cachedBuffer, this.remapOffset, this.paletteCount);
+      for (let index = 0; index < this.paletteCount; index += 1)
+        remaps[index] = finiteNumber(options.jointRemaps?.[index], 0);
+    }
+    const retainedIndices = new Uint32Array(this.cachedBuffer, this.indicesOffset, indexCount);
+    const sourceIndexOffset = safeNonNegativeInteger(options.jointIndexOffset, 0);
+    const sourceIndexStride = safePositiveInteger(options.jointIndexStride, influences);
+    for (let vertex = 0; vertex < this.vertexCount; vertex += 1) {
+      for (let influence = 0; influence < influences; influence += 1) {
+        retainedIndices[vertex * influences + influence] = validPaletteIndex(
+          options.jointIndices?.[sourceIndexOffset + vertex * sourceIndexStride + influence],
+          this.paletteCount
+        );
+      }
+    }
+    const retainedWeights = new Float32Array(this.cachedBuffer, this.weightsOffset, weightCount);
+    const sourceWeightOffset = safeNonNegativeInteger(options.jointWeightOffset, 0);
+    const sourceWeightStride = safeNonNegativeInteger(options.jointWeightStride, storedWeightCount);
+    for (let vertex = 0; vertex < this.vertexCount; vertex += 1) {
+      for (let influence = 0; influence < storedWeightCount; influence += 1) {
+        retainedWeights[vertex * storedWeightCount + influence] =
+          options.jointWeights?.[sourceWeightOffset + vertex * sourceWeightStride + influence] ?? Number.NaN;
+      }
+    }
+    this.copyAttributeInput(this.positionsViewCache, options.positions?.data);
+    this.copyAttributeInput(this.normalsViewCache, options.normals?.data);
+    this.copyAttributeInput(this.tangentsViewCache, options.tangents?.data);
+    this.copyAttributeInput(this.outPositionsViewCache, options.outPositions?.data);
+    this.copyAttributeInput(this.outNormalsViewCache, options.outNormals?.data);
+    this.copyAttributeInput(this.outTangentsViewCache, options.outTangents?.data);
+    this.modelMatrixCount = models.length;
+    this.writeModelMatrices(models);
+    if (this.vectorPaletteViewCache) this.writeVectorPalette(options.jointInverseTransposeMatrices ?? []);
+    this.writeDescriptor();
+    this.handle = kernel.createSkinningJob({
+      inverseBindOffset: this.inverseBindOffset,
+      paletteCount: this.paletteCount,
+      remapOffset: this.remapOffset,
+      indicesOffset: this.indicesOffset,
+      indicesCount: indexCount,
+      weightsOffset: this.weightsOffset,
+      weightsCount: weightCount,
+      vertexCount: this.vertexCount,
+      influences,
+      indexStride: influences,
+      weightStride: storedWeightCount,
+      weightMode: this.weightMode
+    });
+  }
+
+  get available(): boolean {
+    return !this.destroyed && this.kernel.available;
+  }
+
+  get modelMatrices(): Float32Array {
+    this.refreshViews();
+    return this.modelMatricesViewCache;
+  }
+
+  get palette(): Float32Array {
+    this.refreshViews();
+    return this.paletteViewCache;
+  }
+
+  get vectorPalette(): Float32Array | undefined {
+    this.refreshViews();
+    return this.vectorPaletteViewCache;
+  }
+
+  get positions(): Float32Array {
+    this.refreshViews();
+    return this.positionsViewCache;
+  }
+
+  get normals(): Float32Array | undefined {
+    this.refreshViews();
+    return this.normalsViewCache;
+  }
+
+  get tangents(): Float32Array | undefined {
+    this.refreshViews();
+    return this.tangentsViewCache;
+  }
+
+  get outPositions(): Float32Array {
+    this.refreshViews();
+    return this.outPositionsViewCache;
+  }
+
+  get outNormals(): Float32Array | undefined {
+    this.refreshViews();
+    return this.outNormalsViewCache;
+  }
+
+  get outTangents(): Float32Array | undefined {
+    this.refreshViews();
+    return this.outTangentsViewCache;
+  }
+
+  writeModelMatrices(matrices: readonly SkinningNumericArray[]): Float32Array {
+    if (matrices.length === 0 || matrices.length > this.modelMatrixCapacity) {
+      throw new Error("modelMatrices length is outside retained capacity");
+    }
+    const view = this.modelMatrices;
+    view.fill(0);
+    for (let index = 0; index < matrices.length; index += 1) {
+      view.set(finiteMat4OrIdentity(matrices[index]), index * MAT4_FLOATS);
+    }
+    this.modelMatrixCount = matrices.length;
+    return view;
+  }
+
+  writeVectorPalette(matrices: readonly SkinningNumericArray[]): Float32Array {
+    const view = this.vectorPalette;
+    if (!view) throw new Error("retained vector palette was not reserved");
+    view.fill(Number.NaN);
+    for (let index = 0; index < Math.min(matrices.length, this.paletteCount); index += 1) {
+      const matrix = matrices[index];
+      if (isFiniteMat4Like(matrix)) view.set(matrix, index * MAT4_FLOATS);
+    }
+    return view;
+  }
+
+  buildPalette(): WaKernelStatus {
+    if (this.destroyed) return WaKernelStatus.BadHandle;
+    return this.kernel.invokeSkinningPalette({
+      handle: this.handle,
+      modelOffset: this.modelMatricesOffset,
+      modelCount: this.modelMatrixCount,
+      modelCapacityBytes: this.modelMatrixCapacity * MAT4_BYTES,
+      paletteOffset: this.paletteOffset,
+      paletteCapacityBytes: this.paletteCount * MAT4_BYTES
+    });
+  }
+
+  skin(): WaKernelStatus {
+    if (this.destroyed) return WaKernelStatus.BadHandle;
+    return this.kernel.invokeSkinning(this.handle, this.descriptorOffset);
+  }
+
+  runRetained(): WaKernelStatus {
+    const paletteStatus = this.buildPalette();
+    return paletteStatus === WaKernelStatus.Ok ? this.skin() : paletteStatus;
+  }
+
+  runOrFallback(fallbackJob?: SkinningJob): WasmSkinningRunResult {
+    const status = this.runRetained();
+    if (status === WaKernelStatus.Ok) {
+      const result: WasmSkinningRunResult = {
+        kind: "wasm-scalar",
+        status: WaKernelStatus.Ok,
+        positions: this.outPositions
+      };
+      if (this.outNormals) result.normals = this.outNormals;
+      if (this.outTangents) result.tangents = this.outTangents;
+      return result;
+    }
+    const result = skinVertices(fallbackJob ?? this.createFallbackJob());
+    this.outPositions.set(result.positions);
+    if (this.outNormals && result.normals) this.outNormals.set(result.normals);
+    if (this.outTangents && result.tangents) this.outTangents.set(result.tangents);
+    return {
+      kind: "typescript",
+      status,
+      reason: this.kernel.disabledReason ?? statusName(status),
+      result
+    };
+  }
+
+  invokeRawPaletteForTests(
+    overrides: {
+      handle?: number;
+      modelOffset?: number;
+      modelCount?: number;
+      modelCapacityBytes?: number;
+      paletteOffset?: number;
+      paletteCapacityBytes?: number;
+    } = {}
+  ): WaKernelStatus {
+    return this.kernel.invokeSkinningPalette({
+      handle: overrides.handle ?? this.handle,
+      modelOffset: overrides.modelOffset ?? this.modelMatricesOffset,
+      modelCount: overrides.modelCount ?? this.modelMatrixCount,
+      modelCapacityBytes: overrides.modelCapacityBytes ?? this.modelMatrixCapacity * MAT4_BYTES,
+      paletteOffset: overrides.paletteOffset ?? this.paletteOffset,
+      paletteCapacityBytes: overrides.paletteCapacityBytes ?? this.paletteCount * MAT4_BYTES
+    });
+  }
+
+  invokeRawSkinForTests(wordOverrides: Readonly<Record<number, number>> = {}, handle = this.handle): WaKernelStatus {
+    const descriptor = new Uint32Array(this.kernel.memory.buffer, this.descriptorOffset, SKINNING_DESCRIPTOR_BYTES / 4);
+    const saved = descriptor.slice();
+    for (const [word, value] of Object.entries(wordOverrides)) descriptor[Number(word)] = value;
+    const status = this.kernel.invokeSkinning(handle, this.descriptorOffset);
+    descriptor.set(saved);
+    return status;
+  }
+
+  destroy(): WaKernelStatus {
+    if (this.destroyed) return WaKernelStatus.BadHandle;
+    this.destroyed = true;
+    return this.kernel.destroyHandle(this.handle);
+  }
+
+  refreshViews(): void {
+    this.kernel.refreshViewsIfNeeded();
+    if (this.cachedBuffer !== this.kernel.memory.buffer) {
+      this.cachedBuffer = this.kernel.memory.buffer;
+      this.refreshViewCaches();
+    }
+  }
+
+  private refreshViewCaches(): void {
+    this.modelMatricesViewCache = new Float32Array(
+      this.cachedBuffer,
+      this.modelMatricesOffset,
+      this.modelMatrixCapacity * MAT4_FLOATS
+    );
+    this.paletteViewCache = new Float32Array(this.cachedBuffer, this.paletteOffset, this.paletteCount * MAT4_FLOATS);
+    this.vectorPaletteViewCache =
+      this.vectorPaletteOffset === 0
+        ? undefined
+        : new Float32Array(this.cachedBuffer, this.vectorPaletteOffset, this.paletteCount * MAT4_FLOATS);
+    this.positionsViewCache = new Float32Array(this.cachedBuffer, this.positionsOffset, this.layouts.positions.length);
+    this.normalsViewCache = this.layouts.normals
+      ? new Float32Array(this.cachedBuffer, this.normalsOffset, this.layouts.normals.length)
+      : undefined;
+    this.tangentsViewCache = this.layouts.tangents
+      ? new Float32Array(this.cachedBuffer, this.tangentsOffset, this.layouts.tangents.length)
+      : undefined;
+    this.outPositionsViewCache = new Float32Array(
+      this.cachedBuffer,
+      this.outPositionsOffset,
+      this.layouts.outPositions.length
+    );
+    this.outNormalsViewCache = this.layouts.outNormals
+      ? new Float32Array(this.cachedBuffer, this.outNormalsOffset, this.layouts.outNormals.length)
+      : undefined;
+    this.outTangentsViewCache = this.layouts.outTangents
+      ? new Float32Array(this.cachedBuffer, this.outTangentsOffset, this.layouts.outTangents.length)
+      : undefined;
+  }
+
+  private writeDescriptor(): void {
+    const descriptor = new Uint32Array(this.cachedBuffer, this.descriptorOffset, SKINNING_DESCRIPTOR_BYTES / 4);
+    descriptor.fill(0);
+    const pairs = [
+      [this.paletteOffset, this.paletteCount * MAT4_BYTES],
+      [this.vectorPaletteOffset, this.vectorPaletteOffset === 0 ? 0 : this.paletteCount * MAT4_BYTES],
+      [this.positionsOffset, this.layouts.positions.length * F32_BYTES],
+      [this.normalsOffset, (this.layouts.normals?.length ?? 0) * F32_BYTES],
+      [this.tangentsOffset, (this.layouts.tangents?.length ?? 0) * F32_BYTES],
+      [this.outPositionsOffset, this.layouts.outPositions.length * F32_BYTES],
+      [this.outNormalsOffset, (this.layouts.outNormals?.length ?? 0) * F32_BYTES],
+      [this.outTangentsOffset, (this.layouts.outTangents?.length ?? 0) * F32_BYTES]
+    ] as const;
+    for (let index = 0; index < pairs.length; index += 1) {
+      descriptor[index * 2] = pairs[index]![0];
+      descriptor[index * 2 + 1] = pairs[index]![1];
+    }
+    const layouts = [
+      this.layouts.positions,
+      this.layouts.normals,
+      this.layouts.tangents,
+      this.layouts.outPositions,
+      this.layouts.outNormals,
+      this.layouts.outTangents
+    ];
+    for (let index = 0; index < layouts.length; index += 1) {
+      descriptor[16 + index * 2] = layouts[index]?.offset ?? 0;
+      descriptor[17 + index * 2] = layouts[index]?.stride ?? 3;
+    }
+    descriptor[28] =
+      (this.layouts.normals ? SKINNING_DESCRIPTOR_NORMALS : 0) |
+      (this.layouts.tangents ? SKINNING_DESCRIPTOR_TANGENTS : 0);
+  }
+
+  private copyAttributeInput(target: Float32Array | undefined, source: SkinningNumericArray | undefined): void {
+    if (!target || !source) return;
+    for (let index = 0; index < Math.min(target.length, safeNumericLength(source)); index += 1) {
+      target[index] = source[index] ?? Number.NaN;
+    }
+  }
+
+  private createFallbackJob(): SkinningJob {
+    const models = materializeMat4View(this.modelMatrices, this.modelMatrixCount);
+    const inverse = materializeMat4View(this.inverseBindMatricesSnapshot, this.paletteCount);
+    const indices = new Uint32Array(this.cachedBuffer, this.indicesOffset, this.vertexCount * this.influences);
+    const storedWeightCount = this.weightMode === "explicit" ? this.influences : this.influences - 1;
+    const weights = new Float32Array(this.cachedBuffer, this.weightsOffset, this.vertexCount * storedWeightCount);
+    const job: SkinningJob = {
+      vertexCount: this.vertexCount,
+      influences: this.influences,
+      modelMatrices: models,
+      inverseBindMatrices: inverse,
+      jointIndices: indices,
+      jointWeights: weights,
+      jointIndexStride: this.influences,
+      jointWeightStride: storedWeightCount,
+      weightMode: this.weightMode,
+      positions: { data: this.positions, offset: this.layouts.positions.offset, stride: this.layouts.positions.stride },
+      outPositions: {
+        data: this.outPositions,
+        offset: this.layouts.outPositions.offset,
+        stride: this.layouts.outPositions.stride
+      }
+    };
+    if (this.remapOffset !== 0)
+      job.jointRemaps = new Float32Array(this.cachedBuffer, this.remapOffset, this.paletteCount);
+    if (this.normals && this.layouts.normals && this.outNormals && this.layouts.outNormals) {
+      job.normals = { data: this.normals, offset: this.layouts.normals.offset, stride: this.layouts.normals.stride };
+      job.outNormals = {
+        data: this.outNormals,
+        offset: this.layouts.outNormals.offset,
+        stride: this.layouts.outNormals.stride
+      };
+    }
+    if (this.tangents && this.layouts.tangents && this.outTangents && this.layouts.outTangents) {
+      job.tangents = {
+        data: this.tangents,
+        offset: this.layouts.tangents.offset,
+        stride: this.layouts.tangents.stride
+      };
+      job.outTangents = {
+        data: this.outTangents,
+        offset: this.layouts.outTangents.offset,
+        stride: this.layouts.outTangents.stride
+      };
+    }
+    if (this.vectorPalette)
+      job.jointInverseTransposeMatrices = materializeMat4View(this.vectorPalette, this.paletteCount);
+    return job;
+  }
+}
+
+export function createWasmSkinningContext(
+  kernelOrLoadResult: WaifuAnimationWasmKernel | WaKernelLoadResult,
+  options: WasmSkinningContextOptions
+): WasmSkinningContext | undefined {
+  const kernel = "kind" in kernelOrLoadResult ? kernelOrLoadResult.kernel : kernelOrLoadResult;
+  if (!kernel) return undefined;
+  try {
+    return kernel.createSkinningContext(options);
+  } catch {
+    return undefined;
+  }
+}
+
+export function runWasmSkinningOrFallback(
+  context: WasmSkinningContext | undefined,
+  fallbackJob: SkinningJob
+): WasmSkinningRunResult {
+  if (context) return context.runOrFallback(fallbackJob);
+  return {
+    kind: "typescript",
+    status: WaKernelStatus.Unsupported,
+    reason: "WASM retained skinning unavailable",
+    result: skinVertices(fallbackJob)
+  };
 }
 
 /** Immutable packed animation copied once into retained WASM memory. */
@@ -1757,6 +2385,139 @@ function positiveCapacity(value: number | undefined, fallback: number, name: str
     throw new Error(`WASM pose arena ${name} ${resolved} is out of range`);
   }
   return resolved;
+}
+
+type RetainedSkinningLayout = { offset: number; stride: number; length: number };
+type RetainedSkinningLayouts = {
+  positions: RetainedSkinningLayout;
+  normals?: RetainedSkinningLayout;
+  tangents?: RetainedSkinningLayout;
+  outPositions: RetainedSkinningLayout;
+  outNormals?: RetainedSkinningLayout;
+  outTangents?: RetainedSkinningLayout;
+};
+
+function createRetainedSkinningLayouts(
+  options: WasmSkinningContextOptions,
+  vertexCount: number,
+  positionLayout: Omit<RetainedSkinningLayout, "length">
+): RetainedSkinningLayouts {
+  const positions = retainedLayoutWithLength(positionLayout, vertexCount, options.positions?.data);
+  const outPositionBase = retainedAttributeLayout(options.outPositions, 3);
+  const outPositions = retainedLayoutWithLength(outPositionBase, vertexCount, options.outPositions?.data);
+  const result: RetainedSkinningLayouts = { positions, outPositions };
+  if (options.normals) {
+    result.normals = retainedLayoutWithLength(
+      retainedAttributeLayout(options.normals, 3),
+      vertexCount,
+      options.normals.data
+    );
+    result.outNormals = retainedLayoutWithLength(
+      retainedAttributeLayout(options.outNormals, 3),
+      vertexCount,
+      options.outNormals?.data
+    );
+  }
+  if (options.tangents && options.normals) {
+    result.tangents = retainedLayoutWithLength(
+      retainedAttributeLayout(options.tangents, 3),
+      vertexCount,
+      options.tangents.data
+    );
+    result.outTangents = retainedLayoutWithLength(
+      retainedAttributeLayout(options.outTangents, 3),
+      vertexCount,
+      options.outTangents?.data
+    );
+  }
+  return result;
+}
+
+function retainedAttributeLayout(
+  attribute: { offset?: number; stride?: number } | undefined,
+  minimumStride: number
+): Omit<RetainedSkinningLayout, "length"> {
+  return {
+    offset: safeNonNegativeInteger(attribute?.offset, 0),
+    stride: Math.max(minimumStride, safePositiveInteger(attribute?.stride, minimumStride))
+  };
+}
+
+function retainedLayoutWithLength(
+  layout: Omit<RetainedSkinningLayout, "length">,
+  vertexCount: number,
+  source?: SkinningNumericArray
+): RetainedSkinningLayout {
+  const required = vertexCount === 0 ? 0 : layout.offset + (vertexCount - 1) * layout.stride + 3;
+  const length = Math.max(required, source ? safeNumericLength(source) : 0);
+  if (!Number.isSafeInteger(length) || length > 16_777_216) {
+    throw new Error("retained skinning attribute capacity exceeds bounded limit");
+  }
+  return { ...layout, length };
+}
+
+function inferredRetainedVertexCount(
+  attribute: { data: SkinningNumericArray } | undefined,
+  layout: Omit<RetainedSkinningLayout, "length">
+): number {
+  if (!attribute) return 0;
+  const length = safeNumericLength(attribute.data);
+  if (length < layout.offset + 3) return 0;
+  return Math.floor((length - layout.offset - 3) / layout.stride) + 1;
+}
+
+function requireBoundedNonNegativeInteger(value: number, label: string, max: number): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value > max) {
+    throw new Error(`WASM retained skinning ${label} ${value} is out of range`);
+  }
+  return value;
+}
+
+function requireBoundedPositiveInteger(value: number, label: string, max: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > max) {
+    throw new Error(`WASM retained skinning ${label} ${value} is out of range`);
+  }
+  return value;
+}
+
+function safeNumericLength(value: SkinningNumericArray): number {
+  return Number.isSafeInteger(value.length) && value.length >= 0 ? value.length : 0;
+}
+
+function safeNonNegativeInteger(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && value! >= 0 ? value! : fallback;
+}
+
+function safePositiveInteger(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && value! > 0 ? value! : fallback;
+}
+
+function finiteNumber(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) ? value! : fallback;
+}
+
+function validPaletteIndex(value: number | undefined, paletteLength: number): number {
+  return Number.isSafeInteger(value) && value! >= 0 && value! < paletteLength ? value! : 0;
+}
+
+function isFiniteMat4Like(value: SkinningNumericArray | undefined): value is SkinningNumericArray {
+  if (!value || value.length !== MAT4_FLOATS) return false;
+  for (let index = 0; index < MAT4_FLOATS; index += 1) {
+    if (!Number.isFinite(value[index]) || !Number.isFinite(Math.fround(value[index]!))) return false;
+  }
+  return true;
+}
+
+function finiteMat4OrIdentity(value: SkinningNumericArray | undefined): Float32Array {
+  if (isFiniteMat4Like(value)) return Float32Array.from(value);
+  return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+}
+
+function materializeMat4View(view: Float32Array, count: number): Mat4[] {
+  return Array.from(
+    { length: count },
+    (_value, index) => new Float32Array(view.slice(index * MAT4_FLOATS, (index + 1) * MAT4_FLOATS)) as Mat4
+  );
 }
 
 function readSkeletonParent(skeleton: Skeleton, index: number): number {

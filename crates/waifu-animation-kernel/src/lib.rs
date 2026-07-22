@@ -6,12 +6,13 @@ use core::arch::wasm32;
 use core::panic::PanicInfo;
 
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 2;
+pub const ABI_MINOR: u32 = 3;
 pub const FEATURE_SCALAR_LOCAL_TO_MODEL: u32 = 1 << 0;
 pub const FEATURE_SCALAR_POSE_BLEND: u32 = 1 << 1;
 pub const FEATURE_SCALAR_ADDITIVE: u32 = 1 << 2;
 pub const FEATURE_SCALAR_JOINT_MASKS: u32 = 1 << 3;
 pub const FEATURE_RETAINED_PACKED_SAMPLING: u32 = 1 << 4;
+pub const FEATURE_RETAINED_SKINNING: u32 = 1 << 5;
 pub const FEATURE_DEBUG_SELF_TEST: u32 = 1 << 31;
 
 pub const WA_OK: u32 = 0;
@@ -39,22 +40,31 @@ const AVATAR_MAGIC: u32 = 0x5741_4101;
 const SKELETON_MAGIC: u32 = 0x5741_5301;
 const CLIP_MAGIC: u32 = 0x5741_4301;
 const SAMPLING_CONTEXT_MAGIC: u32 = 0x5741_5801;
+const SKINNING_JOB_MAGIC: u32 = 0x5741_4b01;
 const AVATAR_FLAG_DESTROYED: u32 = 1;
 const SKELETON_FLAG_DESTROYED: u32 = 1;
 const HANDLE_INDEX_BITS: u32 = 16;
 const HANDLE_INDEX_MASK: u32 = (1 << HANDLE_INDEX_BITS) - 1;
 const HANDLE_GENERATION_SHIFT: u32 = HANDLE_INDEX_BITS;
-const HANDLE_GENERATION_MASK: u32 = 0x3fff;
+const HANDLE_GENERATION_MASK: u32 = 0x1fff;
 const HANDLE_KIND_MASK: u32 = 3 << 30;
 const HANDLE_KIND_AVATAR: u32 = 0;
 const HANDLE_KIND_CLIP: u32 = 1 << 30;
 const HANDLE_KIND_SKELETON: u32 = 1 << 31;
 const HANDLE_KIND_SAMPLING_CONTEXT: u32 = 3 << 30;
+const HANDLE_SKINNING_TAG: u32 = 1 << 29;
 const MIN_GENERATION: u32 = 1;
 const MAX_SKELETONS: usize = 128;
 const MAX_AVATARS: usize = 128;
 const MAX_CLIPS: usize = 128;
 const MAX_SAMPLING_CONTEXTS: usize = 128;
+const MAX_SKINNING_JOBS: usize = 128;
+
+const SKIN_FLAG_HAS_REMAPS: u32 = 1 << 0;
+const SKIN_WEIGHT_EXPLICIT: u32 = 1;
+const SKIN_DESC_BYTES: u32 = 128;
+const SKIN_DESC_NORMALS: u32 = 1 << 0;
+const SKIN_DESC_TANGENTS: u32 = 1 << 1;
 
 const SAMPLE_FLAG_LOOP: u32 = 1 << 0;
 const SAMPLE_FLAG_RESET_CACHE: u32 = 1 << 1;
@@ -119,6 +129,28 @@ struct SamplingContextRecord {
     lower_keys_capacity_bytes: u32,
     last_time_bits: u32,
     sample_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SkinningJobRecord {
+    magic: u32,
+    generation: u32,
+    palette_count: u32,
+    vertex_count: u32,
+    influences: u32,
+    weight_mode: u32,
+    index_stride: u32,
+    weight_stride: u32,
+    inverse_bind_offset: u32,
+    inverse_bind_capacity_bytes: u32,
+    remap_offset: u32,
+    remap_capacity_bytes: u32,
+    indices_offset: u32,
+    indices_capacity_bytes: u32,
+    weights_offset: u32,
+    weights_capacity_bytes: u32,
+    flags: u32,
 }
 
 impl SkeletonRecord {
@@ -186,6 +218,30 @@ impl SamplingContextRecord {
     }
 }
 
+impl SkinningJobRecord {
+    const fn empty() -> Self {
+        Self {
+            magic: 0,
+            generation: 0,
+            palette_count: 0,
+            vertex_count: 0,
+            influences: 0,
+            weight_mode: 0,
+            index_stride: 0,
+            weight_stride: 0,
+            inverse_bind_offset: 0,
+            inverse_bind_capacity_bytes: 0,
+            remap_offset: 0,
+            remap_capacity_bytes: 0,
+            indices_offset: 0,
+            indices_capacity_bytes: 0,
+            weights_offset: 0,
+            weights_capacity_bytes: 0,
+            flags: 0,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalToModelOptions {
@@ -228,6 +284,8 @@ static mut AVATARS: [AvatarRecord; MAX_AVATARS] = [AvatarRecord::empty(); MAX_AV
 static mut CLIPS: [ClipRecord; MAX_CLIPS] = [ClipRecord::empty(); MAX_CLIPS];
 static mut SAMPLING_CONTEXTS: [SamplingContextRecord; MAX_SAMPLING_CONTEXTS] =
     [SamplingContextRecord::empty(); MAX_SAMPLING_CONTEXTS];
+static mut SKINNING_JOBS: [SkinningJobRecord; MAX_SKINNING_JOBS] =
+    [SkinningJobRecord::empty(); MAX_SKINNING_JOBS];
 
 #[unsafe(no_mangle)]
 pub extern "C" fn wa_version_major() -> u32 {
@@ -246,6 +304,7 @@ pub extern "C" fn wa_feature_flags() -> u32 {
         | FEATURE_SCALAR_ADDITIVE
         | FEATURE_SCALAR_JOINT_MASKS
         | FEATURE_RETAINED_PACKED_SAMPLING
+        | FEATURE_RETAINED_SKINNING
         | FEATURE_DEBUG_SELF_TEST
 }
 
@@ -916,6 +975,432 @@ fn slerp_quat(a: [f32; 4], mut b: [f32; 4], amount: f32) -> [f32; 4] {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn wa_create_skinning_job(
+    inverse_bind_offset: u32,
+    palette_count: u32,
+    inverse_bind_capacity_bytes: u32,
+    remap_offset: u32,
+    remap_capacity_bytes: u32,
+    indices_offset: u32,
+    indices_capacity_bytes: u32,
+    weights_offset: u32,
+    weights_capacity_bytes: u32,
+    vertex_count: u32,
+    influences: u32,
+    index_stride: u32,
+    weight_stride: u32,
+    weight_mode: u32,
+    flags: u32,
+    out_handle_ptr: u32,
+) -> u32 {
+    if palette_count == 0
+        || palette_count > 65_536
+        || influences == 0
+        || influences > 256
+        || index_stride < influences
+        || weight_mode > SKIN_WEIGHT_EXPLICIT
+        || flags & !SKIN_FLAG_HAS_REMAPS != 0
+        || !is_aligned(inverse_bind_offset, 4)
+        || !is_aligned(indices_offset, 4)
+        || !is_aligned(out_handle_ptr, 4)
+        || out_handle_ptr == 0
+    {
+        return WA_ERR_INVALID_ARG;
+    }
+    let stored_weights = if weight_mode == SKIN_WEIGHT_EXPLICIT {
+        influences
+    } else {
+        influences - 1
+    };
+    if weight_stride < stored_weights
+        || (stored_weights > 0 && !is_aligned(weights_offset, 4))
+        || (flags & SKIN_FLAG_HAS_REMAPS != 0 && !is_aligned(remap_offset, 4))
+    {
+        return WA_ERR_INVALID_ARG;
+    }
+    let Some(inverse_bytes) = palette_count.checked_mul(MAT4_BYTES) else {
+        return WA_ERR_CAPACITY;
+    };
+    let Some(index_values) = required_strided_values(vertex_count, index_stride, influences) else {
+        return WA_ERR_CAPACITY;
+    };
+    let Some(weight_values) = required_strided_values(vertex_count, weight_stride, stored_weights)
+    else {
+        return WA_ERR_CAPACITY;
+    };
+    if inverse_bind_capacity_bytes < inverse_bytes
+        || indices_capacity_bytes < index_values.saturating_mul(F32_BYTES)
+        || weights_capacity_bytes < weight_values.saturating_mul(F32_BYTES)
+        || (flags & SKIN_FLAG_HAS_REMAPS != 0
+            && remap_capacity_bytes < palette_count.saturating_mul(F32_BYTES))
+    {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(out_handle_ptr, 4)
+        || !memory_range_valid(inverse_bind_offset, inverse_bytes)
+        || !memory_range_valid(indices_offset, index_values.saturating_mul(F32_BYTES))
+        || (weight_values > 0
+            && !memory_range_valid(weights_offset, weight_values.saturating_mul(F32_BYTES)))
+        || (flags & SKIN_FLAG_HAS_REMAPS != 0
+            && !memory_range_valid(remap_offset, palette_count.saturating_mul(F32_BYTES)))
+    {
+        return WA_ERR_OOB;
+    }
+    let Some(slot) = find_free_skinning_job_slot() else {
+        return WA_ERR_CAPACITY;
+    };
+    unsafe {
+        let records = core::ptr::addr_of_mut!(SKINNING_JOBS) as *mut SkinningJobRecord;
+        let record = records.add(slot);
+        let generation = next_generation((*record).generation);
+        *record = SkinningJobRecord {
+            magic: SKINNING_JOB_MAGIC,
+            generation,
+            palette_count,
+            vertex_count,
+            influences,
+            weight_mode,
+            index_stride,
+            weight_stride,
+            inverse_bind_offset,
+            inverse_bind_capacity_bytes,
+            remap_offset,
+            remap_capacity_bytes,
+            indices_offset,
+            indices_capacity_bytes,
+            weights_offset,
+            weights_capacity_bytes,
+            flags,
+        };
+        write_u32(
+            out_handle_ptr,
+            make_handle(slot, generation, HANDLE_KIND_CLIP | HANDLE_SKINNING_TAG),
+        );
+    }
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_build_skinning_palette(
+    job_handle: u32,
+    model_matrices_offset: u32,
+    model_matrices_count: u32,
+    model_matrices_capacity_bytes: u32,
+    palette_offset: u32,
+    palette_capacity_bytes: u32,
+) -> u32 {
+    let Some(job) = skinning_job_record(job_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    if model_matrices_count == 0
+        || !is_aligned(model_matrices_offset, 4)
+        || !is_aligned(palette_offset, 4)
+    {
+        return WA_ERR_INVALID_ARG;
+    }
+    let Some(model_bytes) = model_matrices_count.checked_mul(MAT4_BYTES) else {
+        return WA_ERR_CAPACITY;
+    };
+    let Some(palette_bytes) = job.palette_count.checked_mul(MAT4_BYTES) else {
+        return WA_ERR_CAPACITY;
+    };
+    if model_matrices_capacity_bytes < model_bytes || palette_capacity_bytes < palette_bytes {
+        return WA_ERR_CAPACITY;
+    }
+    if !memory_range_valid(model_matrices_offset, model_bytes)
+        || !memory_range_valid(palette_offset, palette_bytes)
+    {
+        return WA_ERR_OOB;
+    }
+    if ranges_overlap(
+        model_matrices_offset,
+        model_bytes,
+        palette_offset,
+        palette_bytes,
+    ) {
+        return WA_ERR_INVALID_ARG;
+    }
+    for index in 0..job.palette_count {
+        let model_index = if job.flags & SKIN_FLAG_HAS_REMAPS != 0 {
+            sanitize_index(
+                unsafe { read_f32(job.remap_offset + index * F32_BYTES) },
+                model_matrices_count,
+            )
+        } else if index < model_matrices_count {
+            index
+        } else {
+            0
+        };
+        let model = read_mat4_repaired(model_matrices_offset + model_index * MAT4_BYTES, None);
+        let inverse = read_mat4_repaired(job.inverse_bind_offset + index * MAT4_BYTES, None);
+        let result = multiply_mat4_arrays(&model, &inverse);
+        unsafe { write_mat4(palette_offset + index * MAT4_BYTES, &result) };
+    }
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wa_skin_vertices(job_handle: u32, descriptor_offset: u32) -> u32 {
+    let Some(job) = skinning_job_record(job_handle) else {
+        return WA_ERR_BAD_HANDLE;
+    };
+    if !is_aligned(descriptor_offset, 4) || !memory_range_valid(descriptor_offset, SKIN_DESC_BYTES)
+    {
+        return WA_ERR_OOB;
+    }
+    let read = |field: u32| unsafe { read_u32(descriptor_offset + field) };
+    let palette_offset = read(0);
+    let palette_capacity = read(4);
+    let vector_palette_offset = read(8);
+    let vector_palette_capacity = read(12);
+    let position_offset = read(16);
+    let position_capacity = read(20);
+    let normal_offset = read(24);
+    let normal_capacity = read(28);
+    let tangent_offset = read(32);
+    let tangent_capacity = read(36);
+    let out_position_offset = read(40);
+    let out_position_capacity = read(44);
+    let out_normal_offset = read(48);
+    let out_normal_capacity = read(52);
+    let out_tangent_offset = read(56);
+    let out_tangent_capacity = read(60);
+    let position_component_offset = read(64);
+    let position_stride = read(68);
+    let normal_component_offset = read(72);
+    let normal_stride = read(76);
+    let tangent_component_offset = read(80);
+    let tangent_stride = read(84);
+    let out_position_component_offset = read(88);
+    let out_position_stride = read(92);
+    let out_normal_component_offset = read(96);
+    let out_normal_stride = read(100);
+    let out_tangent_component_offset = read(104);
+    let out_tangent_stride = read(108);
+    let flags = read(112);
+
+    if flags & !(SKIN_DESC_NORMALS | SKIN_DESC_TANGENTS) != 0
+        || flags & SKIN_DESC_TANGENTS != 0 && flags & SKIN_DESC_NORMALS == 0
+        || position_stride < 3
+        || out_position_stride < 3
+        || flags & SKIN_DESC_NORMALS != 0 && (normal_stride < 3 || out_normal_stride < 3)
+        || flags & SKIN_DESC_TANGENTS != 0 && (tangent_stride < 3 || out_tangent_stride < 3)
+    {
+        return WA_ERR_INVALID_ARG;
+    }
+    let palette_bytes = job.palette_count.saturating_mul(MAT4_BYTES);
+    if palette_capacity < palette_bytes
+        || (vector_palette_offset != 0 && vector_palette_capacity < palette_bytes)
+    {
+        return WA_ERR_CAPACITY;
+    }
+    let Some(position_bytes) = required_strided_bytes(
+        job.vertex_count,
+        position_component_offset,
+        position_stride,
+        3,
+    ) else {
+        return WA_ERR_CAPACITY;
+    };
+    let Some(out_position_bytes) = required_strided_bytes(
+        job.vertex_count,
+        out_position_component_offset,
+        out_position_stride,
+        3,
+    ) else {
+        return WA_ERR_CAPACITY;
+    };
+    let normal_bytes = if flags & SKIN_DESC_NORMALS != 0 {
+        let Some(value) =
+            required_strided_bytes(job.vertex_count, normal_component_offset, normal_stride, 3)
+        else {
+            return WA_ERR_CAPACITY;
+        };
+        value
+    } else {
+        0
+    };
+    let out_normal_bytes = if flags & SKIN_DESC_NORMALS != 0 {
+        let Some(value) = required_strided_bytes(
+            job.vertex_count,
+            out_normal_component_offset,
+            out_normal_stride,
+            3,
+        ) else {
+            return WA_ERR_CAPACITY;
+        };
+        value
+    } else {
+        0
+    };
+    let tangent_bytes = if flags & SKIN_DESC_TANGENTS != 0 {
+        let Some(value) = required_strided_bytes(
+            job.vertex_count,
+            tangent_component_offset,
+            tangent_stride,
+            3,
+        ) else {
+            return WA_ERR_CAPACITY;
+        };
+        value
+    } else {
+        0
+    };
+    let out_tangent_bytes = if flags & SKIN_DESC_TANGENTS != 0 {
+        let Some(value) = required_strided_bytes(
+            job.vertex_count,
+            out_tangent_component_offset,
+            out_tangent_stride,
+            3,
+        ) else {
+            return WA_ERR_CAPACITY;
+        };
+        value
+    } else {
+        0
+    };
+    let buffers = [
+        (palette_offset, palette_bytes, palette_capacity),
+        (position_offset, position_bytes, position_capacity),
+        (
+            out_position_offset,
+            out_position_bytes,
+            out_position_capacity,
+        ),
+        (normal_offset, normal_bytes, normal_capacity),
+        (out_normal_offset, out_normal_bytes, out_normal_capacity),
+        (tangent_offset, tangent_bytes, tangent_capacity),
+        (out_tangent_offset, out_tangent_bytes, out_tangent_capacity),
+    ];
+    for (offset, bytes, capacity) in buffers {
+        if bytes > 0
+            && (!is_aligned(offset, 4) || capacity < bytes || !memory_range_valid(offset, bytes))
+        {
+            return if capacity < bytes {
+                WA_ERR_CAPACITY
+            } else {
+                WA_ERR_OOB
+            };
+        }
+    }
+    if vector_palette_offset != 0
+        && (!is_aligned(vector_palette_offset, 4)
+            || !memory_range_valid(vector_palette_offset, palette_bytes))
+    {
+        return WA_ERR_OOB;
+    }
+    let inputs = [
+        (palette_offset, palette_bytes),
+        (
+            vector_palette_offset,
+            if vector_palette_offset == 0 {
+                0
+            } else {
+                palette_bytes
+            },
+        ),
+        (position_offset, position_bytes),
+        (normal_offset, normal_bytes),
+        (tangent_offset, tangent_bytes),
+    ];
+    let outputs = [
+        (out_position_offset, out_position_bytes),
+        (out_normal_offset, out_normal_bytes),
+        (out_tangent_offset, out_tangent_bytes),
+    ];
+    for (out_offset, out_bytes) in outputs {
+        if out_bytes == 0 {
+            continue;
+        }
+        for (input_offset, input_bytes) in inputs {
+            if input_bytes > 0 && ranges_overlap(out_offset, out_bytes, input_offset, input_bytes) {
+                return WA_ERR_INVALID_ARG;
+            }
+        }
+        for (other_offset, other_bytes) in outputs {
+            if other_bytes > 0
+                && other_offset != out_offset
+                && ranges_overlap(out_offset, out_bytes, other_offset, other_bytes)
+            {
+                return WA_ERR_INVALID_ARG;
+            }
+        }
+    }
+
+    for vertex in 0..job.vertex_count {
+        let position = read_vec3_repaired(
+            position_offset + (position_component_offset + vertex * position_stride) * F32_BYTES,
+        );
+        let normal = if flags & SKIN_DESC_NORMALS != 0 {
+            read_vec3_repaired(
+                normal_offset + (normal_component_offset + vertex * normal_stride) * F32_BYTES,
+            )
+        } else {
+            [0.0; 3]
+        };
+        let tangent = if flags & SKIN_DESC_TANGENTS != 0 {
+            read_vec3_repaired(
+                tangent_offset + (tangent_component_offset + vertex * tangent_stride) * F32_BYTES,
+            )
+        } else {
+            [0.0; 3]
+        };
+        let mut out_position = [0.0; 3];
+        let mut out_normal = [0.0; 3];
+        let mut out_tangent = [0.0; 3];
+        let explicit_sum = if job.weight_mode == SKIN_WEIGHT_EXPLICIT {
+            explicit_weight_sum(job, vertex)
+        } else {
+            0.0
+        };
+        let mut restored_sum = 0.0;
+        for influence in 0..job.influences {
+            let index_slot = vertex * job.index_stride + influence;
+            let joint = unsafe { read_u32(job.indices_offset + index_slot * F32_BYTES) };
+            let joint = if joint < job.palette_count { joint } else { 0 };
+            let weight =
+                resolve_skin_weight(job, vertex, influence, explicit_sum, &mut restored_sum);
+            if weight == 0.0 {
+                continue;
+            }
+            let matrix = read_mat4_repaired(palette_offset + joint * MAT4_BYTES, None);
+            accumulate_point(&mut out_position, &matrix, position, weight);
+            if flags & SKIN_DESC_NORMALS != 0 {
+                let vector_matrix = if vector_palette_offset == 0 {
+                    matrix
+                } else {
+                    read_mat4_repaired(vector_palette_offset + joint * MAT4_BYTES, Some(&matrix))
+                };
+                accumulate_vector(&mut out_normal, &vector_matrix, normal, weight);
+                if flags & SKIN_DESC_TANGENTS != 0 {
+                    accumulate_vector(&mut out_tangent, &vector_matrix, tangent, weight);
+                }
+            }
+        }
+        write_vec3_repaired(
+            out_position_offset
+                + (out_position_component_offset + vertex * out_position_stride) * F32_BYTES,
+            out_position,
+        );
+        if flags & SKIN_DESC_NORMALS != 0 {
+            write_vec3_repaired(
+                out_normal_offset
+                    + (out_normal_component_offset + vertex * out_normal_stride) * F32_BYTES,
+                out_normal,
+            );
+        }
+        if flags & SKIN_DESC_TANGENTS != 0 {
+            write_vec3_repaired(
+                out_tangent_offset
+                    + (out_tangent_component_offset + vertex * out_tangent_stride) * F32_BYTES,
+                out_tangent,
+            );
+        }
+    }
+    WA_OK
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn wa_destroy_handle(handle: u32) -> u32 {
     let Some(slot) = handle_slot(handle) else {
         return WA_ERR_BAD_HANDLE;
@@ -937,6 +1422,16 @@ pub extern "C" fn wa_destroy_handle(handle: u32) -> u32 {
 
     if kind == HANDLE_KIND_CLIP {
         unsafe {
+            if handle & HANDLE_SKINNING_TAG != 0 {
+                let records = core::ptr::addr_of_mut!(SKINNING_JOBS) as *mut SkinningJobRecord;
+                let record = records.add(slot);
+                if !skinning_job_matches_handle(*record, handle) {
+                    return WA_ERR_BAD_HANDLE;
+                }
+                (*record).magic = 0;
+                (*record).generation = next_generation((*record).generation);
+                return WA_OK;
+            }
             let records = core::ptr::addr_of_mut!(CLIPS) as *mut ClipRecord;
             let record = records.add(slot);
             if !clip_matches_handle(*record, handle) {
@@ -1308,6 +1803,10 @@ pub extern "C" fn wa_reset_for_test() -> u32 {
         let contexts = core::ptr::addr_of_mut!(SAMPLING_CONTEXTS) as *mut SamplingContextRecord;
         for index in 0..MAX_SAMPLING_CONTEXTS {
             *contexts.add(index) = SamplingContextRecord::empty();
+        }
+        let skinning_jobs = core::ptr::addr_of_mut!(SKINNING_JOBS) as *mut SkinningJobRecord;
+        for index in 0..MAX_SKINNING_JOBS {
+            *skinning_jobs.add(index) = SkinningJobRecord::empty();
         }
         MEMORY_EPOCH = MEMORY_EPOCH.wrapping_add(1);
         BUMP_PTR = heap_base();
@@ -1918,6 +2417,156 @@ fn sanitize_f32(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
 }
 
+fn required_strided_values(count: u32, stride: u32, components: u32) -> Option<u32> {
+    if count == 0 || components == 0 {
+        return Some(0);
+    }
+    count
+        .checked_sub(1)?
+        .checked_mul(stride)?
+        .checked_add(components)
+}
+
+fn required_strided_bytes(count: u32, offset: u32, stride: u32, components: u32) -> Option<u32> {
+    offset
+        .checked_add(required_strided_values(count, stride, components)?)?
+        .checked_mul(F32_BYTES)
+}
+
+fn ranges_overlap(a_offset: u32, a_bytes: u32, b_offset: u32, b_bytes: u32) -> bool {
+    if a_bytes == 0 || b_bytes == 0 {
+        return false;
+    }
+    let a_end = a_offset.saturating_add(a_bytes);
+    let b_end = b_offset.saturating_add(b_bytes);
+    a_offset < b_end && b_offset < a_end
+}
+
+fn sanitize_index(value: f32, length: u32) -> u32 {
+    if !value.is_finite() || value < 0.0 || libm::floorf(value) != value || value >= length as f32 {
+        0
+    } else {
+        value as u32
+    }
+}
+
+fn read_mat4_repaired(offset: u32, fallback: Option<&[f32; 16]>) -> [f32; 16] {
+    let mut matrix = [0.0; 16];
+    for (index, component) in matrix.iter_mut().enumerate() {
+        *component = unsafe { read_f32(offset + index as u32 * F32_BYTES) };
+    }
+    if matrix.iter().all(|value| value.is_finite()) {
+        matrix
+    } else if let Some(value) = fallback {
+        *value
+    } else {
+        [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+}
+
+fn multiply_mat4_arrays(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            out[column * 4 + row] = a[row] * b[column * 4]
+                + a[4 + row] * b[column * 4 + 1]
+                + a[8 + row] * b[column * 4 + 2]
+                + a[12 + row] * b[column * 4 + 3];
+        }
+    }
+    out
+}
+
+fn read_vec3_repaired(offset: u32) -> [f32; 3] {
+    [
+        sanitize_f32(unsafe { read_f32(offset) }, 0.0),
+        sanitize_f32(unsafe { read_f32(offset + F32_BYTES) }, 0.0),
+        sanitize_f32(unsafe { read_f32(offset + 2 * F32_BYTES) }, 0.0),
+    ]
+}
+
+fn write_vec3_repaired(offset: u32, value: [f32; 3]) {
+    for (index, component) in value.iter().enumerate() {
+        unsafe {
+            write_f32(
+                offset + index as u32 * F32_BYTES,
+                if component.is_finite() {
+                    *component
+                } else {
+                    0.0
+                },
+            )
+        };
+    }
+}
+
+fn explicit_weight_sum(job: SkinningJobRecord, vertex: u32) -> f32 {
+    let mut sum = 0.0;
+    for influence in 0..job.influences {
+        let slot = vertex * job.weight_stride + influence;
+        let candidate = sanitize_f32(
+            unsafe { read_f32(job.weights_offset + slot * F32_BYTES) },
+            0.0,
+        )
+        .clamp(0.0, 1.0);
+        sum += candidate;
+    }
+    sum
+}
+
+fn resolve_skin_weight(
+    job: SkinningJobRecord,
+    vertex: u32,
+    influence: u32,
+    explicit_sum: f32,
+    restored_sum: &mut f32,
+) -> f32 {
+    if job.weight_mode == SKIN_WEIGHT_EXPLICIT {
+        let slot = vertex * job.weight_stride + influence;
+        let candidate = sanitize_f32(
+            unsafe { read_f32(job.weights_offset + slot * F32_BYTES) },
+            0.0,
+        )
+        .clamp(0.0, 1.0);
+        if explicit_sum > 1.0 {
+            candidate / explicit_sum
+        } else if explicit_sum <= 0.0 {
+            f32::from(influence == 0)
+        } else {
+            candidate
+        }
+    } else if influence + 1 == job.influences {
+        (1.0 - *restored_sum).max(0.0)
+    } else {
+        let slot = vertex * job.weight_stride + influence;
+        let candidate = sanitize_f32(
+            unsafe { read_f32(job.weights_offset + slot * F32_BYTES) },
+            0.0,
+        )
+        .clamp(0.0, 1.0);
+        let weight = candidate.min((1.0 - *restored_sum).max(0.0));
+        *restored_sum += weight;
+        weight
+    }
+}
+
+fn accumulate_point(out: &mut [f32; 3], matrix: &[f32; 16], value: [f32; 3], weight: f32) {
+    out[0] +=
+        (matrix[0] * value[0] + matrix[4] * value[1] + matrix[8] * value[2] + matrix[12]) * weight;
+    out[1] +=
+        (matrix[1] * value[0] + matrix[5] * value[1] + matrix[9] * value[2] + matrix[13]) * weight;
+    out[2] +=
+        (matrix[2] * value[0] + matrix[6] * value[1] + matrix[10] * value[2] + matrix[14]) * weight;
+}
+
+fn accumulate_vector(out: &mut [f32; 3], matrix: &[f32; 16], value: [f32; 3], weight: f32) {
+    out[0] += (matrix[0] * value[0] + matrix[4] * value[1] + matrix[8] * value[2]) * weight;
+    out[1] += (matrix[1] * value[0] + matrix[5] * value[1] + matrix[9] * value[2]) * weight;
+    out[2] += (matrix[2] * value[0] + matrix[6] * value[1] + matrix[10] * value[2]) * weight;
+}
+
 fn read_soa_f32(base: u32, field: u32, lane: u32, fallback: f32) -> f32 {
     let offset = base + (field * 4 + lane) * 4;
     sanitize_f32(unsafe { read_f32(offset) }, fallback)
@@ -2017,6 +2666,29 @@ fn clip_matches_handle(record: ClipRecord, handle: u32) -> bool {
     record.magic == CLIP_MAGIC
         && record.generation == handle_generation(handle)
         && handle & HANDLE_KIND_MASK == HANDLE_KIND_CLIP
+        && handle & HANDLE_SKINNING_TAG == 0
+}
+
+fn skinning_job_record(handle: u32) -> Option<SkinningJobRecord> {
+    if handle & HANDLE_KIND_MASK != HANDLE_KIND_CLIP || handle & HANDLE_SKINNING_TAG == 0 {
+        return None;
+    }
+    let slot = handle_slot(handle)?;
+    unsafe {
+        let record = *((core::ptr::addr_of!(SKINNING_JOBS) as *const SkinningJobRecord).add(slot));
+        if skinning_job_matches_handle(record, handle) {
+            Some(record)
+        } else {
+            None
+        }
+    }
+}
+
+fn skinning_job_matches_handle(record: SkinningJobRecord, handle: u32) -> bool {
+    record.magic == SKINNING_JOB_MAGIC
+        && record.generation == handle_generation(handle)
+        && handle & HANDLE_KIND_MASK == HANDLE_KIND_CLIP
+        && handle & HANDLE_SKINNING_TAG != 0
 }
 
 fn sampling_context_record_mut(handle: u32) -> Option<&'static mut SamplingContextRecord> {
@@ -2072,7 +2744,25 @@ fn find_free_clip_slot() -> Option<usize> {
     unsafe {
         let records = core::ptr::addr_of!(CLIPS) as *const ClipRecord;
         for slot in 0..MAX_CLIPS {
-            if (*records.add(slot)).magic != CLIP_MAGIC {
+            let skinning = core::ptr::addr_of!(SKINNING_JOBS) as *const SkinningJobRecord;
+            if (*records.add(slot)).magic != CLIP_MAGIC
+                && (*skinning.add(slot)).magic != SKINNING_JOB_MAGIC
+            {
+                return Some(slot);
+            }
+        }
+    }
+    None
+}
+
+fn find_free_skinning_job_slot() -> Option<usize> {
+    unsafe {
+        let records = core::ptr::addr_of!(SKINNING_JOBS) as *const SkinningJobRecord;
+        let clips = core::ptr::addr_of!(CLIPS) as *const ClipRecord;
+        for slot in 0..MAX_SKINNING_JOBS {
+            if (*records.add(slot)).magic != SKINNING_JOB_MAGIC
+                && (*clips.add(slot)).magic != CLIP_MAGIC
+            {
                 return Some(slot);
             }
         }

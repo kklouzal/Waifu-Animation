@@ -29,6 +29,7 @@ writeFileSync(
     "",
     "This scalar WASM binary is generated from `crates/waifu-animation-kernel` by `npm run build:wasm`.",
     "It is intentionally packed under `dist/wasm-kernel/` so applications can opt in with an explicit URL, bytes, or precompiled module strategy.",
+    "ABI v1.3 feature-gates retained packed sampling, pose composition, local-to-model, model × inverse-bind palettes, and optional CPU skinning.",
     "The TypeScript public APIs remain scalar-safe when this asset is not loaded or initialization fails.",
     ""
   ].join("\n")

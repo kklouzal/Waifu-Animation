@@ -1,6 +1,6 @@
 # Rust/WASM Kernel Architecture Contract
 
-Status: implemented through the opt-in Phase 4 `AnimationRuntime` composition facade over scalar Rust/WASM retained packed-clip sampling plus padded-SoA blend, additive, masks, normalization, and local-to-model. Skinning, IK, Three.js/VRM, and app integration remain outside the kernel.
+Status: implemented through Phase 5 retained scalar-WASM model × inverse-bind palette generation and optional CPU positions/normals/tangents skinning, plus the Phase 4 opt-in `AnimationRuntime` composition facade. IK, Three.js/VRM, renderer uploads, materials, and app integration remain outside the kernel.
 
 ## Bounded kernel boundary
 
@@ -110,7 +110,16 @@ Phase 3 retained-sampling smoke on the same host/config reported 16.227170 ms WA
 | `sample_blend_local_to_model_1_avatar` (current TS object pipeline) |       0.9044071 | 1105.697 |  732.760487 |
 | `sample_blend_local_to_model_multi_avatar` (current TS object path) |     0.919288729 | 1087.798 | 2933.879263 |
 
-These smoke numbers are local synthetic evidence, not a production speedup claim. TS packed rows intentionally include object-pose materialization; retained WASM rows exclude setup, scheduling, diagnostics, skinning, IK, Three/VRM adaptation, and final JS materialization.
+Phase 5 retained-skinning smoke on the same host class on 2026-07-22 UTC (`npm run bench:wasm-kernel:smoke`, Node v24.18.0, V8 13.6.233.17-node.50, linux x64, 8 × Intel Xeon E3-1285 v6, 4096 vertices × 4 influences, 60 iterations after 20 warmup) reported 16.019007 ms WASM startup and 9.474299 ms retained skinning setup for one plus four independent mesh/avatar contexts. Setup reached 3,997,696 bytes of WASM memory and was excluded from steady-state rows:
+
+| Phase 5 workload                                     | ms/operation |   ops/sec |    checksum |
+| ---------------------------------------------------- | -----------: | --------: | ----------: |
+| `skinning_palette_cpu_1_avatar` (TypeScript)         |  3.194313283 |   313.056 |  433.285489 |
+| `skinning_palette_scalar_wasm_1_avatar`              |  0.022858883 | 43746.669 |  949.775703 |
+| `skinning_palette_cpu_scalar_wasm_1_avatar`          |  0.850086083 |  1176.351 |  433.285490 |
+| `skinning_palette_cpu_scalar_wasm_multi_mesh_avatar` |  0.839586250 |  1191.063 | 1733.141959 |
+
+These smoke numbers are local synthetic evidence, not a production speedup claim. TS packed rows intentionally include object-pose materialization; retained WASM rows exclude setup, scheduling, diagnostics, IK, Three/VRM adaptation, GPU upload, and final JS materialization. Production GPU-skinned avatars may use only the palette row and skip CPU vertex skinning entirely.
 
 Measured/structural priority:
 
@@ -127,9 +136,9 @@ If future target-workload JSON contradicts this order, measured workload priorit
 
 ### Versioning
 
-- ABI identity: `waifu_animation_kernel`, major `1`. Phase 1 is minor `0`; Phase 2 pose jobs report minor `1`; Phase 3 retained packed sampling reports minor `2`.
+- ABI identity: `waifu_animation_kernel`, major `1`. Phase 1 is minor `0`; Phase 2 pose jobs report minor `1`; Phase 3 retained packed sampling reports minor `2`; Phase 5 retained skinning reports minor `3`.
 - Loader calls `wa_version_major()`, `wa_version_minor()`, and `wa_feature_flags()` before enabling any kernel job.
-- Major mismatch rejects the kernel. The default scalar local-to-model loader still accepts ABI v1.0. Pose jobs require ABI v1.1; retained packed sampling requires ABI v1.2. Each path also requires its feature bits and exports, so additions remain backward-compatible and explicitly gated.
+- Major mismatch rejects the kernel. The default scalar local-to-model loader still accepts ABI v1.0. Pose jobs require ABI v1.1; retained packed sampling requires ABI v1.2; retained skinning requires ABI v1.3. Each path also requires its feature bits and exports, so additions remain backward-compatible and explicitly gated.
 - Exports use C-compatible scalar parameters and return `i32` status. Multi-value returns are written into caller-provided memory structs.
 
 ### Status codes
@@ -213,7 +222,9 @@ Phase 2 adds `wa_blend_poses`, `wa_additive_delta`, `wa_apply_additive`, and `wa
 
 `WasmPoseArenaContext` owns contiguous retained pose slots, mask slots, and layer descriptors per avatar. Slot 0 starts as the skeleton rest pose. `poseView()` and `maskView()` permit already-packed steady-state jobs with caller-selected reusable output slots. `writePose()` and `copyPoseToTransforms()` are explicit object packing/materialization adapters; they do not claim allocation-free object conversion. The contexts keep no process-global TypeScript mutable state, and refresh typed views after memory growth. Existing object-shaped pose APIs remain scalar TypeScript by default.
 
-Phase 3 adds immutable packed-clip handles, retained sampling-context handles/lower-key caches, explicit reset, time/ratio sampling, and direct writes into caller-owned padded-SoA pose slots through `wa_create_packed_clip`, `wa_create_sampling_context`, `wa_reset_sampling_context`, `wa_sample_packed_clip`, and `wa_sample_packed_clip_ratio`. Packed controllers are fixed 64-byte numeric descriptors; clip data and lower-key storage are reserved during setup. Later phases add runtime composition, skinning, and IK/foot-plant behind feature bits.
+Phase 3 adds immutable packed-clip handles, retained sampling-context handles/lower-key caches, explicit reset, time/ratio sampling, and direct writes into caller-owned padded-SoA pose slots through `wa_create_packed_clip`, `wa_create_sampling_context`, `wa_reset_sampling_context`, `wa_sample_packed_clip`, and `wa_sample_packed_clip_ratio`. Packed controllers are fixed 64-byte numeric descriptors; clip data and lower-key storage are reserved during setup.
+
+Phase 5 adds `wa_create_skinning_job`, `wa_build_skinning_palette`, and `wa_skin_vertices`. `WasmSkinningContext` copies immutable inverse binds, optional remaps, indices, weights, and fixed metadata once, then exposes retained typed views for dynamic model matrices, palettes, vertex inputs, and outputs. Setup accepts the existing influence count, restored-last/explicit weights, and component offsets/strides. Steady-state `runRetained()` performs no allocation or memory growth; memory-epoch changes rebuild views. Outputs may not alias inputs or one another in the raw ABI; the opt-in facade falls back to `skinVertices` for disabled/missing ABI/feature/export and non-success statuses. Direction vectors exclude translation and match the existing TS transform/finite-repair contract; tangent `w` and padding remain caller-owned. Three.js geometry adaptation, upload flags, and materials stay in TypeScript.
 
 ### Opt-in AnimationRuntime composition facade
 
@@ -313,7 +324,8 @@ Feature bits:
 - bit 2: scalar additive delta/application;
 - bit 3: scalar dense/short/sparse-by-zero joint masks;
 - bit 4: retained scalar packed-clip sampling;
-- bits 5-15: reserved for later scalar jobs (runtime composition, skinning, IK, foot plant);
+- bit 5: retained scalar palette generation and CPU skinning;
+- bits 6-15: reserved for later scalar jobs (IK, aim, foot plant);
 - bit 16: SIMD local-to-model;
 - bit 17: SIMD blend/additive/masks;
 - bit 18: SIMD packed sampling;
@@ -407,7 +419,9 @@ Implemented:
 
 Gates: existing runtime tests pass in scalar and WASM modes; root-motion collection remains TS unless separately proven; async init/fallback do not change constructor behavior; multi-avatar benchmark remains valid JSON.
 
-### Phase 5 — skinning palette and CPU skinning
+### Phase 5 — skinning palette and CPU skinning (implemented)
+
+ABI v1.3 and feature bit 5 provide immutable retained job handles, caller-owned typed views, model × inverse-bind palette generation, optional inverse-transpose vector palettes, and positions/normals/tangents CPU skinning. The scalar TypeScript API remains the default and the retained facade is explicit opt-in with scalar fallback. Production GPU skinning may use only the palette output and skip CPU vertex rows.
 
 Gates: parity for restored-last/explicit weights, remaps, invalid indices, finite fallback, aliasing/capacity behavior, normals/tangents, and atomic capacity failures.
 

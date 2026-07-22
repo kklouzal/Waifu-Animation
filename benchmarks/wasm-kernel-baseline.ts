@@ -32,8 +32,10 @@ import {
   type SkinningJob,
   WaKernelStatus,
   type WaKernelLoadResult,
+  type WaifuAnimationWasmKernel,
   type WasmLocalToModelContext,
   type WasmPoseArenaContext,
+  type WasmSkinningContext,
   type WasmPackedClipAsset,
   type WasmPackedClipSamplingContext
 } from "../src/index.js";
@@ -182,6 +184,16 @@ const wasmRuntimeAvatars =
 const wasmRuntimeSetupMs = performance.now() - wasmRuntimeSetupStart;
 const wasmRuntimeMemoryBytesAfterSetup =
   wasmKernel.kind === "wasm-scalar" ? wasmKernel.kernel.memory.buffer.byteLength : undefined;
+const skinningSetupStart = performance.now();
+const wasmSkinning =
+  wasmKernel.kind === "wasm-scalar" ? createBenchmarkSkinningContext(wasmKernel.kernel, fixture) : undefined;
+const wasmSkinningMeshes =
+  wasmKernel.kind === "wasm-scalar"
+    ? Array.from({ length: config.multiAvatarCount }, () => createBenchmarkSkinningContext(wasmKernel.kernel, fixture))
+    : [];
+const retainedSkinningSetupMs = performance.now() - skinningSetupStart;
+const retainedSkinningMemoryBytesAfterSetup =
+  wasmKernel.kind === "wasm-scalar" ? wasmKernel.kernel.memory.buffer.byteLength : undefined;
 
 const results: BenchmarkResult[] = [];
 
@@ -229,6 +241,35 @@ results.push(
     op: (frame) => sampleThreePackedClipsTypescript(fixture, frame, 0)
   })
 );
+if (wasmSkinning) {
+  results.push(
+    runBenchmark({
+      name: "skinning_palette_scalar_wasm_1_avatar",
+      description: "retained scalar-WASM model * inverse-bind palette only; suitable for a TS-owned GPU upload adapter",
+      config,
+      operationCountPerIteration: 1,
+      op: () => skinningPaletteWasm(wasmSkinning)
+    })
+  );
+  results.push(
+    runBenchmark({
+      name: "skinning_palette_cpu_scalar_wasm_1_avatar",
+      description: "retained scalar-WASM palette plus CPU positions/normals/tangents skinning over caller-owned views",
+      config,
+      operationCountPerIteration: 1,
+      op: () => skinningPaletteAndCpuWasm(wasmSkinning)
+    })
+  );
+  results.push(
+    runBenchmark({
+      name: "skinning_palette_cpu_scalar_wasm_multi_mesh_avatar",
+      description: "same retained scalar-WASM palette and CPU skinning across independent mesh/avatar contexts",
+      config,
+      operationCountPerIteration: config.multiAvatarCount,
+      op: () => wasmSkinningMeshes.reduce((sum, context) => sum + skinningPaletteAndCpuWasm(context), 0)
+    })
+  );
+}
 results.push(
   runBenchmark({
     name: "sampling_packed_typescript_3_clips_multi_avatar",
@@ -443,6 +484,8 @@ const output = {
           retainedMemoryBytesAfterSetup: retainedPackedMemoryBytesAfterSetup,
           runtimeFacadeSetupMs: wasmRuntimeSetupMs,
           runtimeFacadeMemoryBytesAfterSetup: wasmRuntimeMemoryBytesAfterSetup,
+          retainedSkinningSetupMs,
+          retainedSkinningMemoryBytesAfterSetup,
           runtimeFacadeAllocationContract:
             "WASM bump allocations occur during backend/layer setup and are not reclaimed; steady-state update/evaluate performs no WASM memory growth, but final Transform[]/Mat4[] materialization remains JS-owned"
         }
@@ -464,6 +507,8 @@ const output = {
     "The TypeScript pose row measures the current object-shaped public API, so the comparison includes its current object allocation behavior but does not isolate allocation cost.",
     "No precise heap-allocation claim is made from Node heap deltas; retained-buffer behavior is enforced structurally by contract tests.",
     "The retained full-chain rows exclude runtime layer scheduling, Three/VRM adaptation, skinning, IK, diagnostics, and final JS Transform[] materialization; no production speedup claim is made.",
+    "Retained skinning setup copies inverse binds, remaps, indices, weights, and metadata once; setup and memory are reported separately and excluded from steady-state rows.",
+    "CPU skinning is optional: production GPU-skinned avatars may consume only the palette row through a TypeScript-owned upload adapter and may not use the CPU rows.",
     "The animation_runtime_wasm rows include TypeScript scheduling/orchestration and final public JS pose/matrix materialization, but exclude async loader and layer/backend setup. Unsupported callbacks/tracks can retain scalar sampling or trigger scalar frame fallback.",
     "Smoke timings are directional only and must not be presented as a production speedup claim.",
     "Use --smoke for a fast gate and default arguments for a steadier local baseline. Override with --iterations, --warmup, --joints, --avatars, or --runtime-avatars."
@@ -950,6 +995,38 @@ function skinningPaletteAndCpu(fixture: BenchmarkFixture): number {
   };
   const result = skinVertices(job);
   return checksumNumericArray(result.positions) + checksumNumericArray(result.normals ?? []) * 0.25;
+}
+
+function createBenchmarkSkinningContext(
+  kernel: WaifuAnimationWasmKernel,
+  fixture: BenchmarkFixture
+): WasmSkinningContext {
+  return kernel.createSkinningContext({
+    vertexCount: fixture.skinning.vertexCount,
+    influences: fixture.skinning.influences,
+    modelMatrices: localToModelPose(fixture.skeleton, fixture.preBlendedPose),
+    inverseBindMatrices: fixture.skinning.inverseBindMatrices,
+    positions: { data: fixture.skinning.positions },
+    normals: { data: fixture.skinning.normals },
+    tangents: { data: fixture.skinning.tangents },
+    jointIndices: fixture.skinning.jointIndices,
+    jointWeights: fixture.skinning.jointWeights,
+    outPositions: { data: fixture.skinning.outPositions.slice() },
+    outNormals: { data: fixture.skinning.outNormals.slice() },
+    outTangents: { data: fixture.skinning.outTangents.slice() }
+  });
+}
+
+function skinningPaletteWasm(context: WasmSkinningContext): number {
+  const status = context.buildPalette();
+  if (status !== WaKernelStatus.Ok) throw new Error(`scalar WASM skinning palette failed with status ${status}`);
+  return checksumNumericArray(context.palette);
+}
+
+function skinningPaletteAndCpuWasm(context: WasmSkinningContext): number {
+  const status = context.runRetained();
+  if (status !== WaKernelStatus.Ok) throw new Error(`scalar WASM CPU skinning failed with status ${status}`);
+  return checksumNumericArray(context.outPositions) + checksumNumericArray(context.outNormals ?? []) * 0.25;
 }
 
 function createRuntime(
